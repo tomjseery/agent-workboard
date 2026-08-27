@@ -2,18 +2,30 @@
 
 use std::ffi::OsString;
 use std::fs;
-use std::io::{self, IsTerminal};
+use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use directories::{ProjectDirs, UserDirs};
 use serde::Serialize;
 use workboard_application::AppError;
+use workboard_application::caller::{CallerIdentityProvider, EnvironmentCallerIdentity};
+use workboard_application::hooks::{HookIngestionMutation, MAX_HOOK_INPUT_BYTES};
+use workboard_application::integration::{
+    INTEGRATION_OWNER, IntegrationConfirmation, IntegrationOperation, IntegrationRequest,
+    IntegrationResponse,
+};
 use workboard_application::legacy_import::preview_context_catalogue;
+use workboard_application::native_launch::SystemLaunchExecutor;
+use workboard_application::native_sources::RefreshNativeSources;
+use workboard_application::session_launch::BeginManagedSessionLaunch;
 use workboard_application::workspace::{
     CreateEpic, InitialiseWorkspace, RegisterRepository, WorkboardApplication,
 };
-use workboard_core::{Feature, Slug, WorkItem, WorkspaceId};
+use workboard_core::{
+    Checkout, CheckoutAvailability, Feature, HierarchyOwner, ManagedLaunchMode, ManagedSessionRole,
+    NativeSession, Slug, Tool, WorkItem, WorkspaceId,
+};
 
 use crate::selector::{SelectionCandidate, SelectionResult};
 
@@ -44,6 +56,8 @@ enum Command {
     Epic(EpicArgs),
     Feature(FeatureArgs),
     Work(WorkArgs),
+    Session(SessionArgs),
+    Integration(IntegrationArgs),
     Snapshot,
     Backup(DestinationArgs),
     Export(DestinationArgs),
@@ -118,7 +132,140 @@ struct WorkArgs {
 
 #[derive(Debug, Subcommand)]
 enum WorkCommand {
-    Open { work_item: Option<String> },
+    Open {
+        work_item: Option<String>,
+    },
+    Start {
+        work_item: Option<String>,
+        #[arg(long, value_enum, default_value = "codex")]
+        tool: ToolArg,
+        #[arg(long)]
+        terminal: Option<PathBuf>,
+        #[arg(long)]
+        native: Option<PathBuf>,
+        #[arg(long)]
+        checkout: Option<String>,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+}
+
+#[derive(Debug, Args)]
+struct SessionArgs {
+    #[command(subcommand)]
+    command: SessionCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum SessionCommand {
+    Refresh {
+        #[arg(long, value_enum)]
+        tool: ToolArg,
+        #[arg(long)]
+        home: Option<PathBuf>,
+    },
+    Resume {
+        session: Option<String>,
+        #[arg(long, value_enum)]
+        tool: Option<ToolArg>,
+        #[arg(long)]
+        terminal: Option<PathBuf>,
+        #[arg(long)]
+        native: Option<PathBuf>,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    Adopt {
+        work_item: Option<String>,
+        #[arg(long, value_enum)]
+        tool: Option<ToolArg>,
+    },
+}
+
+#[derive(Debug, Args)]
+struct IntegrationArgs {
+    #[command(subcommand)]
+    command: IntegrationCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum IntegrationCommand {
+    Status {
+        #[arg(long, value_enum)]
+        tool: ToolArg,
+        #[arg(long)]
+        home: Option<PathBuf>,
+        #[arg(long)]
+        executable: Option<PathBuf>,
+    },
+    Preview {
+        #[arg(long, value_enum)]
+        tool: ToolArg,
+        #[arg(long, value_enum, default_value = "install")]
+        operation: IntegrationMutationArg,
+        #[arg(long)]
+        home: Option<PathBuf>,
+        #[arg(long)]
+        executable: Option<PathBuf>,
+    },
+    Install(IntegrationMutationArgs),
+    Repair(IntegrationMutationArgs),
+    Disable(IntegrationMutationArgs),
+    Remove(IntegrationMutationArgs),
+    IngestHook {
+        #[arg(long, value_enum)]
+        tool: ToolArg,
+        #[arg(long)]
+        owner: String,
+        #[arg(long)]
+        quiet: bool,
+    },
+}
+
+#[derive(Debug, Args)]
+struct IntegrationMutationArgs {
+    #[arg(long, value_enum)]
+    tool: ToolArg,
+    #[arg(long)]
+    home: Option<PathBuf>,
+    #[arg(long)]
+    executable: Option<PathBuf>,
+    #[arg(long)]
+    confirm: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum IntegrationMutationArg {
+    Install,
+    Repair,
+    Disable,
+    Remove,
+}
+
+impl From<IntegrationMutationArg> for IntegrationOperation {
+    fn from(value: IntegrationMutationArg) -> Self {
+        match value {
+            IntegrationMutationArg::Install => Self::Install,
+            IntegrationMutationArg::Repair => Self::Repair,
+            IntegrationMutationArg::Disable => Self::Disable,
+            IntegrationMutationArg::Remove => Self::Remove,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum ToolArg {
+    Claude,
+    Codex,
+}
+
+impl From<ToolArg> for Tool {
+    fn from(value: ToolArg) -> Self {
+        match value {
+            ToolArg::Claude => Self::Claude,
+            ToolArg::Codex => Self::Codex,
+        }
+    }
 }
 
 #[derive(Debug, Args)]
@@ -147,7 +294,8 @@ pub fn run() {
         return;
     }
     match execute(cli) {
-        Ok(output) => println!("{output}"),
+        Ok(output) if !output.is_empty() => println!("{output}"),
+        Ok(_) => {}
         Err(error) => {
             eprintln!("{}: {error}", error.code());
             std::process::exit(1);
@@ -306,6 +454,242 @@ fn execute(cli: Cli) -> Result<String, AppError> {
                 ),
             )
         }
+        Some(Command::Work(WorkArgs {
+            command:
+                WorkCommand::Start {
+                    work_item,
+                    tool,
+                    terminal,
+                    native,
+                    checkout,
+                    idempotency_key,
+                },
+        })) => {
+            let workspace_id = resolve_workspace(&application, cli.workspace)?;
+            let snapshot = application.snapshot(workspace_id)?;
+            let work_item = select_work_item(&snapshot, work_item.as_deref(), cli.json)?.clone();
+            let checkout = match checkout {
+                Some(query) => {
+                    let selected = select_checkout(&snapshot, &query, &work_item, cli.json)?;
+                    application.override_work_item_checkout(
+                        work_item.id,
+                        selected.id,
+                        time::OffsetDateTime::now_utc(),
+                    )?
+                }
+                None => application.effective_work_item_checkout(work_item.id)?,
+            };
+            let tool = Tool::from(tool);
+            let now = time::OffsetDateTime::now_utc();
+            let request = BeginManagedSessionLaunch {
+                owner: HierarchyOwner::WorkItem(work_item.id),
+                role: ManagedSessionRole::WorkItemExecution,
+                tool,
+                mode: ManagedLaunchMode::New,
+                checkout_id: checkout.checkout_id,
+                working_directory: checkout.path,
+                title: work_item.title,
+                terminal_executable: terminal.unwrap_or_else(default_terminal_executable),
+                native_executable: native.unwrap_or_else(|| default_native_executable(tool)),
+                idempotency_key: idempotency_key.unwrap_or_else(new_idempotency_key),
+                created_at: now,
+                expires_at: now + time::Duration::minutes(2),
+                resume_context: None,
+            };
+            let prepared = application.session_launch().begin(request)?;
+            application
+                .session_launch()
+                .execute(&prepared, &SystemLaunchExecutor)?;
+            let binding = await_binding(&mut application, prepared.intent_id)?;
+            output(
+                &binding,
+                cli.json,
+                format!(
+                    "Launched and bound {} session for {}",
+                    tool_title(tool),
+                    checkout.title
+                ),
+            )
+        }
+        Some(Command::Session(SessionArgs {
+            command: SessionCommand::Refresh { tool, home },
+        })) => {
+            let tool = Tool::from(tool);
+            let root = home
+                .map(|path| absolute(&current_directory, &path))
+                .map_or_else(|| default_native_home(tool), Ok)?;
+            let outcome = application.native_sources().refresh(RefreshNativeSources {
+                tool,
+                root,
+                observed_at: time::OffsetDateTime::now_utc(),
+            })?;
+            output(
+                &outcome,
+                cli.json,
+                format!(
+                    "Refreshed {} native sources: {} conversations, {} failures",
+                    tool_title(tool),
+                    outcome.conversation_count,
+                    outcome.failures.len()
+                ),
+            )
+        }
+        Some(Command::Session(SessionArgs {
+            command:
+                SessionCommand::Resume {
+                    session,
+                    tool,
+                    terminal,
+                    native,
+                    idempotency_key,
+                },
+        })) => {
+            let workspace_id = resolve_workspace(&application, cli.workspace)?;
+            let snapshot = application.snapshot(workspace_id)?;
+            let requested_tool = tool.map(Tool::from);
+            let session =
+                select_session(&snapshot, session.as_deref(), requested_tool, cli.json)?.clone();
+            let target = application.managed_session_target(session.id)?;
+            let context = application.native_sources().resume_context(
+                session.id,
+                target.checkout.path.clone(),
+                target.checkout.title.clone(),
+            )?;
+            let now = time::OffsetDateTime::now_utc();
+            let request = BeginManagedSessionLaunch {
+                owner: target.owner,
+                role: target.role,
+                tool: target.tool,
+                mode: ManagedLaunchMode::Resume(target.native_id),
+                checkout_id: target.checkout.checkout_id,
+                working_directory: target.checkout.path,
+                title: target.checkout.title,
+                terminal_executable: terminal.unwrap_or_else(default_terminal_executable),
+                native_executable: native.unwrap_or_else(|| default_native_executable(target.tool)),
+                idempotency_key: idempotency_key.unwrap_or_else(new_idempotency_key),
+                created_at: now,
+                expires_at: now + time::Duration::minutes(2),
+                resume_context: Some(context),
+            };
+            let prepared = application.session_launch().begin(request)?;
+            application
+                .session_launch()
+                .execute(&prepared, &SystemLaunchExecutor)?;
+            let binding = await_binding(&mut application, prepared.intent_id)?;
+            output(
+                &binding,
+                cli.json,
+                format!(
+                    "Resumed and bound exact {} session",
+                    tool_title(target.tool)
+                ),
+            )
+        }
+        Some(Command::Session(SessionArgs {
+            command: SessionCommand::Adopt { work_item, tool },
+        })) => {
+            let workspace_id = resolve_workspace(&application, cli.workspace)?;
+            let snapshot = application.snapshot(workspace_id)?;
+            let work_item = select_work_item(&snapshot, work_item.as_deref(), cli.json)?.clone();
+            let checkout = application.effective_work_item_checkout(work_item.id)?;
+            let caller = EnvironmentCallerIdentity.identify(tool.map(Tool::from))?;
+            let binding = application.session_launch().adopt_observed(
+                HierarchyOwner::WorkItem(work_item.id),
+                checkout.checkout_id,
+                &caller.conversation,
+                &current_directory,
+                time::OffsetDateTime::now_utc(),
+            )?;
+            output(
+                &binding,
+                cli.json,
+                format!("Adopted session into {}", work_item.title),
+            )
+        }
+        Some(Command::Integration(IntegrationArgs {
+            command: IntegrationCommand::IngestHook { tool, owner, quiet },
+        })) => {
+            if owner != INTEGRATION_OWNER {
+                return Err(AppError::CallerIdentityMismatch);
+            }
+            let payload_json = read_hook_input()?;
+            let outcome = application
+                .session_launch()
+                .ingest_hook(&HookIngestionMutation {
+                    tool: tool.into(),
+                    payload_json,
+                    observed_at: time::OffsetDateTime::now_utc()
+                        .format(&time::format_description::well_known::Rfc3339)
+                        .map_err(|error| AppError::Domain(error.to_string()))?,
+                    launch_token: std::env::var("WORKBOARD_LAUNCH_TOKEN")
+                        .ok()
+                        .filter(|value| !value.trim().is_empty()),
+                    process: None,
+                })?;
+            if quiet {
+                Ok(String::new())
+            } else {
+                output(&outcome, cli.json, "Native hook recorded".to_owned())
+            }
+        }
+        Some(Command::Integration(IntegrationArgs {
+            command:
+                IntegrationCommand::Status {
+                    tool,
+                    home,
+                    executable,
+                },
+        })) => execute_integration(
+            &mut application,
+            &current_directory,
+            tool.into(),
+            home,
+            executable,
+            IntegrationOperation::Status,
+            None,
+            cli.json,
+        ),
+        Some(Command::Integration(IntegrationArgs {
+            command:
+                IntegrationCommand::Preview {
+                    tool,
+                    operation,
+                    home,
+                    executable,
+                },
+        })) => execute_integration(
+            &mut application,
+            &current_directory,
+            tool.into(),
+            home,
+            executable,
+            IntegrationOperation::Preview,
+            Some((operation.into(), None)),
+            cli.json,
+        ),
+        Some(Command::Integration(IntegrationArgs { command })) => {
+            let (operation, arguments) = match command {
+                IntegrationCommand::Install(arguments) => {
+                    (IntegrationOperation::Install, arguments)
+                }
+                IntegrationCommand::Repair(arguments) => (IntegrationOperation::Repair, arguments),
+                IntegrationCommand::Disable(arguments) => {
+                    (IntegrationOperation::Disable, arguments)
+                }
+                IntegrationCommand::Remove(arguments) => (IntegrationOperation::Remove, arguments),
+                _ => unreachable!(),
+            };
+            execute_integration(
+                &mut application,
+                &current_directory,
+                arguments.tool.into(),
+                arguments.home,
+                arguments.executable,
+                operation,
+                Some((operation, Some(arguments.confirm))),
+                cli.json,
+            )
+        }
         Some(Command::Snapshot) => {
             let workspace_id = resolve_workspace(&application, cli.workspace)?;
             let snapshot = application.snapshot(workspace_id)?;
@@ -421,6 +805,67 @@ fn select_work_item<'a>(
         .ok_or_else(|| AppError::Domain("selected Work item is unavailable".to_owned()))
 }
 
+fn select_session<'a>(
+    snapshot: &'a workboard_core::WorkspaceSnapshot,
+    query: Option<&str>,
+    tool: Option<Tool>,
+    structured: bool,
+) -> Result<&'a NativeSession, AppError> {
+    let candidates = snapshot
+        .sessions
+        .iter()
+        .filter(|session| tool.is_none_or(|tool| session.native.tool() == tool))
+        .map(|session| SelectionCandidate {
+            id: session.id.to_string(),
+            key: Some(session.native.native_id().to_owned()),
+            label: session.native.native_id().to_owned(),
+            metadata: tool_title(session.native.tool()).to_owned(),
+        })
+        .collect();
+    let candidate = select_candidate("session", query, candidates, structured)?;
+    snapshot
+        .sessions
+        .iter()
+        .find(|session| session.id.to_string() == candidate.id)
+        .ok_or(AppError::ConversationNotFound)
+}
+
+fn select_checkout<'a>(
+    snapshot: &'a workboard_core::WorkspaceSnapshot,
+    query: &str,
+    work_item: &WorkItem,
+    structured: bool,
+) -> Result<&'a Checkout, AppError> {
+    let candidates = snapshot
+        .checkouts
+        .iter()
+        .filter(|checkout| {
+            checkout.availability == CheckoutAvailability::Available
+                && work_item.repository_ids.contains(&checkout.repository_id)
+        })
+        .map(|checkout| {
+            let path = checkout
+                .paths
+                .iter()
+                .find(|path| path.observed_until.is_none())
+                .map(|path| path.path.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            SelectionCandidate {
+                id: checkout.id.to_string(),
+                key: checkout.branch.clone(),
+                label: path,
+                metadata: checkout.head.clone().unwrap_or_default(),
+            }
+        })
+        .collect();
+    let candidate = select_candidate("checkout", Some(query), candidates, structured)?;
+    snapshot
+        .checkouts
+        .iter()
+        .find(|checkout| checkout.id.to_string() == candidate.id)
+        .ok_or(AppError::ResumeCheckoutRequired)
+}
+
 fn select_candidate(
     kind: &str,
     query: Option<&str>,
@@ -467,6 +912,149 @@ fn default_store_path() -> Result<PathBuf, AppError> {
     UserDirs::new()
         .map(|directories| directories.home_dir().join("agent-workboard-store"))
         .ok_or(AppError::DataDirectoryUnavailable)
+}
+
+fn default_native_home(tool: Tool) -> Result<PathBuf, AppError> {
+    let home = UserDirs::new()
+        .map(|directories| directories.home_dir().to_path_buf())
+        .ok_or(AppError::DataDirectoryUnavailable)?;
+    Ok(match tool {
+        Tool::Claude => home.join(".claude").join("projects"),
+        Tool::Codex => home.join(".codex").join("sessions"),
+    })
+}
+
+fn default_integration_home(tool: Tool) -> Result<PathBuf, AppError> {
+    let home = UserDirs::new()
+        .map(|directories| directories.home_dir().to_path_buf())
+        .ok_or(AppError::DataDirectoryUnavailable)?;
+    Ok(match tool {
+        Tool::Claude => home.join(".claude"),
+        Tool::Codex => home.join(".codex"),
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_integration(
+    application: &mut WorkboardApplication,
+    current_directory: &Path,
+    tool: Tool,
+    home: Option<PathBuf>,
+    executable: Option<PathBuf>,
+    operation: IntegrationOperation,
+    mutation: Option<(IntegrationOperation, Option<String>)>,
+    json: bool,
+) -> Result<String, AppError> {
+    let native_home = home
+        .map(|path| absolute(current_directory, &path))
+        .map_or_else(|| default_integration_home(tool), Ok)?;
+    let workboard_executable = executable
+        .map(|path| absolute(current_directory, &path))
+        .map_or_else(|| std::env::current_exe().map_err(AppError::GitIo), Ok)?;
+    let (preview_operation, confirmation) = mutation.map_or((None, None), |(operation, token)| {
+        (
+            Some(operation),
+            token.map(|token| IntegrationConfirmation { token }),
+        )
+    });
+    let response = application.integrations().execute(
+        IntegrationRequest {
+            tool,
+            native_home,
+            workboard_executable,
+            operation,
+            preview_operation,
+            confirmation,
+        },
+        time::OffsetDateTime::now_utc(),
+    )?;
+    let human = match &response {
+        IntegrationResponse::Status { status } => {
+            format!("{} integration: {:?}", tool_title(tool), status.state)
+        }
+        IntegrationResponse::Preview { preview } => format!(
+            "{} integration preview: change={}, confirmation={}",
+            tool_title(tool),
+            preview.will_change,
+            preview.confirmation_token
+        ),
+        IntegrationResponse::Mutation { outcome } => format!(
+            "{} integration {:?}: changed={}, state={:?}",
+            tool_title(tool),
+            outcome.operation,
+            outcome.changed,
+            outcome.status.state
+        ),
+    };
+    output(&response, json, human)
+}
+
+#[cfg(windows)]
+fn default_terminal_executable() -> PathBuf {
+    PathBuf::from("wt.exe")
+}
+
+#[cfg(target_os = "linux")]
+fn default_terminal_executable() -> PathBuf {
+    PathBuf::from("xdg-terminal-exec")
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+fn default_terminal_executable() -> PathBuf {
+    PathBuf::new()
+}
+
+fn default_native_executable(tool: Tool) -> PathBuf {
+    match tool {
+        Tool::Claude => PathBuf::from("claude"),
+        Tool::Codex => PathBuf::from("codex"),
+    }
+}
+
+fn new_idempotency_key() -> String {
+    workboard_core::LaunchIntentId::generate().to_string()
+}
+
+fn tool_title(tool: Tool) -> &'static str {
+    match tool {
+        Tool::Claude => "Claude",
+        Tool::Codex => "Codex",
+    }
+}
+
+fn read_hook_input() -> Result<String, AppError> {
+    let mut bytes = Vec::new();
+    io::stdin()
+        .take((MAX_HOOK_INPUT_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(AppError::HookInputIo)?;
+    if bytes.len() > MAX_HOOK_INPUT_BYTES {
+        return Err(AppError::HookInputTooLarge {
+            limit: MAX_HOOK_INPUT_BYTES,
+        });
+    }
+    String::from_utf8(bytes).map_err(|error| AppError::InvalidHookInput(error.to_string()))
+}
+
+fn await_binding(
+    application: &mut WorkboardApplication,
+    intent_id: workboard_core::LaunchIntentId,
+) -> Result<workboard_application::session_launch::ConfirmedSessionBinding, AppError> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    loop {
+        if let Some(binding) = application.session_launch().binding_for_intent(intent_id)? {
+            return Ok(binding);
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(AppError::External {
+                code: "launch_binding_pending".to_owned(),
+                message: format!(
+                    "native process launched but no exact hook binding arrived for intent {intent_id}"
+                ),
+            });
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
 }
 
 fn absolute(current_directory: &Path, path: &Path) -> PathBuf {
@@ -629,5 +1217,53 @@ mod tests {
                 .join("workspaces/demo/epics/launch/EPIC.md")
                 .is_file()
         );
+    }
+
+    #[test]
+    fn integration_preview_and_install_round_trip_through_the_cli() {
+        let directory = TempDir::new().expect("temporary directory");
+        let database = directory.path().join("workboard.sqlite");
+        let native_home = directory.path().join(".claude");
+        let executable = directory.path().join("workboard.exe");
+        std::fs::create_dir(&native_home).expect("native home");
+        std::fs::write(&executable, []).expect("workboard executable");
+        let common = [
+            "workboard",
+            "--database",
+            database.to_str().expect("database path"),
+            "--json",
+            "integration",
+        ];
+        let preview = execute_from(common.into_iter().chain([
+            "preview",
+            "--tool",
+            "claude",
+            "--home",
+            native_home.to_str().expect("native home path"),
+            "--executable",
+            executable.to_str().expect("executable path"),
+        ]))
+        .expect("preview integration");
+        let preview: serde_json::Value =
+            serde_json::from_str(&preview).expect("parse preview output");
+        let token = preview["preview"]["confirmationToken"]
+            .as_str()
+            .expect("confirmation token");
+        let installed = execute_from(common.into_iter().chain([
+            "install",
+            "--tool",
+            "claude",
+            "--home",
+            native_home.to_str().expect("native home path"),
+            "--executable",
+            executable.to_str().expect("executable path"),
+            "--confirm",
+            token,
+        ]))
+        .expect("install integration");
+        let installed: serde_json::Value =
+            serde_json::from_str(&installed).expect("parse install output");
+        assert_eq!(installed["outcome"]["status"]["state"], "installed");
+        assert!(native_home.join("settings.json").is_file());
     }
 }

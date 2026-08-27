@@ -17,13 +17,13 @@ directories.workspace = true
 ratatui.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+time.workspace = true
 workboard-application = { path = "../workboard-application" }
 workboard-core = { path = "../workboard-core" }
 workboard-daemon = { path = "../workboard-daemon" }
 
 [dev-dependencies]
 tempfile.workspace = true
-time.workspace = true
 
 [lints]
 workspace = true

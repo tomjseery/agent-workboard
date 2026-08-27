@@ -11,10 +11,13 @@ use workboard_core::{ConversationId, LaunchLeaseId};
 
 use crate::AppError;
 
-const CURRENT_SCHEMA_VERSION: i64 = 3;
+const CURRENT_SCHEMA_VERSION: i64 = 6;
 const FOUNDATION_SCHEMA_CHECKSUM: &str = "agent-workboard-foundation-v1";
 const LAUNCH_LEASE_SCHEMA_CHECKSUM: &str = "agent-workboard-launch-leases-v1";
 const WORKBOARD_DOMAIN_SCHEMA_CHECKSUM: &str = "agent-workboard-domain-v1";
+const MANAGED_BINDING_SCHEMA_CHECKSUM: &str = "agent-workboard-managed-binding-v1";
+const NATIVE_SOURCE_SCHEMA_CHECKSUM: &str = "agent-workboard-native-source-v1";
+const INTEGRATION_STATE_SCHEMA_CHECKSUM: &str = "agent-workboard-integration-state-v1";
 
 pub struct SqliteStore {
     path: PathBuf,
@@ -631,6 +634,90 @@ fn migrate(connection: &Connection) -> Result<(), AppError> {
              position INTEGER NOT NULL CHECK (position >= 0),
              UNIQUE (layout_id, position)
          );"#,
+    )?;
+    apply_migration(
+        connection,
+        4,
+        MANAGED_BINDING_SCHEMA_CHECKSUM,
+        "ALTER TABLE launch_intents
+             ADD COLUMN role TEXT NOT NULL DEFAULT 'work_item_execution';
+         ALTER TABLE launch_intents ADD COLUMN expected_native_id TEXT;
+         ALTER TABLE launch_intents ADD COLUMN terminal_pid INTEGER;
+         ALTER TABLE launch_intents ADD COLUMN failure TEXT;
+         CREATE TABLE managed_sessions (
+             id TEXT PRIMARY KEY,
+             launch_intent_id TEXT UNIQUE REFERENCES launch_intents(id) ON DELETE RESTRICT,
+             session_id TEXT NOT NULL REFERENCES native_sessions(id) ON DELETE RESTRICT,
+             checkout_id TEXT NOT NULL REFERENCES checkouts(id) ON DELETE RESTRICT,
+             role TEXT NOT NULL,
+             status TEXT NOT NULL CHECK (status IN ('bound', 'adopted', 'stopped')),
+             managed_from TEXT NOT NULL,
+             managed_until TEXT,
+             CHECK (managed_until IS NULL OR managed_until > managed_from)
+         );
+         CREATE UNIQUE INDEX managed_sessions_one_current
+             ON managed_sessions (session_id) WHERE managed_until IS NULL;
+         CREATE TABLE live_observations (
+             id TEXT PRIMARY KEY,
+             session_id TEXT NOT NULL REFERENCES native_sessions(id) ON DELETE RESTRICT,
+             source TEXT NOT NULL,
+             status TEXT NOT NULL,
+             observed_at TEXT NOT NULL,
+             expires_at TEXT NOT NULL,
+             cwd TEXT,
+             pid INTEGER,
+             process_created_at TEXT,
+             executable TEXT,
+             parent_pid INTEGER,
+             CHECK (expires_at > observed_at)
+         );
+         CREATE INDEX live_observations_session_time
+             ON live_observations (session_id, observed_at DESC);",
+    )?;
+    apply_migration(
+        connection,
+        5,
+        NATIVE_SOURCE_SCHEMA_CHECKSUM,
+        "CREATE TABLE native_session_sources (
+             session_id TEXT NOT NULL REFERENCES native_sessions(id) ON DELETE RESTRICT,
+             path TEXT NOT NULL UNIQUE CHECK (path <> ''),
+             adapter_version TEXT NOT NULL CHECK (adapter_version <> ''),
+             snapshot_json TEXT NOT NULL CHECK (snapshot_json <> ''),
+             missing INTEGER NOT NULL CHECK (missing IN (0, 1)),
+             observed_at TEXT NOT NULL,
+             PRIMARY KEY (session_id, path)
+         );
+         CREATE INDEX native_session_sources_session
+             ON native_session_sources (session_id, missing, observed_at DESC);",
+    )?;
+    apply_migration(
+        connection,
+        6,
+        INTEGRATION_STATE_SCHEMA_CHECKSUM,
+        "CREATE TABLE integration_registrations (
+             provider TEXT PRIMARY KEY CHECK (provider IN ('claude', 'codex')),
+             enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+             adapter_version TEXT NOT NULL CHECK (adapter_version <> ''),
+             first_observed_at TEXT,
+             last_observed_at TEXT
+         );
+         CREATE TABLE integration_observations (
+             provider TEXT PRIMARY KEY CHECK (provider IN ('claude', 'codex')),
+             first_observed_at TEXT NOT NULL,
+             last_observed_at TEXT NOT NULL,
+             last_hook_observed_at TEXT,
+             last_app_server_observed_at TEXT
+         );
+         CREATE TABLE integration_confirmations (
+             token_hash TEXT PRIMARY KEY CHECK (token_hash <> ''),
+             provider TEXT NOT NULL CHECK (provider IN ('claude', 'codex')),
+             operation TEXT NOT NULL,
+             configuration_digest TEXT NOT NULL CHECK (configuration_digest <> ''),
+             created_at TEXT NOT NULL,
+             expires_at TEXT NOT NULL,
+             consumed_at TEXT,
+             CHECK (expires_at > created_at)
+         );",
     )?;
     Ok(())
 }
