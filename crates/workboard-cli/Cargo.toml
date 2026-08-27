@@ -12,7 +12,9 @@ path = "src/main.rs"
 
 [dependencies]
 clap.workspace = true
+crossterm.workspace = true
 directories.workspace = true
+ratatui.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 workboard-application = { path = "../workboard-application" }
@@ -21,6 +23,7 @@ workboard-daemon = { path = "../workboard-daemon" }
 
 [dev-dependencies]
 tempfile.workspace = true
+time.workspace = true
 
 [lints]
 workspace = true
