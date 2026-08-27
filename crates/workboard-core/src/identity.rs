@@ -41,9 +41,21 @@ macro_rules! define_id {
 }
 
 define_id!(RepositoryId);
+define_id!(WorkspaceId);
+define_id!(EpicId);
+define_id!(FeatureId);
 define_id!(WorkItemId);
+define_id!(CheckoutId);
 define_id!(WorktreeId);
 define_id!(ConversationId);
+define_id!(DocumentId);
+define_id!(OperationIntentId);
+define_id!(TerminalLayoutId);
+define_id!(TerminalTabId);
+define_id!(AssociationIntervalId);
+define_id!(RepositoryPathId);
+define_id!(CheckoutPathId);
+define_id!(RestoreMembershipId);
 define_id!(AssociationEventId);
 define_id!(LaunchLeaseId);
 define_id!(LiveObservationId);

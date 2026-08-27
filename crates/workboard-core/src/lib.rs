@@ -1,5 +1,6 @@
 mod association;
 mod conversation;
+mod hierarchy;
 mod identity;
 mod launch;
 mod live;
@@ -12,10 +13,19 @@ pub use association::{
     NewAssociationEvent, NewManualAssociationEvent, UnsupportedAssociationEventVersion,
 };
 pub use conversation::{ConversationRef, ConversationRefError, Tool};
+pub use hierarchy::{
+    Checkout, CheckoutAvailability, CheckoutPathInterval, DocumentRevision, EffectiveCheckout,
+    Epic, Feature, HierarchyOwner, LaunchIntent, MarkdownDocument, NameError, NativeSession,
+    NativeSessionAssociation, OperationIntent, Repository, RepositoryPath, RepositoryRemote,
+    RestoreMembership, Slug, TerminalLayout, TerminalTab, WorkItem, WorkItemKey, WorkItemStatus,
+    WorkflowEvent, WorkflowRun, Workspace, WorkspaceSnapshot,
+};
 pub use identity::{
-    AssociationEventId, ConversationId, DocumentReferenceId, GitOperationIntentId, LaunchIntentId,
-    LaunchLeaseId, LiveObservationId, ManagedSessionId, RepositoryId, SessionBindingId, WorkItemId,
-    WorkflowEventId, WorkflowRunId, WorktreeId,
+    AssociationEventId, AssociationIntervalId, CheckoutId, CheckoutPathId, ConversationId,
+    DocumentId, DocumentReferenceId, EpicId, FeatureId, GitOperationIntentId, LaunchIntentId,
+    LaunchLeaseId, LiveObservationId, ManagedSessionId, OperationIntentId, RepositoryId,
+    RepositoryPathId, RestoreMembershipId, SessionBindingId, TerminalLayoutId, TerminalTabId,
+    WorkItemId, WorkflowEventId, WorkflowRunId, WorkspaceId, WorktreeId,
 };
 pub use launch::{
     CommandSpec, LaunchSpecError, ManagedLaunchMode, ManagedLaunchRequest, ManagedLaunchSpec,

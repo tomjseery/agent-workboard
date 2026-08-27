@@ -4,14 +4,15 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum WorkflowState {
     Draft,
+    WorktreePending,
     PlanningLaunchPending,
     PlanningActive,
     ProposalReady,
-    Approved,
-    WorktreeCreating,
-    AwaitingPlanningStop,
-    DeliveryLaunchPending,
-    DeliveryActive,
+    AwaitingApproval,
+    Publishing,
+    Planned,
+    WorkItemLaunchPending,
+    WorkItemActive,
     ReconciliationRequired,
     Blocked,
     Paused,
@@ -29,7 +30,11 @@ impl WorkflowState {
             return true;
         }
         match self {
-            Self::Draft => matches!(next, Self::PlanningLaunchPending | Self::Cancelled),
+            Self::Draft => matches!(next, Self::WorktreePending | Self::Cancelled),
+            Self::WorktreePending => matches!(
+                next,
+                Self::PlanningLaunchPending | Self::ReconciliationRequired | Self::Cancelled
+            ),
             Self::PlanningLaunchPending => matches!(
                 next,
                 Self::PlanningActive | Self::ReconciliationRequired | Self::Cancelled
@@ -44,30 +49,28 @@ impl WorkflowState {
             ),
             Self::ProposalReady => matches!(
                 next,
-                Self::Approved | Self::PlanningActive | Self::Cancelled
+                Self::AwaitingApproval | Self::PlanningActive | Self::Cancelled
             ),
-            Self::Approved => matches!(
+            Self::AwaitingApproval => matches!(
                 next,
-                Self::WorktreeCreating | Self::ReconciliationRequired | Self::Cancelled
+                Self::Publishing | Self::PlanningActive | Self::Cancelled
             ),
-            Self::WorktreeCreating => matches!(
+            Self::Publishing => matches!(
                 next,
-                Self::AwaitingPlanningStop | Self::ReconciliationRequired | Self::Cancelled
+                Self::Planned | Self::ReconciliationRequired | Self::Cancelled
             ),
-            Self::AwaitingPlanningStop => matches!(
+            Self::Planned => matches!(
                 next,
-                Self::DeliveryLaunchPending
+                Self::WorkItemLaunchPending | Self::Completed | Self::Cancelled
+            ),
+            Self::WorkItemLaunchPending => matches!(
+                next,
+                Self::WorkItemActive | Self::ReconciliationRequired | Self::Cancelled
+            ),
+            Self::WorkItemActive => matches!(
+                next,
+                Self::WorkItemLaunchPending
                     | Self::ReconciliationRequired
-                    | Self::Blocked
-                    | Self::Cancelled
-            ),
-            Self::DeliveryLaunchPending => matches!(
-                next,
-                Self::DeliveryActive | Self::ReconciliationRequired | Self::Cancelled
-            ),
-            Self::DeliveryActive => matches!(
-                next,
-                Self::ReconciliationRequired
                     | Self::Blocked
                     | Self::Paused
                     | Self::Completed
@@ -77,10 +80,11 @@ impl WorkflowState {
                 next,
                 Self::PlanningActive
                     | Self::ProposalReady
-                    | Self::Approved
-                    | Self::AwaitingPlanningStop
-                    | Self::DeliveryLaunchPending
-                    | Self::DeliveryActive
+                    | Self::AwaitingApproval
+                    | Self::Publishing
+                    | Self::Planned
+                    | Self::WorkItemLaunchPending
+                    | Self::WorkItemActive
                     | Self::Blocked
                     | Self::Paused
                     | Self::Cancelled
@@ -88,7 +92,7 @@ impl WorkflowState {
             Self::Blocked => matches!(
                 next,
                 Self::PlanningActive
-                    | Self::DeliveryActive
+                    | Self::WorkItemActive
                     | Self::ReconciliationRequired
                     | Self::Paused
                     | Self::Cancelled
@@ -96,7 +100,7 @@ impl WorkflowState {
             Self::Paused => matches!(
                 next,
                 Self::PlanningActive
-                    | Self::DeliveryActive
+                    | Self::WorkItemActive
                     | Self::ReconciliationRequired
                     | Self::Cancelled
             ),
@@ -118,17 +122,19 @@ pub enum WorkflowActor {
 #[serde(rename_all = "snake_case")]
 pub enum DocumentKind {
     RepositoryInstructions,
-    Roadmap,
-    Plan,
-    Progress,
+    Epic,
+    Feature,
+    WorkItem,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GitOperationKind {
     CreateWorktree,
+    ReplaceWorktree,
     RestoreWorktree,
     MaterialiseDocuments,
+    CommitDocuments,
     CloseWorktree,
 }
 
@@ -147,8 +153,11 @@ pub enum IntentStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ManagedSessionRole {
-    Planning,
-    Delivery,
+    EpicNavigation,
+    FeaturePlanning,
+    WorkItemExecution,
+    Debugging,
+    Review,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -176,23 +185,23 @@ mod tests {
 
     #[test]
     fn workflow_transitions_fail_closed() {
-        assert!(WorkflowState::Draft.can_transition_to(WorkflowState::PlanningLaunchPending));
-        assert!(WorkflowState::DeliveryActive.can_transition_to(WorkflowState::Completed));
-        assert!(!WorkflowState::PlanningActive.can_transition_to(WorkflowState::DeliveryActive));
-        assert!(!WorkflowState::Completed.can_transition_to(WorkflowState::DeliveryActive));
+        assert!(WorkflowState::Draft.can_transition_to(WorkflowState::WorktreePending));
+        assert!(WorkflowState::WorkItemActive.can_transition_to(WorkflowState::Completed));
+        assert!(!WorkflowState::PlanningActive.can_transition_to(WorkflowState::WorkItemActive));
+        assert!(!WorkflowState::Completed.can_transition_to(WorkflowState::WorkItemActive));
     }
 
     #[test]
     fn workflow_contracts_have_stable_wire_names() {
         assert_eq!(
-            serde_json::to_string(&WorkflowState::AwaitingPlanningStop)
+            serde_json::to_string(&WorkflowState::AwaitingApproval)
                 .expect("workflow state should serialise"),
-            "\"awaiting_planning_stop\""
+            "\"awaiting_approval\""
         );
         assert_eq!(
-            serde_json::to_string(&ManagedSessionRole::Delivery)
+            serde_json::to_string(&ManagedSessionRole::WorkItemExecution)
                 .expect("session role should serialise"),
-            "\"delivery\""
+            "\"work_item_execution\""
         );
     }
 }

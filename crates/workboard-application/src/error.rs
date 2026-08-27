@@ -166,6 +166,23 @@ pub enum AppError {
         #[source]
         source: std::io::Error,
     },
+    #[error("the planning store is unavailable or invalid: {0}")]
+    PlanningStoreInvalid(PathBuf),
+    #[error("planning-store I/O failed while {operation} at {path}: {source}")]
+    PlanningStoreIo {
+        operation: &'static str,
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("the planning document already exists: {0}")]
+    PlanningDocumentExists(PathBuf),
+    #[error("the planning document is invalid: {0}")]
+    PlanningDocumentInvalid(String),
+    #[error("the planning document changed since it was read: {0}")]
+    PlanningDocumentConcurrentEdit(PathBuf),
+    #[error("the planning-store Git operation failed: {message}")]
+    PlanningGit { message: String },
     #[error("failed to encode the association event: {0}")]
     Encode(#[from] serde_json::Error),
     #[error("native {tool} discovery failed: {message}")]
@@ -255,6 +272,12 @@ impl AppError {
             Self::RecoveryIo { .. } => "recovery_io",
             Self::Storage(_) => "storage",
             Self::StorageIo { .. } => "storage_io",
+            Self::PlanningStoreInvalid(_) => "planning_store_invalid",
+            Self::PlanningStoreIo { .. } => "planning_store_io",
+            Self::PlanningDocumentExists(_) => "planning_document_exists",
+            Self::PlanningDocumentInvalid(_) => "planning_document_invalid",
+            Self::PlanningDocumentConcurrentEdit(_) => "planning_document_concurrent_edit",
+            Self::PlanningGit { .. } => "planning_git",
             Self::Encode(_) => "encode",
             Self::Adapter { .. } => "adapter",
             Self::Domain(_) => "domain",

@@ -1275,6 +1275,9 @@ name = "workboard-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "directories",
+ "serde",
+ "serde_json",
  "tempfile",
  "workboard-application",
  "workboard-core",

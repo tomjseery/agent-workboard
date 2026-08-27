@@ -11,9 +11,10 @@ use workboard_core::{ConversationId, LaunchLeaseId};
 
 use crate::AppError;
 
-const CURRENT_SCHEMA_VERSION: i64 = 2;
+const CURRENT_SCHEMA_VERSION: i64 = 3;
 const FOUNDATION_SCHEMA_CHECKSUM: &str = "agent-workboard-foundation-v1";
 const LAUNCH_LEASE_SCHEMA_CHECKSUM: &str = "agent-workboard-launch-leases-v1";
+const WORKBOARD_DOMAIN_SCHEMA_CHECKSUM: &str = "agent-workboard-domain-v1";
 
 pub struct SqliteStore {
     path: PathBuf,
@@ -280,6 +281,357 @@ fn migrate(connection: &Connection) -> Result<(), AppError> {
          CREATE UNIQUE INDEX launch_leases_one_pending_per_conversation
              ON launch_leases (conversation_id) WHERE status = 'pending';",
     )?;
+    apply_migration(
+        connection,
+        3,
+        WORKBOARD_DOMAIN_SCHEMA_CHECKSUM,
+        r#"CREATE TABLE workspaces (
+             id TEXT PRIMARY KEY,
+             slug TEXT NOT NULL UNIQUE CHECK (slug <> ''),
+             title TEXT NOT NULL CHECK (title <> ''),
+             planning_store_repository_id TEXT NOT NULL UNIQUE,
+             created_at TEXT NOT NULL,
+             FOREIGN KEY (planning_store_repository_id) REFERENCES repositories(id)
+                 DEFERRABLE INITIALLY DEFERRED
+         );
+         CREATE TABLE repositories (
+             id TEXT PRIMARY KEY,
+             workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE RESTRICT
+                 DEFERRABLE INITIALLY DEFERRED,
+             slug TEXT NOT NULL CHECK (slug <> ''),
+             title TEXT NOT NULL CHECK (title <> ''),
+             git_common_directory TEXT NOT NULL CHECK (git_common_directory <> ''),
+             default_branch TEXT,
+             is_planning_store INTEGER NOT NULL CHECK (is_planning_store IN (0, 1)),
+             created_at TEXT NOT NULL,
+             UNIQUE (workspace_id, slug),
+             UNIQUE (git_common_directory)
+         );
+         CREATE TABLE repository_paths (
+             id TEXT PRIMARY KEY,
+             repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE RESTRICT,
+             path TEXT NOT NULL CHECK (path <> ''),
+             observed_from TEXT NOT NULL,
+             observed_until TEXT,
+             CHECK (observed_until IS NULL OR observed_until > observed_from)
+         );
+         CREATE UNIQUE INDEX repository_paths_one_current
+             ON repository_paths (repository_id) WHERE observed_until IS NULL;
+         CREATE UNIQUE INDEX repository_paths_current_path
+             ON repository_paths (path) WHERE observed_until IS NULL;
+         CREATE TRIGGER repository_paths_no_delete
+         BEFORE DELETE ON repository_paths
+         BEGIN
+             SELECT RAISE(ABORT, 'repository path history cannot be deleted');
+         END;
+         CREATE TRIGGER repository_paths_no_rewrite
+         BEFORE UPDATE ON repository_paths
+         WHEN OLD.observed_until IS NOT NULL OR
+              NEW.id <> OLD.id OR
+              NEW.repository_id <> OLD.repository_id OR
+              NEW.path <> OLD.path OR
+              NEW.observed_from <> OLD.observed_from OR
+              NEW.observed_until IS NULL OR
+              NEW.observed_until <= OLD.observed_from
+         BEGIN
+             SELECT RAISE(ABORT, 'repository path history cannot be rewritten');
+         END;
+         CREATE TABLE repository_remotes (
+             repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+             name TEXT NOT NULL CHECK (name <> ''),
+             url TEXT NOT NULL CHECK (url <> ''),
+             observed_at TEXT NOT NULL,
+             PRIMARY KEY (repository_id, name, url)
+         );
+         CREATE TABLE epics (
+             id TEXT PRIMARY KEY,
+             workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE RESTRICT,
+             slug TEXT NOT NULL CHECK (slug <> ''),
+             title TEXT NOT NULL CHECK (title <> ''),
+             created_at TEXT NOT NULL,
+             UNIQUE (workspace_id, slug)
+         );
+         CREATE TABLE features (
+             id TEXT PRIMARY KEY,
+             epic_id TEXT NOT NULL REFERENCES epics(id) ON DELETE RESTRICT,
+             slug TEXT NOT NULL CHECK (slug <> ''),
+             title TEXT NOT NULL CHECK (title <> ''),
+             workflow_state TEXT NOT NULL,
+             created_at TEXT NOT NULL,
+             UNIQUE (epic_id, slug)
+         );
+         CREATE TABLE work_items (
+             id TEXT PRIMARY KEY,
+             feature_id TEXT NOT NULL REFERENCES features(id) ON DELETE RESTRICT,
+             key TEXT NOT NULL UNIQUE CHECK (key <> ''),
+             slug TEXT NOT NULL CHECK (slug <> ''),
+             title TEXT NOT NULL CHECK (title <> ''),
+             status TEXT NOT NULL CHECK (
+                 status IN ('backlog', 'ready', 'in_progress', 'blocked', 'review', 'done', 'cancelled')
+             ),
+             created_at TEXT NOT NULL,
+             UNIQUE (feature_id, slug)
+         );
+         CREATE TABLE work_item_repositories (
+             work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+             repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE RESTRICT,
+             PRIMARY KEY (work_item_id, repository_id)
+         );
+         CREATE TABLE documents (
+             id TEXT PRIMARY KEY,
+             repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE RESTRICT,
+             epic_id TEXT REFERENCES epics(id) ON DELETE RESTRICT,
+             feature_id TEXT REFERENCES features(id) ON DELETE RESTRICT,
+             work_item_id TEXT REFERENCES work_items(id) ON DELETE RESTRICT,
+             kind TEXT NOT NULL CHECK (kind IN ('epic', 'feature', 'work_item')),
+             relative_path TEXT NOT NULL CHECK (
+                 relative_path <> '' AND
+                 relative_path NOT LIKE '/%' AND
+                 relative_path NOT LIKE '\\%' AND
+                 relative_path NOT LIKE '%/../%' AND
+                 relative_path NOT LIKE '../%' AND
+                 relative_path <> '..'
+             ),
+             content_hash TEXT NOT NULL CHECK (length(content_hash) = 64),
+             observed_commit TEXT,
+             observed_at TEXT NOT NULL,
+             CHECK (
+                 (kind = 'epic' AND epic_id IS NOT NULL AND feature_id IS NULL AND work_item_id IS NULL) OR
+                 (kind = 'feature' AND epic_id IS NULL AND feature_id IS NOT NULL AND work_item_id IS NULL) OR
+                 (kind = 'work_item' AND epic_id IS NULL AND feature_id IS NULL AND work_item_id IS NOT NULL)
+             ),
+             UNIQUE (repository_id, relative_path),
+             UNIQUE (epic_id),
+             UNIQUE (feature_id),
+             UNIQUE (work_item_id)
+         );
+         CREATE TABLE document_revisions (
+             document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE RESTRICT,
+             revision INTEGER NOT NULL CHECK (revision > 0),
+             content_hash TEXT NOT NULL CHECK (length(content_hash) = 64),
+             observed_commit TEXT,
+             observed_at TEXT NOT NULL,
+             PRIMARY KEY (document_id, revision),
+             UNIQUE (document_id, content_hash)
+         );
+         CREATE TABLE checkouts (
+             id TEXT PRIMARY KEY,
+             repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE RESTRICT,
+             git_worktree_identity TEXT NOT NULL CHECK (git_worktree_identity <> ''),
+             branch TEXT,
+             head TEXT,
+             availability TEXT NOT NULL CHECK (
+                 availability IN ('available', 'missing', 'deleted', 'replaced')
+             ),
+             replaces_checkout_id TEXT REFERENCES checkouts(id) ON DELETE RESTRICT,
+             created_intent_id TEXT,
+             created_at TEXT NOT NULL,
+             CHECK (replaces_checkout_id IS NULL OR replaces_checkout_id <> id),
+             UNIQUE (repository_id, git_worktree_identity)
+         );
+         CREATE TRIGGER checkouts_validate_replacement
+         BEFORE INSERT ON checkouts
+         WHEN NEW.replaces_checkout_id IS NOT NULL
+         BEGIN
+             SELECT CASE WHEN NOT EXISTS (
+                 SELECT 1 FROM checkouts replaced
+                 WHERE replaced.id = NEW.replaces_checkout_id
+                   AND replaced.repository_id = NEW.repository_id
+             ) THEN RAISE(ABORT, 'replacement checkout must belong to the same repository') END;
+         END;
+         CREATE TABLE checkout_paths (
+             id TEXT PRIMARY KEY,
+             checkout_id TEXT NOT NULL REFERENCES checkouts(id) ON DELETE RESTRICT,
+             path TEXT NOT NULL CHECK (path <> ''),
+             observed_from TEXT NOT NULL,
+             observed_until TEXT,
+             CHECK (observed_until IS NULL OR observed_until > observed_from)
+         );
+         CREATE UNIQUE INDEX checkout_paths_one_current
+             ON checkout_paths (checkout_id) WHERE observed_until IS NULL;
+         CREATE UNIQUE INDEX checkout_paths_current_path
+             ON checkout_paths (path) WHERE observed_until IS NULL;
+         CREATE TRIGGER checkout_paths_no_delete
+         BEFORE DELETE ON checkout_paths
+         BEGIN
+             SELECT RAISE(ABORT, 'checkout path history cannot be deleted');
+         END;
+         CREATE TRIGGER checkout_paths_no_rewrite
+         BEFORE UPDATE ON checkout_paths
+         WHEN OLD.observed_until IS NOT NULL OR
+              NEW.id <> OLD.id OR
+              NEW.checkout_id <> OLD.checkout_id OR
+              NEW.path <> OLD.path OR
+              NEW.observed_from <> OLD.observed_from OR
+              NEW.observed_until IS NULL OR
+              NEW.observed_until <= OLD.observed_from
+         BEGIN
+             SELECT RAISE(ABORT, 'checkout path history cannot be rewritten');
+         END;
+         CREATE TABLE feature_checkouts (
+             feature_id TEXT NOT NULL REFERENCES features(id) ON DELETE RESTRICT,
+             repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE RESTRICT,
+             checkout_id TEXT NOT NULL REFERENCES checkouts(id) ON DELETE RESTRICT,
+             assigned_at TEXT NOT NULL,
+             PRIMARY KEY (feature_id, repository_id)
+         );
+         CREATE TABLE work_item_checkout_overrides (
+             work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE RESTRICT,
+             repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE RESTRICT,
+             checkout_id TEXT NOT NULL REFERENCES checkouts(id) ON DELETE RESTRICT,
+             assigned_at TEXT NOT NULL,
+             PRIMARY KEY (work_item_id, repository_id)
+         );
+         CREATE TRIGGER feature_checkouts_validate_repository
+         BEFORE INSERT ON feature_checkouts
+         BEGIN
+             SELECT CASE WHEN NOT EXISTS (
+                 SELECT 1 FROM checkouts
+                 WHERE id = NEW.checkout_id AND repository_id = NEW.repository_id
+             ) THEN RAISE(ABORT, 'feature checkout repository mismatch') END;
+         END;
+         CREATE TRIGGER work_item_overrides_validate_repository
+         BEFORE INSERT ON work_item_checkout_overrides
+         BEGIN
+             SELECT CASE WHEN NOT EXISTS (
+                 SELECT 1 FROM checkouts
+                 WHERE id = NEW.checkout_id AND repository_id = NEW.repository_id
+             ) THEN RAISE(ABORT, 'Work item checkout repository mismatch') END;
+         END;
+         CREATE VIEW effective_work_item_checkouts AS
+             SELECT override.work_item_id, override.repository_id, override.checkout_id, 0 AS inherited
+             FROM work_item_checkout_overrides override
+             UNION ALL
+             SELECT item.id, feature.repository_id, feature.checkout_id, 1 AS inherited
+             FROM work_items item
+             JOIN feature_checkouts feature ON feature.feature_id = item.feature_id
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM work_item_checkout_overrides override
+                 WHERE override.work_item_id = item.id
+                   AND override.repository_id = feature.repository_id
+             );
+         CREATE TABLE native_sessions (
+             id TEXT PRIMARY KEY,
+             provider TEXT NOT NULL CHECK (provider IN ('claude', 'codex')),
+             native_id TEXT NOT NULL CHECK (native_id <> ''),
+             discovered_at TEXT NOT NULL,
+             UNIQUE (provider, native_id)
+         );
+         CREATE TABLE native_session_associations (
+             id TEXT PRIMARY KEY,
+             session_id TEXT NOT NULL REFERENCES native_sessions(id) ON DELETE RESTRICT,
+             epic_id TEXT REFERENCES epics(id) ON DELETE RESTRICT,
+             feature_id TEXT REFERENCES features(id) ON DELETE RESTRICT,
+             work_item_id TEXT REFERENCES work_items(id) ON DELETE RESTRICT,
+             role TEXT NOT NULL,
+             associated_from TEXT NOT NULL,
+             associated_until TEXT,
+             CHECK (
+                 (epic_id IS NOT NULL) + (feature_id IS NOT NULL) + (work_item_id IS NOT NULL) = 1
+             ),
+             CHECK (associated_until IS NULL OR associated_until > associated_from)
+         );
+         CREATE UNIQUE INDEX native_session_associations_one_current
+             ON native_session_associations (session_id) WHERE associated_until IS NULL;
+         CREATE TRIGGER native_session_associations_no_delete
+         BEFORE DELETE ON native_session_associations
+         BEGIN
+             SELECT RAISE(ABORT, 'native session associations are append-only');
+         END;
+         CREATE TRIGGER native_session_associations_no_rewrite
+         BEFORE UPDATE ON native_session_associations
+         WHEN OLD.associated_until IS NOT NULL OR
+              NEW.id <> OLD.id OR
+              NEW.session_id <> OLD.session_id OR
+              NEW.epic_id IS NOT OLD.epic_id OR
+              NEW.feature_id IS NOT OLD.feature_id OR
+              NEW.work_item_id IS NOT OLD.work_item_id OR
+              NEW.role <> OLD.role OR
+              NEW.associated_from <> OLD.associated_from OR
+              NEW.associated_until IS NULL OR
+              NEW.associated_until <= OLD.associated_from
+         BEGIN
+             SELECT RAISE(ABORT, 'native session associations are append-only');
+         END;
+         CREATE TABLE workflow_runs (
+             id TEXT PRIMARY KEY,
+             epic_id TEXT REFERENCES epics(id) ON DELETE RESTRICT,
+             feature_id TEXT REFERENCES features(id) ON DELETE RESTRICT,
+             work_item_id TEXT REFERENCES work_items(id) ON DELETE RESTRICT,
+             current_state TEXT NOT NULL,
+             started_at TEXT NOT NULL,
+             completed_at TEXT,
+             CHECK (
+                 (epic_id IS NOT NULL) + (feature_id IS NOT NULL) + (work_item_id IS NOT NULL) = 1
+             )
+         );
+         CREATE TABLE workflow_events (
+             id TEXT PRIMARY KEY,
+             run_id TEXT NOT NULL REFERENCES workflow_runs(id) ON DELETE RESTRICT,
+             sequence INTEGER NOT NULL CHECK (sequence > 0),
+             from_state TEXT NOT NULL,
+             to_state TEXT NOT NULL,
+             actor TEXT NOT NULL,
+             occurred_at TEXT NOT NULL,
+             payload_json TEXT NOT NULL,
+             UNIQUE (run_id, sequence)
+         );
+         CREATE TABLE operation_intents (
+             id TEXT PRIMARY KEY,
+             epic_id TEXT REFERENCES epics(id) ON DELETE RESTRICT,
+             feature_id TEXT REFERENCES features(id) ON DELETE RESTRICT,
+             work_item_id TEXT REFERENCES work_items(id) ON DELETE RESTRICT,
+             idempotency_key TEXT NOT NULL UNIQUE CHECK (idempotency_key <> ''),
+             kind TEXT NOT NULL,
+             status TEXT NOT NULL,
+             payload_json TEXT NOT NULL,
+             created_at TEXT NOT NULL,
+             completed_at TEXT,
+             CHECK (
+                 (epic_id IS NOT NULL) + (feature_id IS NOT NULL) + (work_item_id IS NOT NULL) = 1
+             )
+         );
+         CREATE TABLE launch_intents (
+             id TEXT PRIMARY KEY,
+             work_item_id TEXT REFERENCES work_items(id) ON DELETE RESTRICT,
+             feature_id TEXT REFERENCES features(id) ON DELETE RESTRICT,
+             epic_id TEXT REFERENCES epics(id) ON DELETE RESTRICT,
+             checkout_id TEXT NOT NULL REFERENCES checkouts(id) ON DELETE RESTRICT,
+             provider TEXT NOT NULL CHECK (provider IN ('claude', 'codex')),
+             idempotency_key TEXT NOT NULL UNIQUE CHECK (idempotency_key <> ''),
+             token_hash TEXT NOT NULL UNIQUE CHECK (token_hash <> ''),
+             status TEXT NOT NULL,
+             created_at TEXT NOT NULL,
+             expires_at TEXT NOT NULL,
+             CHECK (
+                 (epic_id IS NOT NULL) + (feature_id IS NOT NULL) + (work_item_id IS NOT NULL) = 1
+             ),
+             CHECK (expires_at > created_at)
+         );
+         CREATE TABLE restore_memberships (
+             id TEXT PRIMARY KEY,
+             session_id TEXT NOT NULL REFERENCES native_sessions(id) ON DELETE RESTRICT,
+             feature_id TEXT NOT NULL REFERENCES features(id) ON DELETE RESTRICT,
+             active_from TEXT NOT NULL,
+             active_until TEXT,
+             CHECK (active_until IS NULL OR active_until > active_from)
+         );
+         CREATE UNIQUE INDEX restore_memberships_one_current
+             ON restore_memberships (session_id) WHERE active_until IS NULL;
+         CREATE TABLE terminal_layouts (
+             id TEXT PRIMARY KEY,
+             workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE RESTRICT,
+             captured_at TEXT NOT NULL
+         );
+         CREATE TABLE terminal_tabs (
+             id TEXT PRIMARY KEY,
+             layout_id TEXT NOT NULL REFERENCES terminal_layouts(id) ON DELETE CASCADE,
+             feature_id TEXT NOT NULL REFERENCES features(id) ON DELETE RESTRICT,
+             session_id TEXT NOT NULL REFERENCES native_sessions(id) ON DELETE RESTRICT,
+             position INTEGER NOT NULL CHECK (position >= 0),
+             UNIQUE (layout_id, position)
+         );"#,
+    )?;
     Ok(())
 }
 
@@ -336,12 +688,77 @@ fn health(connection: &Connection) -> Result<StorageHealth, AppError> {
 
 #[cfg(test)]
 mod tests {
+    use rusqlite::{Transaction, params};
     use tempfile::TempDir;
     use time::OffsetDateTime;
     use workboard_core::ConversationId;
 
     use super::SqliteStore;
     use crate::AppError;
+
+    fn seed_hierarchy(transaction: &Transaction<'_>) -> Result<(), AppError> {
+        transaction.execute(
+            "INSERT INTO workspaces (id, slug, title, planning_store_repository_id, created_at)
+             VALUES ('workspace', 'concertable', 'Concertable', 'store-repository', '2026-08-27T08:00:00Z')",
+            [],
+        )?;
+        transaction.execute(
+            "INSERT INTO repositories (
+                 id, workspace_id, slug, title, git_common_directory, default_branch,
+                 is_planning_store, created_at
+             ) VALUES (
+                 'store-repository', 'workspace', 'planning', 'Planning store',
+                 'C:/planning/.git', 'main', 1, '2026-08-27T08:00:00Z'
+             )",
+            [],
+        )?;
+        transaction.execute(
+            "INSERT INTO repositories (
+                 id, workspace_id, slug, title, git_common_directory, default_branch,
+                 is_planning_store, created_at
+             ) VALUES (
+                 'code-repository', 'workspace', 'concertable-code', 'Concertable code',
+                 'C:/code/.git', 'main', 0, '2026-08-27T08:00:00Z'
+             )",
+            [],
+        )?;
+        transaction.execute(
+            "INSERT INTO repository_paths (
+                 id, repository_id, path, observed_from, observed_until
+             ) VALUES (
+                 'repository-path', 'code-repository', 'C:/code',
+                 '2026-08-27T08:00:00Z', NULL
+             )",
+            [],
+        )?;
+        transaction.execute(
+            "INSERT INTO epics (id, workspace_id, slug, title, created_at)
+             VALUES ('epic', 'workspace', 'launch', 'Launch', '2026-08-27T08:00:00Z')",
+            [],
+        )?;
+        transaction.execute(
+            "INSERT INTO features (id, epic_id, slug, title, workflow_state, created_at)
+             VALUES (
+                 'feature', 'epic', 'availability', 'Availability', 'draft',
+                 '2026-08-27T08:00:00Z'
+             )",
+            [],
+        )?;
+        transaction.execute(
+            "INSERT INTO work_items (id, feature_id, key, slug, title, status, created_at)
+             VALUES (
+                 'work-item', 'feature', 'launch/availability/api', 'api',
+                 'Availability API', 'ready', '2026-08-27T08:00:00Z'
+             )",
+            [],
+        )?;
+        transaction.execute(
+            "INSERT INTO work_item_repositories (work_item_id, repository_id)
+             VALUES ('work-item', 'code-repository')",
+            [],
+        )?;
+        Ok(())
+    }
 
     #[test]
     fn migration_is_idempotent_and_write_failures_roll_back() {
@@ -440,5 +857,338 @@ mod tests {
             store.complete_launch_lease(second.id, 42),
             Err(AppError::LaunchLeaseLost)
         ));
+    }
+
+    #[test]
+    fn domain_schema_round_trips_hierarchy_and_rejects_invalid_parentage() {
+        let directory = TempDir::new().expect("temporary directory");
+        let mut store =
+            SqliteStore::open(directory.path().join("workboard.sqlite")).expect("open store");
+        store.write(seed_hierarchy).expect("seed hierarchy");
+        let hierarchy = store
+            .read(|connection| {
+                connection
+                    .query_row(
+                        "SELECT workspaces.slug, epics.slug, features.slug, work_items.key
+                         FROM work_items
+                         JOIN features ON features.id = work_items.feature_id
+                         JOIN epics ON epics.id = features.epic_id
+                         JOIN workspaces ON workspaces.id = epics.workspace_id",
+                        [],
+                        |row| {
+                            Ok((
+                                row.get::<_, String>(0)?,
+                                row.get::<_, String>(1)?,
+                                row.get::<_, String>(2)?,
+                                row.get::<_, String>(3)?,
+                            ))
+                        },
+                    )
+                    .map_err(Into::into)
+            })
+            .expect("read hierarchy");
+        assert_eq!(
+            hierarchy,
+            (
+                "concertable".to_owned(),
+                "launch".to_owned(),
+                "availability".to_owned(),
+                "launch/availability/api".to_owned(),
+            )
+        );
+
+        assert!(
+            store
+                .write(|transaction| {
+                    transaction.execute(
+                        "INSERT INTO features (
+                             id, epic_id, slug, title, workflow_state, created_at
+                         ) VALUES (
+                             'orphan', 'work-item', 'orphan', 'Orphan', 'draft',
+                             '2026-08-27T08:00:00Z'
+                         )",
+                        [],
+                    )?;
+                    Ok(())
+                })
+                .is_err()
+        );
+        assert!(
+            store
+                .write(|transaction| {
+                    transaction.execute(
+                        "INSERT INTO work_items (
+                             id, feature_id, key, slug, title, status, created_at
+                         ) VALUES (
+                             'duplicate', 'feature', 'launch/availability/api', 'duplicate',
+                             'Duplicate', 'ready', '2026-08-27T08:00:00Z'
+                         )",
+                        [],
+                    )?;
+                    Ok(())
+                })
+                .is_err()
+        );
+
+        let hash = "a".repeat(64);
+        assert!(
+            store
+                .write(|transaction| {
+                    transaction.execute(
+                        "INSERT INTO documents (
+                             id, repository_id, epic_id, kind, relative_path,
+                             content_hash, observed_at
+                         ) VALUES (
+                             'escaped', 'store-repository', 'epic', 'epic', '../EPIC.md',
+                             ?1, '2026-08-27T08:00:00Z'
+                         )",
+                        [&hash],
+                    )?;
+                    Ok(())
+                })
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn checkout_and_association_history_survive_replacement_and_reassignment() {
+        let directory = TempDir::new().expect("temporary directory");
+        let mut store =
+            SqliteStore::open(directory.path().join("workboard.sqlite")).expect("open store");
+        store.write(seed_hierarchy).expect("seed hierarchy");
+        store
+            .write(|transaction| {
+                transaction.execute(
+                    "UPDATE repository_paths SET observed_until = '2026-08-27T09:00:00Z'
+                     WHERE id = 'repository-path'",
+                    [],
+                )?;
+                transaction.execute(
+                    "INSERT INTO repository_paths (
+                         id, repository_id, path, observed_from, observed_until
+                     ) VALUES (
+                         'moved-path', 'code-repository', 'D:/code',
+                         '2026-08-27T09:00:00Z', NULL
+                     )",
+                    [],
+                )?;
+                transaction.execute(
+                    "INSERT INTO checkouts (
+                         id, repository_id, git_worktree_identity, branch, availability, created_at
+                     ) VALUES (
+                         'checkout-old', 'code-repository', 'old', 'feature/availability',
+                         'deleted', '2026-08-27T08:00:00Z'
+                     )",
+                    [],
+                )?;
+                transaction.execute(
+                    "INSERT INTO checkout_paths (
+                         id, checkout_id, path, observed_from, observed_until
+                     ) VALUES (
+                         'checkout-path-old', 'checkout-old', 'C:/worktrees/old',
+                         '2026-08-27T08:00:00Z', '2026-08-27T09:00:00Z'
+                     )",
+                    [],
+                )?;
+                transaction.execute(
+                    "INSERT INTO checkouts (
+                         id, repository_id, git_worktree_identity, branch, availability,
+                         replaces_checkout_id, created_at
+                     ) VALUES (
+                         'checkout-new', 'code-repository', 'new', 'feature/availability',
+                         'available', 'checkout-old', '2026-08-27T09:00:00Z'
+                     )",
+                    [],
+                )?;
+                transaction.execute(
+                    "INSERT INTO checkout_paths (
+                         id, checkout_id, path, observed_from, observed_until
+                     ) VALUES (
+                         'checkout-path-new', 'checkout-new', 'D:/worktrees/new',
+                         '2026-08-27T09:00:00Z', NULL
+                     )",
+                    [],
+                )?;
+                transaction.execute(
+                    "INSERT INTO feature_checkouts (
+                         feature_id, repository_id, checkout_id, assigned_at
+                     ) VALUES (
+                         'feature', 'code-repository', 'checkout-old', '2026-08-27T08:00:00Z'
+                     )",
+                    [],
+                )?;
+                Ok(())
+            })
+            .expect("record checkout history");
+
+        let inherited: (String, i64) = store
+            .read(|connection| {
+                connection
+                    .query_row(
+                        "SELECT checkout_id, inherited FROM effective_work_item_checkouts
+                         WHERE work_item_id = 'work-item' AND repository_id = 'code-repository'",
+                        [],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .map_err(Into::into)
+            })
+            .expect("inherited checkout");
+        assert_eq!(inherited, ("checkout-old".to_owned(), 1));
+
+        store
+            .write(|transaction| {
+                transaction.execute(
+                    "INSERT INTO work_item_checkout_overrides (
+                         work_item_id, repository_id, checkout_id, assigned_at
+                     ) VALUES (
+                         'work-item', 'code-repository', 'checkout-new', '2026-08-27T09:00:00Z'
+                     )",
+                    [],
+                )?;
+                transaction.execute(
+                    "INSERT INTO native_sessions (id, provider, native_id, discovered_at)
+                     VALUES ('session', 'codex', 'thread-1', '2026-08-27T08:00:00Z')",
+                    [],
+                )?;
+                transaction.execute(
+                    "INSERT INTO native_session_associations (
+                         id, session_id, feature_id, role, associated_from
+                     ) VALUES (
+                         'association-old', 'session', 'feature', 'feature_planning',
+                         '2026-08-27T08:00:00Z'
+                     )",
+                    [],
+                )?;
+                Ok(())
+            })
+            .expect("record override and association");
+        store
+            .write(|transaction| {
+                transaction.execute(
+                    "UPDATE native_session_associations
+                     SET associated_until = '2026-08-27T09:00:00Z'
+                     WHERE id = 'association-old'",
+                    [],
+                )?;
+                transaction.execute(
+                    "INSERT INTO native_session_associations (
+                         id, session_id, work_item_id, role, associated_from
+                     ) VALUES (
+                         'association-new', 'session', 'work-item', 'work_item_execution',
+                         '2026-08-27T09:00:00Z'
+                     )",
+                    [],
+                )?;
+                Ok(())
+            })
+            .expect("reassign session");
+
+        let current: (String, i64) = store
+            .read(|connection| {
+                connection
+                    .query_row(
+                        "SELECT checkout_id, inherited FROM effective_work_item_checkouts
+                         WHERE work_item_id = 'work-item' AND repository_id = 'code-repository'",
+                        [],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .map_err(Into::into)
+            })
+            .expect("overridden checkout");
+        assert_eq!(current, ("checkout-new".to_owned(), 0));
+        let counts: (i64, i64, i64) = store
+            .read(|connection| {
+                connection
+                    .query_row(
+                        "SELECT
+                             (SELECT COUNT(*) FROM repository_paths),
+                             (SELECT COUNT(*) FROM checkout_paths),
+                             (SELECT COUNT(*) FROM native_session_associations)",
+                        [],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    )
+                    .map_err(Into::into)
+            })
+            .expect("history counts");
+        assert_eq!(counts, (2, 2, 2));
+        assert!(
+            store
+                .write(|transaction| {
+                    transaction.execute(
+                        "DELETE FROM native_session_associations WHERE id = 'association-old'",
+                        [],
+                    )?;
+                    Ok(())
+                })
+                .is_err()
+        );
+        assert!(
+            store
+                .write(|transaction| {
+                    transaction.execute(
+                        "INSERT INTO checkouts (
+                             id, repository_id, git_worktree_identity, availability,
+                             replaces_checkout_id, created_at
+                         ) VALUES (
+                             'wrong-replacement', 'store-repository', 'wrong', 'available',
+                             'checkout-old', '2026-08-27T10:00:00Z'
+                         )",
+                        [],
+                    )?;
+                    Ok(())
+                })
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn operation_intents_are_idempotent() {
+        let directory = TempDir::new().expect("temporary directory");
+        let mut store =
+            SqliteStore::open(directory.path().join("workboard.sqlite")).expect("open store");
+        store.write(seed_hierarchy).expect("seed hierarchy");
+        store
+            .write(|transaction| {
+                transaction.execute(
+                    "INSERT INTO operation_intents (
+                         id, work_item_id, idempotency_key, kind, status, payload_json, created_at
+                     ) VALUES (
+                         'intent-one', 'work-item', 'create-checkout', 'create_worktree',
+                         'pending', '{}', '2026-08-27T08:00:00Z'
+                     )",
+                    [],
+                )?;
+                Ok(())
+            })
+            .expect("first intent");
+        assert!(
+            store
+                .write(|transaction| {
+                    transaction.execute(
+                        "INSERT INTO operation_intents (
+                             id, work_item_id, idempotency_key, kind, status, payload_json, created_at
+                         ) VALUES (
+                             'intent-two', 'work-item', 'create-checkout', 'create_worktree',
+                             'pending', '{}', '2026-08-27T08:00:00Z'
+                         )",
+                        [],
+                    )?;
+                    Ok(())
+                })
+                .is_err()
+        );
+
+        let intent_id: String = store
+            .read(|connection| {
+                connection
+                    .query_row(
+                        "SELECT id FROM operation_intents WHERE idempotency_key = ?1",
+                        params!["create-checkout"],
+                        |row| row.get(0),
+                    )
+                    .map_err(Into::into)
+            })
+            .expect("stored intent");
+        assert_eq!(intent_id, "intent-one");
     }
 }
