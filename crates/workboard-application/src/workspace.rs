@@ -14,8 +14,12 @@ use workboard_core::{
 };
 
 use crate::AppError;
+use crate::checkout::CheckoutService;
 use crate::git::{GitCli, GitRepositoryDiscovery, GitWorktreeResolver};
+use crate::integration_service::IntegrationService;
+use crate::native_sources::NativeSourceService;
 use crate::planning_store::{DocumentFrontMatter, PlanningStore, StoredDocument};
+use crate::session_launch::SessionLaunchService;
 use crate::storage::{SqliteStore, StorageHealth};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -41,6 +45,24 @@ pub struct CreateEpic {
     pub body: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManagedCheckout {
+    pub checkout_id: CheckoutId,
+    pub repository_id: RepositoryId,
+    pub path: PathBuf,
+    pub title: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManagedSessionTarget {
+    pub session_id: ConversationId,
+    pub owner: HierarchyOwner,
+    pub role: ManagedSessionRole,
+    pub tool: Tool,
+    pub native_id: String,
+    pub checkout: ManagedCheckout,
+}
+
 pub struct WorkboardApplication {
     store: SqliteStore,
 }
@@ -54,6 +76,210 @@ impl WorkboardApplication {
 
     pub fn database_path(&self) -> &Path {
         self.store.path()
+    }
+
+    pub fn session_launch(&mut self) -> SessionLaunchService<'_> {
+        SessionLaunchService::new(&mut self.store)
+    }
+
+    pub fn checkout_service(&mut self) -> CheckoutService<'_> {
+        CheckoutService::new(&mut self.store)
+    }
+
+    pub fn native_sources(&mut self) -> NativeSourceService<'_> {
+        NativeSourceService::new(&mut self.store)
+    }
+
+    pub fn integrations(&mut self) -> IntegrationService<'_> {
+        IntegrationService::new(&mut self.store)
+    }
+
+    pub fn effective_work_item_checkout(
+        &self,
+        work_item_id: WorkItemId,
+    ) -> Result<ManagedCheckout, AppError> {
+        self.store.read(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT checkout.id, checkout.repository_id, path.path, item.title
+                     FROM effective_work_item_checkouts effective
+                     JOIN checkouts checkout
+                       ON checkout.id = effective.checkout_id
+                      AND checkout.availability = 'available'
+                     JOIN checkout_paths path
+                       ON path.checkout_id = checkout.id AND path.observed_until IS NULL
+                     JOIN work_items item ON item.id = effective.work_item_id
+                     WHERE effective.work_item_id = ?1
+                     ORDER BY checkout.repository_id",
+            )?;
+            let rows = statement
+                .query_map([work_item_id.to_string()], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            let [(checkout_id, repository_id, path, title)] = rows.as_slice() else {
+                return if rows.is_empty() {
+                    Err(AppError::ResumeCheckoutRequired)
+                } else {
+                    Err(AppError::External {
+                        code: "checkout_selection_required".to_owned(),
+                        message: "the Work item has multiple repository checkouts; select one"
+                            .to_owned(),
+                    })
+                };
+            };
+            Ok(ManagedCheckout {
+                checkout_id: parse_id(checkout_id)?,
+                repository_id: parse_id(repository_id)?,
+                path: PathBuf::from(path),
+                title: title.clone(),
+            })
+        })
+    }
+
+    pub fn override_work_item_checkout(
+        &mut self,
+        work_item_id: WorkItemId,
+        checkout_id: CheckoutId,
+        observed_at: OffsetDateTime,
+    ) -> Result<ManagedCheckout, AppError> {
+        let checkout = self.store.read(|connection| {
+            connection
+                .query_row(
+                    "SELECT checkout.repository_id, path.path, item.title
+                     FROM work_items item
+                     JOIN work_item_repositories target ON target.work_item_id = item.id
+                     JOIN checkouts checkout
+                       ON checkout.repository_id = target.repository_id
+                      AND checkout.id = ?2
+                      AND checkout.availability = 'available'
+                     JOIN checkout_paths path
+                       ON path.checkout_id = checkout.id AND path.observed_until IS NULL
+                     WHERE item.id = ?1",
+                    params![work_item_id.to_string(), checkout_id.to_string()],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                        ))
+                    },
+                )
+                .optional()
+                .map_err(Into::into)
+        })?;
+        let (repository_id, path, title) = checkout.ok_or(AppError::ResumeRepositoryMismatch)?;
+        let repository_id = parse_id::<RepositoryId>(&repository_id)?;
+        self.store.write(|transaction| {
+            transaction.execute(
+                "INSERT INTO work_item_checkout_overrides (
+                     work_item_id, repository_id, checkout_id, assigned_at
+                 ) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(work_item_id, repository_id) DO UPDATE SET
+                     checkout_id = excluded.checkout_id,
+                     assigned_at = excluded.assigned_at",
+                params![
+                    work_item_id.to_string(),
+                    repository_id.to_string(),
+                    checkout_id.to_string(),
+                    observed_at.unix_timestamp_nanos().to_string(),
+                ],
+            )?;
+            Ok(())
+        })?;
+        Ok(ManagedCheckout {
+            checkout_id,
+            repository_id,
+            path: PathBuf::from(path),
+            title,
+        })
+    }
+
+    pub fn managed_session_checkout(
+        &self,
+        session_id: ConversationId,
+    ) -> Result<ManagedCheckout, AppError> {
+        self.store.read(|connection| {
+            let row = connection
+                .query_row(
+                    "SELECT checkout.id, checkout.repository_id, path.path, session.native_id
+                     FROM managed_sessions managed
+                     JOIN checkouts checkout
+                       ON checkout.id = managed.checkout_id
+                      AND checkout.availability = 'available'
+                     JOIN checkout_paths path
+                       ON path.checkout_id = checkout.id AND path.observed_until IS NULL
+                     JOIN native_sessions session ON session.id = managed.session_id
+                     WHERE managed.session_id = ?1
+                     ORDER BY managed.managed_from DESC LIMIT 1",
+                    [session_id.to_string()],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                            row.get::<_, String>(3)?,
+                        ))
+                    },
+                )
+                .optional()?;
+            let (checkout_id, repository_id, path, title) =
+                row.ok_or(AppError::ResumeCheckoutRequired)?;
+            Ok(ManagedCheckout {
+                checkout_id: parse_id(&checkout_id)?,
+                repository_id: parse_id(&repository_id)?,
+                path: PathBuf::from(path),
+                title,
+            })
+        })
+    }
+
+    pub fn managed_session_target(
+        &self,
+        session_id: ConversationId,
+    ) -> Result<ManagedSessionTarget, AppError> {
+        let checkout = self.managed_session_checkout(session_id)?;
+        self.store.read(|connection| {
+            let row = connection
+                .query_row(
+                    "SELECT association.epic_id, association.feature_id,
+                            association.work_item_id, managed.role,
+                            session.provider, session.native_id
+                     FROM native_sessions session
+                     JOIN native_session_associations association
+                       ON association.session_id = session.id
+                      AND association.associated_until IS NULL
+                     JOIN managed_sessions managed ON managed.session_id = session.id
+                     WHERE session.id = ?1
+                     ORDER BY managed.managed_from DESC LIMIT 1",
+                    [session_id.to_string()],
+                    |row| {
+                        Ok((
+                            row.get::<_, Option<String>>(0)?,
+                            row.get::<_, Option<String>>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                            row.get::<_, String>(3)?,
+                            row.get::<_, String>(4)?,
+                            row.get::<_, String>(5)?,
+                        ))
+                    },
+                )
+                .optional()?;
+            let (epic_id, feature_id, work_item_id, role, tool, native_id) =
+                row.ok_or(AppError::ConversationNotFound)?;
+            Ok(ManagedSessionTarget {
+                session_id,
+                owner: parse_hierarchy_owner(epic_id, feature_id, work_item_id)?,
+                role: parse_session_role(&role)?,
+                tool: parse_tool(&tool)?,
+                native_id,
+                checkout,
+            })
+        })
     }
 
     pub fn initialise_workspace(
@@ -1085,6 +1311,21 @@ fn parse_tool(value: &str) -> Result<Tool, AppError> {
 
 fn parse_session_role(value: &str) -> Result<ManagedSessionRole, AppError> {
     serde_json::from_value(serde_json::Value::String(value.to_owned())).map_err(Into::into)
+}
+
+fn parse_hierarchy_owner(
+    epic_id: Option<String>,
+    feature_id: Option<String>,
+    work_item_id: Option<String>,
+) -> Result<HierarchyOwner, AppError> {
+    match (epic_id, feature_id, work_item_id) {
+        (Some(id), None, None) => Ok(HierarchyOwner::Epic(parse_id(&id)?)),
+        (None, Some(id), None) => Ok(HierarchyOwner::Feature(parse_id(&id)?)),
+        (None, None, Some(id)) => Ok(HierarchyOwner::WorkItem(parse_id(&id)?)),
+        _ => Err(AppError::Domain(
+            "native session association owner is invalid".to_owned(),
+        )),
+    }
 }
 
 fn path_text(path: &Path) -> Result<&str, AppError> {

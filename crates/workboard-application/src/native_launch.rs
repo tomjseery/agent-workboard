@@ -10,8 +10,9 @@ use time::OffsetDateTime;
 use workboard_adapter_claude::ClaudeAdapterV1;
 use workboard_adapter_codex::CodexAdapterV1;
 use workboard_core::{
-    ConversationLifecycle, ConversationRef, LiveEvidenceSource, LiveStatus, ProcessIdentity,
-    Resumability, ResumeLaunchSpec, TerminalKind, Tool,
+    ConversationLifecycle, ConversationRef, LiveEvidenceSource, LiveStatus, ManagedLaunchMode,
+    ManagedLaunchRequest, ManagedLaunchSpec, ProcessIdentity, Resumability, ResumeLaunchSpec,
+    TerminalKind, Tool,
 };
 use workboard_native::AdapterFailureKind;
 
@@ -68,13 +69,32 @@ pub struct ResumeOutcome {
     pub live: LiveState,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ManagedLaunchPreview {
+    pub schema_version: u32,
+    pub working_directory: String,
+    pub terminal_executable: String,
+    pub terminal_arguments: Vec<String>,
+    pub native_executable: String,
+    pub native_arguments: Vec<String>,
+}
+
 pub struct PreparedResume {
     pub launch: ResumeLaunchSpec,
     pub preview: ResumePreview,
 }
 
+pub struct PreparedManagedLaunch {
+    pub launch: ManagedLaunchSpec,
+    pub preview: ManagedLaunchPreview,
+}
+
 pub trait LaunchExecutor {
     fn launch(&self, specification: &ResumeLaunchSpec) -> Result<LaunchedProcess, AppError>;
+}
+
+pub trait ManagedLaunchExecutor {
+    fn launch(&self, specification: &ManagedLaunchSpec) -> Result<LaunchedProcess, AppError>;
 }
 
 pub trait ProcessInspector {
@@ -89,6 +109,29 @@ impl LaunchExecutor for SystemLaunchExecutor {
         let child = Command::new(specification.terminal().executable())
             .args(specification.terminal().arguments())
             .current_dir(specification.working_directory())
+            .spawn()
+            .map_err(AppError::LaunchIo)?;
+        let pid = child.id();
+        let product_identity = ProcessIdentity::new(
+            pid,
+            launched_at,
+            specification.terminal().executable(),
+            Some(std::process::id()),
+        )
+        .map_err(|error| AppError::Domain(error.to_string()))?;
+        let observed_identity = SystemProcessInspector.inspect(pid);
+        Ok(LaunchedProcess {
+            product_identity,
+            observed_identity,
+        })
+    }
+}
+
+impl ManagedLaunchExecutor for SystemLaunchExecutor {
+    fn launch(&self, specification: &ManagedLaunchSpec) -> Result<LaunchedProcess, AppError> {
+        let launched_at = OffsetDateTime::now_utc();
+        let child = specification
+            .direct_child_command()
             .spawn()
             .map_err(AppError::LaunchIo)?;
         let pid = child.id();
@@ -167,6 +210,40 @@ pub fn prepare_resume(
     Ok(PreparedResume { launch, preview })
 }
 
+pub fn prepare_managed_launch(
+    tool: Tool,
+    mode: ManagedLaunchMode,
+    working_directory: &Path,
+    title: &str,
+    terminal: &Path,
+    native: &Path,
+    launch_token: String,
+) -> Result<PreparedManagedLaunch, AppError> {
+    let (terminal_kind, terminal) = resolve_terminal(terminal)?;
+    let native = resolve_executable(native)
+        .ok_or_else(|| AppError::NativeExecutableUnavailable(native.to_owned()))?;
+    let launch = ManagedLaunchSpec::new(ManagedLaunchRequest {
+        terminal_kind,
+        terminal_executable: terminal,
+        native_executable: native,
+        tool,
+        mode,
+        working_directory: working_directory.to_path_buf(),
+        title: title.to_owned(),
+        launch_token,
+    })
+    .map_err(|error| AppError::Domain(error.to_string()))?;
+    let preview = ManagedLaunchPreview {
+        schema_version: 1,
+        working_directory: path_text(launch.working_directory()),
+        terminal_executable: path_text(launch.terminal().executable()),
+        terminal_arguments: display_arguments(launch.terminal().arguments()),
+        native_executable: path_text(launch.native().executable()),
+        native_arguments: display_arguments(launch.native().arguments()),
+    };
+    Ok(PreparedManagedLaunch { launch, preview })
+}
+
 fn resolve_terminal(requested: &Path) -> Result<(TerminalKind, PathBuf), AppError> {
     #[cfg(windows)]
     {
@@ -201,7 +278,7 @@ fn resolve_terminal(requested: &Path) -> Result<(TerminalKind, PathBuf), AppErro
     }
 }
 
-fn validate_native_source(
+pub(crate) fn validate_native_source(
     conversation: &ConversationRef,
     context: &ResumeContext,
 ) -> Result<(), AppError> {

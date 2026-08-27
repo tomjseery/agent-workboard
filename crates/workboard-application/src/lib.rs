@@ -1,13 +1,17 @@
 #![forbid(unsafe_code)]
 
 pub mod caller;
+pub mod checkout;
 mod error;
 pub mod git;
 pub mod hooks;
 pub mod integration;
+pub mod integration_service;
 pub mod legacy_import;
 pub mod native_launch;
+pub mod native_sources;
 pub mod planning_store;
+pub mod session_launch;
 pub mod storage;
 mod workflow_contract;
 pub mod workspace;
