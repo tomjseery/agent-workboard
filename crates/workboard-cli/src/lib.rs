@@ -2,6 +2,7 @@
 
 use std::ffi::OsString;
 use std::fs;
+use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
 
 use clap::{Args, Parser, Subcommand};
@@ -12,7 +13,12 @@ use workboard_application::legacy_import::preview_context_catalogue;
 use workboard_application::workspace::{
     CreateEpic, InitialiseWorkspace, RegisterRepository, WorkboardApplication,
 };
-use workboard_core::{Slug, WorkspaceId};
+use workboard_core::{Feature, Slug, WorkItem, WorkspaceId};
+
+use crate::selector::{SelectionCandidate, SelectionResult};
+
+mod board;
+mod selector;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -36,6 +42,8 @@ enum Command {
     Init(InitArgs),
     Repository(RepositoryArgs),
     Epic(EpicArgs),
+    Feature(FeatureArgs),
+    Work(WorkArgs),
     Snapshot,
     Backup(DestinationArgs),
     Export(DestinationArgs),
@@ -92,6 +100,28 @@ enum EpicCommand {
 }
 
 #[derive(Debug, Args)]
+struct FeatureArgs {
+    #[command(subcommand)]
+    command: FeatureCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum FeatureCommand {
+    Open { feature: Option<String> },
+}
+
+#[derive(Debug, Args)]
+struct WorkArgs {
+    #[command(subcommand)]
+    command: WorkCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum WorkCommand {
+    Open { work_item: Option<String> },
+}
+
+#[derive(Debug, Args)]
 struct DestinationArgs {
     destination: PathBuf,
 }
@@ -108,7 +138,15 @@ enum ImportCommand {
 }
 
 pub fn run() {
-    match execute(Cli::parse()) {
+    let cli = Cli::parse();
+    if cli.command.is_none() && !cli.json && io::stdout().is_terminal() {
+        if let Err(error) = run_interactive_board(&cli) {
+            eprintln!("{}: {error}", error.code());
+            std::process::exit(1);
+        }
+        return;
+    }
+    match execute(cli) {
         Ok(output) => println!("{output}"),
         Err(error) => {
             eprintln!("{}: {error}", error.code());
@@ -155,17 +193,8 @@ fn execute(cli: Cli) -> Result<String, AppError> {
         None => {
             let workspace_id = resolve_workspace(&application, cli.workspace)?;
             let snapshot = application.snapshot(workspace_id)?;
-            output(
-                &snapshot,
-                cli.json,
-                format!(
-                    "Agent Workboard: {} ({} Epics, {} Features, {} Work items)",
-                    snapshot.workspace.title,
-                    snapshot.epics.len(),
-                    snapshot.features.len(),
-                    snapshot.work_items.len()
-                ),
-            )
+            let human = board::plain(&snapshot);
+            output(&snapshot, cli.json, human)
         }
         Some(Command::Init(arguments)) => {
             let default_title = current_name(&current_directory)?;
@@ -250,6 +279,33 @@ fn execute(cli: Cli) -> Result<String, AppError> {
                 format!("Created Epic {} ({})", epic.title, epic.id),
             )
         }
+        Some(Command::Feature(FeatureArgs {
+            command: FeatureCommand::Open { feature },
+        })) => {
+            let workspace_id = resolve_workspace(&application, cli.workspace)?;
+            let snapshot = application.snapshot(workspace_id)?;
+            let feature = select_feature(&snapshot, feature.as_deref(), cli.json)?;
+            output(
+                feature,
+                cli.json,
+                format!("{} ({}) — {:?}", feature.title, feature.id, feature.state),
+            )
+        }
+        Some(Command::Work(WorkArgs {
+            command: WorkCommand::Open { work_item },
+        })) => {
+            let workspace_id = resolve_workspace(&application, cli.workspace)?;
+            let snapshot = application.snapshot(workspace_id)?;
+            let work_item = select_work_item(&snapshot, work_item.as_deref(), cli.json)?;
+            output(
+                work_item,
+                cli.json,
+                format!(
+                    "{} ({}) — {:?}",
+                    work_item.title, work_item.key, work_item.status
+                ),
+            )
+        }
         Some(Command::Snapshot) => {
             let workspace_id = resolve_workspace(&application, cli.workspace)?;
             let snapshot = application.snapshot(workspace_id)?;
@@ -285,6 +341,18 @@ fn execute(cli: Cli) -> Result<String, AppError> {
     }
 }
 
+fn run_interactive_board(cli: &Cli) -> Result<(), AppError> {
+    let current_directory = std::env::current_dir().map_err(AppError::GitIo)?;
+    let database = cli
+        .database
+        .as_ref()
+        .map(|path| absolute(&current_directory, path))
+        .map_or_else(default_database_path, Ok)?;
+    let application = WorkboardApplication::open(database)?;
+    let workspace_id = resolve_workspace(&application, cli.workspace)?;
+    board::run(application.snapshot(workspace_id)?)
+}
+
 fn output<T: Serialize>(value: &T, json: bool, human: String) -> Result<String, AppError> {
     if json {
         serde_json::to_string_pretty(value).map_err(Into::into)
@@ -298,6 +366,95 @@ fn resolve_workspace(
     requested: Option<WorkspaceId>,
 ) -> Result<WorkspaceId, AppError> {
     requested.map_or_else(|| application.sole_workspace_id(), Ok)
+}
+
+fn select_feature<'a>(
+    snapshot: &'a workboard_core::WorkspaceSnapshot,
+    query: Option<&str>,
+    structured: bool,
+) -> Result<&'a Feature, AppError> {
+    let candidates = snapshot.features.iter().map(|feature| {
+        let epic = snapshot
+            .epics
+            .iter()
+            .find(|epic| epic.id == feature.epic_id)
+            .map_or("", |epic| epic.title.as_str());
+        SelectionCandidate {
+            id: feature.id.to_string(),
+            key: Some(format!(
+                "{}/{}",
+                snapshot
+                    .epics
+                    .iter()
+                    .find(|epic| epic.id == feature.epic_id)
+                    .map_or("", |epic| epic.slug.as_str()),
+                feature.slug
+            )),
+            label: feature.title.clone(),
+            metadata: format!("{epic} {:?}", feature.state),
+        }
+    });
+    let candidate = select_candidate("Feature", query, candidates.collect(), structured)?;
+    snapshot
+        .features
+        .iter()
+        .find(|feature| feature.id.to_string() == candidate.id)
+        .ok_or_else(|| AppError::Domain("selected Feature is unavailable".to_owned()))
+}
+
+fn select_work_item<'a>(
+    snapshot: &'a workboard_core::WorkspaceSnapshot,
+    query: Option<&str>,
+    structured: bool,
+) -> Result<&'a WorkItem, AppError> {
+    let candidates = snapshot.work_items.iter().map(|item| SelectionCandidate {
+        id: item.id.to_string(),
+        key: Some(item.key.to_string()),
+        label: item.title.clone(),
+        metadata: format!("{:?}", item.status),
+    });
+    let candidate = select_candidate("Work item", query, candidates.collect(), structured)?;
+    snapshot
+        .work_items
+        .iter()
+        .find(|item| item.id.to_string() == candidate.id)
+        .ok_or_else(|| AppError::Domain("selected Work item is unavailable".to_owned()))
+}
+
+fn select_candidate(
+    kind: &str,
+    query: Option<&str>,
+    candidates: Vec<SelectionCandidate>,
+    structured: bool,
+) -> Result<SelectionCandidate, AppError> {
+    match selector::resolve(query, candidates) {
+        SelectionResult::Empty => Err(AppError::External {
+            code: "selection_empty".to_owned(),
+            message: format!("no {kind} matches the requested selection"),
+        }),
+        SelectionResult::Selected(candidate) => Ok(candidate),
+        SelectionResult::Picker(candidates) if !structured && io::stdout().is_terminal() => {
+            let candidates = candidates
+                .into_iter()
+                .map(|candidate| candidate.candidate)
+                .collect();
+            board::pick(&format!("Select {kind}"), candidates)?.ok_or_else(|| AppError::External {
+                code: "selection_cancelled".to_owned(),
+                message: format!("{kind} selection was cancelled"),
+            })
+        }
+        SelectionResult::Picker(candidates) => Err(AppError::External {
+            code: "selection_required".to_owned(),
+            message: format!(
+                "{kind} selection is ambiguous; candidates: {}",
+                candidates
+                    .iter()
+                    .map(|candidate| candidate.candidate.id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        }),
+    }
 }
 
 fn default_database_path() -> Result<PathBuf, AppError> {
@@ -362,7 +519,9 @@ mod tests {
 
     use tempfile::TempDir;
 
-    use super::{execute_from, slugify};
+    use crate::selector::SelectionCandidate;
+
+    use super::{execute_from, select_candidate, slugify};
 
     #[test]
     fn derives_safe_slugs() {
@@ -375,6 +534,44 @@ mod tests {
         let error =
             execute_from(["workboard", "epic", "create"]).expect_err("missing title should fail");
         assert_eq!(error.code(), "domain");
+    }
+
+    #[test]
+    fn command_selection_uses_exact_unambiguous_and_picker_fallback_rules() {
+        let candidates = vec![
+            SelectionCandidate {
+                id: "feature-one".to_owned(),
+                key: Some("launch/availability-api".to_owned()),
+                label: "Availability API".to_owned(),
+                metadata: String::new(),
+            },
+            SelectionCandidate {
+                id: "feature-two".to_owned(),
+                key: Some("launch/availability-ui".to_owned()),
+                label: "Availability UI".to_owned(),
+                metadata: String::new(),
+            },
+        ];
+        assert_eq!(
+            select_candidate("Feature", Some("feature-one"), candidates.clone(), true)
+                .expect("exact ID")
+                .id,
+            "feature-one"
+        );
+        assert_eq!(
+            select_candidate(
+                "Feature",
+                Some("launch/availability-api"),
+                candidates.clone(),
+                true,
+            )
+            .expect("exact key")
+            .id,
+            "feature-one"
+        );
+        let error = select_candidate("Feature", Some("availability"), candidates, true)
+            .expect_err("ambiguous selection should require a picker");
+        assert_eq!(error.code(), "selection_required");
     }
 
     #[test]
