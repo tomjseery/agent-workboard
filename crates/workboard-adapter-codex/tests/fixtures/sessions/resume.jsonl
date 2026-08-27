@@ -1,0 +1,6 @@
+{"timestamp":"2026-08-20T08:00:00Z","type":"session_meta","payload":{"id":"codex-resume","cwd":"C:/synthetic/repository","source":"cli","cli_version":"0.42.0","title":"Synthetic Codex resume"}}
+{"timestamp":"2026-08-20T08:01:00Z","type":"event_msg","payload":{"type":"user_message","message":"Start the Codex fixture"}}
+{"timestamp":"2026-08-20T08:30:00Z","type":"compacted","payload":{"replacement_history":[]}}
+{"timestamp":"2026-08-20T09:00:00Z","type":"turn_context","payload":{"cwd":"C:/synthetic/worktree"}}
+{"timestamp":"2026-08-20T09:01:00Z","type":"event_msg","payload":{"type":"user_message","message":"Resume the Codex fixture"}}
+{"timestamp":"2026-08-20T09:02:00Z","type":"future_record","payload":{"ignored":true}}

@@ -1,0 +1,2 @@
+{"timestamp":"2026-08-20T08:10:00Z","type":"session_meta","payload":{"id":"codex-helper","cwd":"C:/synthetic/repository","source":{"subagent":{"thread_spawn":{"parent_thread_id":"codex-resume","depth":1}}},"cli_version":"0.42.0"}}
+{"timestamp":"2026-08-20T08:11:00Z","type":"event_msg","payload":{"type":"user_message","message":"Synthetic Codex helper"}}

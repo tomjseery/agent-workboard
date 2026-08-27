@@ -1,0 +1,2 @@
+{"timestamp":"2026-08-20T10:00:00Z","type":"session_meta","payload":{"id":"codex-fork","forked_from_id":"codex-resume","cwd":"C:/synthetic/worktree","source":"cli","cli_version":"0.42.0"}}
+{"timestamp":"2026-08-20T10:01:00Z","type":"event_msg","payload":{"type":"user_message","message":"Forked Codex fixture"}}
