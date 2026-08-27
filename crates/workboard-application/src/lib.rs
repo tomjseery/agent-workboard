@@ -5,6 +5,7 @@ mod error;
 pub mod git;
 pub mod hooks;
 pub mod integration;
+pub mod storage;
 mod workflow_contract;
 
 pub use error::AppError;

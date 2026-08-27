@@ -159,6 +159,13 @@ pub enum AppError {
     },
     #[error("Workboard storage failed: {0}")]
     Storage(#[from] rusqlite::Error),
+    #[error("Workboard storage I/O failed while {operation} at {path}: {source}")]
+    StorageIo {
+        operation: &'static str,
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
     #[error("failed to encode the association event: {0}")]
     Encode(#[from] serde_json::Error),
     #[error("native {tool} discovery failed: {message}")]
@@ -247,6 +254,7 @@ impl AppError {
             Self::CreateDataDirectory(_) => "create_data_directory",
             Self::RecoveryIo { .. } => "recovery_io",
             Self::Storage(_) => "storage",
+            Self::StorageIo { .. } => "storage_io",
             Self::Encode(_) => "encode",
             Self::Adapter { .. } => "adapter",
             Self::Domain(_) => "domain",
