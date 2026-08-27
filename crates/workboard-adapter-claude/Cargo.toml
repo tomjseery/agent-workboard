@@ -1,0 +1,19 @@
+[package]
+name = "workboard-adapter-claude"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde_json.workspace = true
+time.workspace = true
+workboard-core = { path = "../workboard-core" }
+workboard-native = { path = "../workboard-native" }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
+

@@ -1,0 +1,20 @@
+[package]
+name = "workboard-adapter-codex"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+time.workspace = true
+workboard-core = { path = "../workboard-core" }
+workboard-native = { path = "../workboard-native" }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
+
