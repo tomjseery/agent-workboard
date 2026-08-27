@@ -1,0 +1,24 @@
+[package]
+name = "workboard-cli"
+default-run = "workboard"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "workboard"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+workboard-application = { path = "../workboard-application" }
+workboard-core = { path = "../workboard-core" }
+workboard-daemon = { path = "../workboard-daemon" }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
+

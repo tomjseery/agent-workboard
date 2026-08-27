@@ -1,0 +1,28 @@
+# branch.oid 0a6f156cea3f2295d53b565b96fad2ffdcea771b
+# branch.head Feature/context-catalogue_worktree-sessions-foundation
+1 .M N... 100644 100644 100644 3ac4d1f453985810c630b29a70dbd03ec4ea0ec3 3ac4d1f453985810c630b29a70dbd03ec4ea0ec3 apps/desktop/src/App.test.tsx
+1 .M N... 100644 100644 100644 47df079342c75b5f8c3935152831942c9ef20a07 47df079342c75b5f8c3935152831942c9ef20a07 apps/desktop/src/features/integrations/components/IntegrationsDialog.tsx
+1 .M N... 100644 100644 100644 c86ac51e22a1f200e721e0b464a10b3912a69487 c86ac51e22a1f200e721e0b464a10b3912a69487 apps/desktop/src/features/integrations/types.ts
+1 .M N... 100644 100644 100644 2794cc419c4b74f2bbe0f9296abe1adb69c04b4b 2794cc419c4b74f2bbe0f9296abe1adb69c04b4b crates/context-application/src/application.rs
+1 .M N... 100644 100644 100644 e3a6d9f1b0c69f018315a66c1b68c292e4761535 e3a6d9f1b0c69f018315a66c1b68c292e4761535 crates/context-application/src/error.rs
+1 .M N... 100644 100644 100644 7ff0953b82173ad7773cae15859e0ea95f0862ed 7ff0953b82173ad7773cae15859e0ea95f0862ed crates/context-application/src/hooks.rs
+1 .M N... 100644 100644 100644 24a4cb20b32a7111dd5847e03f07719e66004eef 24a4cb20b32a7111dd5847e03f07719e66004eef crates/context-application/src/integration.rs
+1 .M N... 100644 100644 100644 5f4ac30ca319ea9216c7de84c0cd00bb6825248b 5f4ac30ca319ea9216c7de84c0cd00bb6825248b crates/context-application/src/lib.rs
+1 .M N... 100644 100644 100644 3b1220aa7d15b0ad0db1b78721da25a25362a419 3b1220aa7d15b0ad0db1b78721da25a25362a419 crates/context-application/src/storage/launch.rs
+1 .M N... 100644 100644 100644 ea73a28e4ae109558036581e1bd18f42a025162c ea73a28e4ae109558036581e1bd18f42a025162c crates/context-application/src/storage/mod.rs
+1 .M N... 100644 100644 100644 c9859520d278d08e547d5e5607d056c539d49b50 c9859520d278d08e547d5e5607d056c539d49b50 crates/context-application/src/storage/recovery.rs
+1 .M N... 100644 100644 100644 1056dc593ad7a31a4e53c889836bc03ebf16d302 1056dc593ad7a31a4e53c889836bc03ebf16d302 crates/context-application/src/storage/schema.rs
+1 .M N... 100644 100644 100644 6a90cdfe0f948cfe9fcc53fe30b9db51caff45ba 6a90cdfe0f948cfe9fcc53fe30b9db51caff45ba crates/context-core/src/launch.rs
+1 .M N... 100644 100644 100644 82cd6ae75834f63d1a7cf84e478c2a6526798409 82cd6ae75834f63d1a7cf84e478c2a6526798409 crates/context-core/src/lib.rs
+1 .M N... 100644 100644 100644 772407b45e7a351c05a2279e456cc26ada318691 772407b45e7a351c05a2279e456cc26ada318691 crates/context-core/src/workflow.rs
+1 .M N... 100644 100644 100644 0899b2495c97dc78f339911a7e5351ede82d36ef 0899b2495c97dc78f339911a7e5351ede82d36ef crates/contextctl/src/cli.rs
+1 .M N... 100644 100644 100644 9e3e50416dbcddbaebc9370bd777e5e5be282c88 9e3e50416dbcddbaebc9370bd777e5e5be282c88 crates/contextctl/src/lib.rs
+1 .M N... 100644 100644 100644 d1585cade24df8e916e76a6c249176b0d2b86511 d1585cade24df8e916e76a6c249176b0d2b86511 crates/contextctl/tests/native_integration_flow.rs
+1 .M N... 100644 100644 100644 309a8eeadb9232315cbec04589356a1b5e4993e3 309a8eeadb9232315cbec04589356a1b5e4993e3 crates/contextd/src/lib.rs
+1 .M N... 100644 100644 100644 ae3f1846bbc99dcd05dfff1cf33f2c84c47a2dc2 ae3f1846bbc99dcd05dfff1cf33f2c84c47a2dc2 crates/contextd/src/protocol.rs
+1 .M N... 100644 100644 100644 5403e4ce4c3c850defceeba3c5f6ab9edad17293 5403e4ce4c3c850defceeba3c5f6ab9edad17293 crates/contextd/src/server.rs
+? crates/context-application/src/storage/workflow_launch.rs
+? crates/context-application/src/storage/workflow_operation.rs
+? crates/context-application/src/storage/workflow_phase2_tests.rs
+? crates/context-application/src/workflow_contract.rs
+? crates/contextctl/src/mcp.rs
