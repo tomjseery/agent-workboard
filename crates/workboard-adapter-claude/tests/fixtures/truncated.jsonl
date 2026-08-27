@@ -1,0 +1,2 @@
+{"type":"user","sessionId":"claude-truncated","timestamp":"2026-08-20T11:00:00Z","cwd":"C:/synthetic/repository","isSidechain":false,"message":{"role":"user","content":"Complete record"}}
+{"type":"user","sessionId":"claude-truncated","message":{"content":"Incomplete tail"}
