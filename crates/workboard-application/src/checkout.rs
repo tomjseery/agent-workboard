@@ -32,6 +32,14 @@ pub struct FeatureCheckoutOutcome {
     pub reused: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdoptFeatureCheckout {
+    pub feature_id: FeatureId,
+    pub checkout_id: CheckoutId,
+    pub idempotency_key: String,
+    pub observed_at: OffsetDateTime,
+}
+
 pub struct CheckoutService<'a> {
     store: &'a mut SqliteStore,
 }
@@ -46,6 +54,111 @@ impl<'a> CheckoutService<'a> {
         request: PrepareFeatureCheckout,
     ) -> Result<FeatureCheckoutOutcome, AppError> {
         self.prepare_feature_with(request, &GitCli)
+    }
+
+    pub fn adopt_feature_checkout(
+        &mut self,
+        request: AdoptFeatureCheckout,
+    ) -> Result<FeatureCheckoutOutcome, AppError> {
+        if request.idempotency_key.trim().is_empty() {
+            return Err(AppError::EmptyIdempotencyKey);
+        }
+        let existing = self.store.read(|connection| {
+            connection
+                .query_row(
+                    "SELECT feature_id, payload_json FROM operation_intents
+                     WHERE idempotency_key = ?1 AND kind = 'feature_checkout_adoption'",
+                    [request.idempotency_key.as_str()],
+                    |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, String>(1)?)),
+                )
+                .optional()
+                .map_err(Into::into)
+        })?;
+        let payload = serde_json::json!({
+            "checkoutId": request.checkout_id,
+            "featureId": request.feature_id,
+        })
+        .to_string();
+        if let Some((feature_id, existing_payload)) = existing.as_ref()
+            && (feature_id.as_deref() != Some(request.feature_id.to_string().as_str())
+                || existing_payload != &payload)
+        {
+            return Err(AppError::IdempotencyConflict);
+        }
+        let checkout = self.store.read(|connection| {
+            connection
+                .query_row(
+                    "SELECT checkout.repository_id, path.path, checkout.branch, checkout.head
+                     FROM checkouts checkout
+                     JOIN checkout_paths path
+                       ON path.checkout_id = checkout.id AND path.observed_until IS NULL
+                     JOIN repositories repository ON repository.id = checkout.repository_id
+                     JOIN epics epic ON epic.workspace_id = repository.workspace_id
+                     JOIN features feature ON feature.epic_id = epic.id
+                     WHERE checkout.id = ?1 AND feature.id = ?2
+                       AND checkout.availability = 'available'
+                       AND repository.is_planning_store = 0",
+                    params![
+                        request.checkout_id.to_string(),
+                        request.feature_id.to_string()
+                    ],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                            row.get::<_, Option<String>>(3)?,
+                        ))
+                    },
+                )
+                .optional()
+                .map_err(Into::into)
+        })?;
+        let (repository_id, path, branch, head) =
+            checkout.ok_or(AppError::ResumeCheckoutNotScanned)?;
+        let repository_id = parse_id::<RepositoryId>(&repository_id)?;
+        let at = timestamp(request.observed_at);
+        self.store.write(|transaction| {
+            if existing.is_none() {
+                transaction.execute(
+                    "INSERT INTO operation_intents (
+                         id, feature_id, idempotency_key, kind, status, payload_json,
+                         created_at, completed_at
+                     ) VALUES (?1, ?2, ?3, 'feature_checkout_adoption', 'completed', ?4, ?5, ?5)",
+                    params![
+                        OperationIntentId::generate().to_string(),
+                        request.feature_id.to_string(),
+                        request.idempotency_key,
+                        payload,
+                        at,
+                    ],
+                )?;
+                transaction.execute(
+                    "INSERT INTO feature_checkouts (
+                         feature_id, repository_id, checkout_id, assigned_at
+                     ) VALUES (?1, ?2, ?3, ?4)
+                     ON CONFLICT(feature_id, repository_id) DO UPDATE SET
+                         checkout_id = excluded.checkout_id,
+                         assigned_at = excluded.assigned_at",
+                    params![
+                        request.feature_id.to_string(),
+                        repository_id.to_string(),
+                        request.checkout_id.to_string(),
+                        at,
+                    ],
+                )?;
+            }
+            Ok(())
+        })?;
+        Ok(FeatureCheckoutOutcome {
+            checkout_id: request.checkout_id,
+            feature_id: request.feature_id,
+            repository_id,
+            path: PathBuf::from(path),
+            branch,
+            head: head.unwrap_or_default(),
+            reused: existing.is_some(),
+        })
     }
 
     pub fn prepare_feature_with(
@@ -442,7 +555,9 @@ mod tests {
     use time::OffsetDateTime;
     use workboard_core::{FeatureId, OperationIntentId, RepositoryId, WorkspaceId};
 
-    use super::{CheckoutService, PrepareFeatureCheckout, request_payload, timestamp};
+    use super::{
+        AdoptFeatureCheckout, CheckoutService, PrepareFeatureCheckout, request_payload, timestamp,
+    };
     use crate::AppError;
     use crate::git::{GitWorktreeCreator, GitWorktreeResolver, ResolvedWorktree};
     use crate::storage::SqliteStore;
@@ -602,6 +717,56 @@ mod tests {
         assert!(repeated.reused);
         assert_eq!(first.checkout_id, repeated.checkout_id);
         assert_eq!(git.creates.get(), 1);
+    }
+
+    #[test]
+    fn explicitly_adopts_an_existing_checkout_for_an_imported_feature_once() {
+        let mut fixture = fixture();
+        let git = fake_git(&fixture);
+        let prepare_request = request(&fixture, "feature-checkout");
+        let prepared = CheckoutService::new(&mut fixture.store)
+            .prepare_feature_with(prepare_request, &git)
+            .expect("prepare source checkout");
+        let imported_feature_id = FeatureId::generate();
+        let epic_id = fixture
+            .store
+            .read(|connection| {
+                connection
+                    .query_row(
+                        "SELECT epic_id FROM features WHERE id = ?1",
+                        [fixture.feature_id.to_string()],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .map_err(Into::into)
+            })
+            .expect("Epic ID");
+        fixture
+            .store
+            .write(|transaction| {
+                transaction.execute(
+                    "INSERT INTO features (id, epic_id, slug, title, workflow_state, created_at)
+                     VALUES (?1, ?2, 'imported', 'Imported', 'planned', '2026-08-27T12:00:00Z')",
+                    params![imported_feature_id.to_string(), epic_id],
+                )?;
+                Ok(())
+            })
+            .expect("seed imported Feature");
+        let adoption = AdoptFeatureCheckout {
+            feature_id: imported_feature_id,
+            checkout_id: prepared.checkout_id,
+            idempotency_key: "adopt-imported-checkout".to_owned(),
+            observed_at: fixture.observed_at,
+        };
+        let first = CheckoutService::new(&mut fixture.store)
+            .adopt_feature_checkout(adoption.clone())
+            .expect("adopt checkout");
+        let repeated = CheckoutService::new(&mut fixture.store)
+            .adopt_feature_checkout(adoption)
+            .expect("repeat adoption");
+
+        assert_eq!(first.checkout_id, prepared.checkout_id);
+        assert!(!first.reused);
+        assert!(repeated.reused);
     }
 
     #[test]

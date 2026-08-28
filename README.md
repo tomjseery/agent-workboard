@@ -54,9 +54,17 @@ snapshots, live observations, and raw reconstruction evidence. It does not modif
 no reviewed Work-item destination remain visible for explicit resolution:
 
 ```powershell
-workboard session imported-candidates
+workboard session imported-candidates [phrase]
 workboard session adopt-imported <session> <work-item>
 workboard session ignore-imported <session>
+```
+
+Candidate searches cover provider-native IDs, native titles, prompt previews, legacy Workstreams, and observed
+working directories. Attach an imported Feature to a reviewed existing checkout explicitly when its historical
+branch should remain authoritative:
+
+```powershell
+workboard feature use-checkout <feature> --checkout <checkout>
 ```
 
 ## Development

@@ -258,6 +258,7 @@ fn resolve_terminal(requested: &Path) -> Result<(TerminalKind, PathBuf), AppErro
     #[cfg(windows)]
     {
         resolve_executable(requested)
+            .or_else(|| resolve_windows_terminal_alias(requested))
             .map(|path| (TerminalKind::WindowsTerminal, path))
             .ok_or_else(|| AppError::TerminalExecutableUnavailable(requested.to_owned()))
     }
@@ -286,6 +287,36 @@ fn resolve_terminal(requested: &Path) -> Result<(TerminalKind, PathBuf), AppErro
         let _ = requested;
         Err(AppError::ResumePlatformUnsupported)
     }
+}
+
+#[cfg(windows)]
+fn resolve_windows_terminal_alias(requested: &Path) -> Option<PathBuf> {
+    use std::os::windows::fs::MetadataExt;
+
+    let file_name = requested.file_name()?.to_string_lossy();
+    if !file_name.eq_ignore_ascii_case("wt") && !file_name.eq_ignore_ascii_case("wt.exe") {
+        return None;
+    }
+    let candidates = if requested.is_absolute() || requested.components().count() > 1 {
+        vec![requested.to_path_buf()]
+    } else {
+        env::split_paths(&env::var_os("PATH")?)
+            .map(|directory| directory.join("wt.exe"))
+            .collect()
+    };
+    candidates.into_iter().find(|candidate| {
+        let in_windows_apps = candidate
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|parent| parent.eq_ignore_ascii_case("WindowsApps"));
+        let metadata = fs::symlink_metadata(candidate).ok();
+        in_windows_apps
+            && metadata.as_ref().is_some_and(|metadata| {
+                const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+                metadata.len() == 0
+                    && metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+            })
+    })
 }
 
 pub(crate) fn validate_native_source(
