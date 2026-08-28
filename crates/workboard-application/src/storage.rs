@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -11,7 +12,7 @@ use workboard_core::{ConversationId, LaunchLeaseId};
 
 use crate::AppError;
 
-const CURRENT_SCHEMA_VERSION: i64 = 16;
+const CURRENT_SCHEMA_VERSION: i64 = 18;
 const FOUNDATION_SCHEMA_CHECKSUM: &str = "agent-workboard-foundation-v1";
 const LAUNCH_LEASE_SCHEMA_CHECKSUM: &str = "agent-workboard-launch-leases-v1";
 const WORKBOARD_DOMAIN_SCHEMA_CHECKSUM: &str = "agent-workboard-domain-v1";
@@ -31,6 +32,9 @@ const IMPORT_BATCH_REPOSITORY_REPAIR_SCHEMA_CHECKSUM: &str =
     "agent-workboard-import-batch-repository-repair-v1";
 const IMPORT_BATCH_REPOSITORY_PARENT_SCHEMA_CHECKSUM: &str =
     "agent-workboard-import-batch-repository-parent-v1";
+const IMPORT_BATCH_ATTESTATION_SCHEMA_CHECKSUM: &str =
+    "agent-workboard-import-batch-attestation-v1";
+const IMPORT_BATCH_AUDIT_SCHEMA_CHECKSUM: &str = "agent-workboard-import-batch-audit-v1";
 
 pub struct SqliteStore {
     path: PathBuf,
@@ -944,12 +948,56 @@ fn migrate(connection: &Connection) -> Result<(), AppError> {
          CREATE INDEX import_batches_target
              ON import_batches (workspace_id, repository_id, kind, preview_hash);",
     )?;
+    let direct_ownership = capture_schema_14_direct_ownership(connection)?;
     apply_validated_migration(
         connection,
         15,
         IMPORT_BATCH_REPOSITORY_REPAIR_SCHEMA_CHECKSUM,
-        "",
-        repair_import_batch_repository_migration,
+        "UPDATE import_batches
+            SET repository_id = (
+                SELECT MIN(record.destination_id)
+                  FROM legacy_import_records record
+                  JOIN repositories repository ON repository.id = record.destination_id
+                 WHERE record.import_id = import_batches.id
+                   AND record.destination_kind = 'repository'
+                   AND repository.workspace_id = import_batches.workspace_id
+                   AND repository.is_planning_store = 0
+                HAVING COUNT(DISTINCT record.destination_id) = 1
+            )
+          WHERE kind = 'context_catalogue';
+         UPDATE import_batches
+            SET repository_id = (
+                SELECT MIN(path.repository_id)
+                  FROM repository_paths path
+                  JOIN repositories repository ON repository.id = path.repository_id
+                 WHERE path.path = import_batches.source_path
+                   AND repository.workspace_id = import_batches.workspace_id
+                   AND repository.is_planning_store = 0
+                HAVING COUNT(DISTINCT path.repository_id) = 1
+            )
+          WHERE kind = 'concertable_plans';
+         CREATE TRIGGER import_batches_repository_required
+         BEFORE INSERT ON import_batches
+         WHEN NEW.repository_id IS NULL OR NOT EXISTS (
+             SELECT 1 FROM repositories repository
+              WHERE repository.id = NEW.repository_id
+                AND repository.workspace_id = NEW.workspace_id
+                AND repository.is_planning_store = 0
+         )
+         BEGIN
+             SELECT RAISE(ABORT, 'import batch repository is invalid');
+         END;
+         CREATE TRIGGER import_batches_repository_immutable
+         BEFORE UPDATE OF repository_id, workspace_id ON import_batches
+         WHEN NEW.repository_id IS NOT OLD.repository_id
+              OR NEW.workspace_id IS NOT OLD.workspace_id
+         BEGIN
+             SELECT RAISE(ABORT, 'import batch repository is immutable');
+         END;",
+        |transaction| {
+            restore_schema_14_direct_ownership(transaction, &direct_ownership)?;
+            validate_import_batch_repository_ownership(transaction, 15)
+        },
     )?;
     apply_migration(
         connection,
@@ -966,6 +1014,36 @@ fn migrate(connection: &Connection) -> Result<(), AppError> {
          BEGIN
              SELECT RAISE(ABORT, 'import batch repository parent is immutable');
          END;",
+    )?;
+    apply_migration(
+        connection,
+        17,
+        IMPORT_BATCH_ATTESTATION_SCHEMA_CHECKSUM,
+        "CREATE TABLE import_batch_repository_attestations (
+             import_id TEXT PRIMARY KEY REFERENCES import_batches(id) ON DELETE RESTRICT,
+             repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE RESTRICT,
+             authority TEXT NOT NULL CHECK (
+                 authority IN ('captured_direct', 'immutable_evidence', 'explicit_repair')
+             ),
+             confirmed_at TEXT NOT NULL
+         );
+         CREATE TRIGGER import_batch_repository_attestations_no_update
+         BEFORE UPDATE ON import_batch_repository_attestations
+         BEGIN
+             SELECT RAISE(ABORT, 'import batch repository attestation is immutable');
+         END;
+         CREATE TRIGGER import_batch_repository_attestations_no_delete
+         BEFORE DELETE ON import_batch_repository_attestations
+         BEGIN
+             SELECT RAISE(ABORT, 'import batch repository attestation cannot be deleted');
+         END;",
+    )?;
+    apply_validated_migration(
+        connection,
+        18,
+        IMPORT_BATCH_AUDIT_SCHEMA_CHECKSUM,
+        "",
+        |transaction| audit_import_batch_repository_ownership(transaction, &direct_ownership),
     )?;
     Ok(())
 }
@@ -1017,18 +1095,82 @@ fn apply_validated_migration(
     Ok(())
 }
 
-fn repair_import_batch_repository_migration(transaction: &Transaction<'_>) -> Result<(), AppError> {
-    let migration_applied_at = transaction.query_row(
-        "SELECT applied_at FROM schema_migrations WHERE version = 14",
+fn capture_schema_14_direct_ownership(
+    connection: &Connection,
+) -> Result<HashMap<String, String>, AppError> {
+    let migration_15_exists: i64 = connection.query_row(
+        "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE version = 15)",
         [],
-        |row| row.get::<_, String>(0),
+        |row| row.get(0),
     )?;
-    let migration_timestamp = OffsetDateTime::parse(&migration_applied_at, &Rfc3339)
-        .map_err(|error| AppError::Domain(format!("invalid schema migration timestamp: {error}")))?
-        .unix_timestamp_nanos();
+    if migration_15_exists != 0 {
+        return Ok(HashMap::new());
+    }
+    let migration_timestamp = schema_migration_timestamp(connection, 14)?;
+    let batches = connection
+        .prepare(
+            "SELECT batch.id, batch.imported_at, batch.repository_id
+               FROM import_batches batch
+               JOIN repositories repository
+                 ON repository.id = batch.repository_id
+                AND repository.workspace_id = batch.workspace_id
+                AND repository.is_planning_store = 0
+              ORDER BY batch.id",
+        )?
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut ownership = HashMap::new();
+    for (id, imported_at, repository_id) in batches {
+        if import_timestamp(&id, &imported_at)? >= migration_timestamp {
+            ownership.insert(id, repository_id);
+        }
+    }
+    Ok(ownership)
+}
+
+fn restore_schema_14_direct_ownership(
+    transaction: &Transaction<'_>,
+    direct_ownership: &HashMap<String, String>,
+) -> Result<(), AppError> {
+    if direct_ownership.is_empty() {
+        return Ok(());
+    }
+    transaction.execute_batch("DROP TRIGGER import_batches_repository_immutable;")?;
+    for (import_id, repository_id) in direct_ownership {
+        let updated = transaction.execute(
+            "UPDATE import_batches SET repository_id = ?2
+             WHERE id = ?1 AND EXISTS (
+                 SELECT 1 FROM repositories repository
+                  WHERE repository.id = ?2
+                    AND repository.workspace_id = import_batches.workspace_id
+                    AND repository.is_planning_store = 0
+             )",
+            params![import_id, repository_id],
+        )?;
+        if updated != 1 {
+            return Err(AppError::Domain(format!(
+                "captured direct repository ownership is invalid for import batch {import_id}"
+            )));
+        }
+    }
+    create_import_batch_repository_immutable_trigger(transaction)?;
+    Ok(())
+}
+
+fn audit_import_batch_repository_ownership(
+    transaction: &Transaction<'_>,
+    direct_ownership: &HashMap<String, String>,
+) -> Result<(), AppError> {
+    let migration_timestamp = schema_migration_timestamp(transaction, 14)?;
     let batches = transaction
         .prepare(
-            "SELECT id, workspace_id, kind, source_path, imported_at, repository_id
+            "SELECT id, workspace_id, kind, source_path, imported_at
                FROM import_batches ORDER BY id",
         )?
         .query_map([], |row| {
@@ -1038,87 +1180,164 @@ fn repair_import_batch_repository_migration(transaction: &Transaction<'_>) -> Re
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
                 row.get::<_, String>(4)?,
-                row.get::<_, Option<String>>(5)?,
             ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
+    let mut resolved = Vec::new();
     let mut unresolved = Vec::new();
-    for (id, workspace_id, kind, source_path, imported_at, repository_id) in batches {
-        let imported_at = imported_at.parse::<i128>().map_err(|error| {
-            AppError::Domain(format!("invalid import timestamp for batch {id}: {error}"))
-        })?;
-        if imported_at >= migration_timestamp {
-            let valid: i64 = transaction.query_row(
-                "SELECT EXISTS (
-                     SELECT 1 FROM repositories
-                      WHERE id = ?1 AND workspace_id = ?2 AND is_planning_store = 0
-                 )",
-                params![repository_id, workspace_id],
-                |row| row.get(0),
-            )?;
-            if valid == 0 {
-                unresolved.push(format!("{id} [{kind}: {source_path}]"));
+    for (id, workspace_id, kind, source_path, imported_at) in batches {
+        let direct = import_timestamp(&id, &imported_at)? >= migration_timestamp;
+        let candidate = if direct {
+            match direct_ownership.get(&id) {
+                Some(repository_id) => Some((repository_id.clone(), Some("captured_direct"))),
+                None => transaction
+                    .query_row(
+                        "SELECT attestation.repository_id
+                           FROM import_batch_repository_attestations attestation
+                           JOIN repositories repository
+                             ON repository.id = attestation.repository_id
+                            AND repository.workspace_id = ?2
+                            AND repository.is_planning_store = 0
+                          WHERE attestation.import_id = ?1
+                            AND attestation.authority = 'explicit_repair'",
+                        params![id, workspace_id],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional()?
+                    .map(|repository_id| (repository_id, None)),
             }
-            continue;
+        } else {
+            immutable_import_repository(transaction, &id, &workspace_id, &kind, &source_path)?
+                .map(|repository_id| (repository_id, Some("immutable_evidence")))
+        };
+        match candidate {
+            Some((repository_id, authority)) => resolved.push((id, repository_id, authority)),
+            None => unresolved.push(format!("{id} [{kind}: {source_path}]")),
         }
-        let repaired = match kind.as_str() {
-            "context_catalogue" => transaction
-                .query_row(
-                    "SELECT MIN(record.destination_id)
-                       FROM legacy_import_records record
-                       JOIN repositories repository ON repository.id = record.destination_id
-                      WHERE record.import_id = ?1
-                        AND record.destination_kind = 'repository'
-                        AND repository.workspace_id = ?2
-                        AND repository.is_planning_store = 0
-                     HAVING COUNT(DISTINCT record.destination_id) = 1",
-                    params![id, workspace_id],
-                    |row| row.get::<_, String>(0),
-                )
-                .optional()?,
-            "concertable_plans" => transaction
-                .query_row(
-                    "SELECT MIN(path.repository_id)
-                       FROM repository_paths path
-                       JOIN repositories repository ON repository.id = path.repository_id
-                      WHERE path.path = ?1
-                        AND repository.workspace_id = ?2
-                        AND repository.is_planning_store = 0
-                     HAVING COUNT(DISTINCT path.repository_id) = 1",
-                    params![source_path, workspace_id],
-                    |row| row.get::<_, String>(0),
-                )
-                .optional()?,
-            _ => None,
-        };
-        let Some(repaired) = repaired else {
-            unresolved.push(format!("{id} [{kind}: {source_path}]"));
-            continue;
-        };
-        transaction.execute(
-            "UPDATE import_batches SET repository_id = ?2 WHERE id = ?1",
-            params![id, repaired],
-        )?;
     }
     if !unresolved.is_empty() {
         return Err(AppError::Domain(format!(
-            "schema migration 15 cannot resolve immutable import repository ownership for {}; record exactly one matching non-planning repository path or legacy repository destination in the batch workspace, then retry",
+            "schema migration 18 cannot attest immutable import repository ownership for {}; insert an explicit_repair row in import_batch_repository_attestations for each direct batch or repair the unique immutable evidence, then retry",
             unresolved.join(", ")
         )));
     }
+    transaction.execute_batch("DROP TRIGGER import_batches_repository_immutable;")?;
+    for (import_id, repository_id, authority) in resolved {
+        transaction.execute(
+            "UPDATE import_batches SET repository_id = ?2 WHERE id = ?1",
+            params![import_id, repository_id],
+        )?;
+        if let Some(authority) = authority {
+            transaction.execute(
+                "INSERT INTO import_batch_repository_attestations (
+                     import_id, repository_id, authority, confirmed_at
+                 ) VALUES (?1, ?2, ?3, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+                params![import_id, repository_id, authority],
+            )?;
+        }
+    }
+    create_import_batch_repository_immutable_trigger(transaction)?;
+    validate_import_batch_repository_ownership(transaction, 18)
+}
+
+fn immutable_import_repository(
+    transaction: &Transaction<'_>,
+    import_id: &str,
+    workspace_id: &str,
+    kind: &str,
+    source_path: &str,
+) -> Result<Option<String>, AppError> {
+    match kind {
+        "context_catalogue" => transaction
+            .query_row(
+                "SELECT MIN(record.destination_id)
+                   FROM legacy_import_records record
+                   JOIN repositories repository ON repository.id = record.destination_id
+                  WHERE record.import_id = ?1
+                    AND record.destination_kind = 'repository'
+                    AND repository.workspace_id = ?2
+                    AND repository.is_planning_store = 0
+                 HAVING COUNT(DISTINCT record.destination_id) = 1",
+                params![import_id, workspace_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(Into::into),
+        "concertable_plans" => transaction
+            .query_row(
+                "SELECT MIN(path.repository_id)
+                   FROM repository_paths path
+                   JOIN repositories repository ON repository.id = path.repository_id
+                  WHERE path.path = ?1
+                    AND repository.workspace_id = ?2
+                    AND repository.is_planning_store = 0
+                 HAVING COUNT(DISTINCT path.repository_id) = 1",
+                params![source_path, workspace_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(Into::into),
+        _ => Ok(None),
+    }
+}
+
+fn schema_migration_timestamp(connection: &Connection, version: i64) -> Result<i128, AppError> {
+    let migration_applied_at = connection.query_row(
+        "SELECT applied_at FROM schema_migrations WHERE version = ?1",
+        [version],
+        |row| row.get::<_, String>(0),
+    )?;
+    Ok(OffsetDateTime::parse(&migration_applied_at, &Rfc3339)
+        .map_err(|error| AppError::Domain(format!("invalid schema migration timestamp: {error}")))?
+        .unix_timestamp_nanos())
+}
+
+fn import_timestamp(import_id: &str, value: &str) -> Result<i128, AppError> {
+    value.parse::<i128>().map_err(|error| {
+        AppError::Domain(format!(
+            "invalid import timestamp for batch {import_id}: {error}"
+        ))
+    })
+}
+
+fn validate_import_batch_repository_ownership(
+    transaction: &Transaction<'_>,
+    migration_version: i64,
+) -> Result<(), AppError> {
+    let mut statement = transaction.prepare(
+        "SELECT batch.id, batch.kind, batch.source_path
+           FROM import_batches batch
+           LEFT JOIN repositories repository
+             ON repository.id = batch.repository_id
+            AND repository.workspace_id = batch.workspace_id
+            AND repository.is_planning_store = 0
+          WHERE repository.id IS NULL
+          ORDER BY batch.id",
+    )?;
+    let unresolved = statement
+        .query_map([], |row| {
+            Ok(format!(
+                "{} [{}: {}]",
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    if unresolved.is_empty() {
+        return Ok(());
+    }
+    Err(AppError::Domain(format!(
+        "schema migration {migration_version} cannot resolve immutable import repository ownership for {}; record exactly one matching non-planning repository path or legacy repository destination in the batch workspace, then retry",
+        unresolved.join(", ")
+    )))
+}
+
+fn create_import_batch_repository_immutable_trigger(
+    transaction: &Transaction<'_>,
+) -> Result<(), AppError> {
     transaction.execute_batch(
-        "CREATE TRIGGER import_batches_repository_required
-         BEFORE INSERT ON import_batches
-         WHEN NEW.repository_id IS NULL OR NOT EXISTS (
-             SELECT 1 FROM repositories repository
-              WHERE repository.id = NEW.repository_id
-                AND repository.workspace_id = NEW.workspace_id
-                AND repository.is_planning_store = 0
-         )
-         BEGIN
-             SELECT RAISE(ABORT, 'import batch repository is invalid');
-         END;
-         CREATE TRIGGER import_batches_repository_immutable
+        "CREATE TRIGGER import_batches_repository_immutable
          BEFORE UPDATE OF repository_id, workspace_id ON import_batches
          WHEN NEW.repository_id IS NOT OLD.repository_id
               OR NEW.workspace_id IS NOT OLD.workspace_id
@@ -1267,6 +1486,9 @@ mod tests {
                 "DROP TRIGGER import_batches_repository_required;
                  DROP TRIGGER import_batches_repository_immutable;
                  DROP TRIGGER import_batch_repository_parent_immutable;
+                 DROP TRIGGER import_batch_repository_attestations_no_update;
+                 DROP TRIGGER import_batch_repository_attestations_no_delete;
+                 DROP TABLE import_batch_repository_attestations;
                  DROP INDEX import_batches_target;
                  ALTER TABLE import_batches DROP COLUMN repository_id;
                  DELETE FROM schema_migrations WHERE version >= 14;
@@ -1465,6 +1687,9 @@ mod tests {
                 "DROP TRIGGER import_batches_repository_required;
                  DROP TRIGGER import_batches_repository_immutable;
                  DROP TRIGGER import_batch_repository_parent_immutable;
+                 DROP TRIGGER import_batch_repository_attestations_no_update;
+                 DROP TRIGGER import_batch_repository_attestations_no_delete;
+                 DROP TABLE import_batch_repository_attestations;
                  DELETE FROM schema_migrations WHERE version >= 15;
                  PRAGMA user_version = 14;
                  INSERT INTO repositories (
@@ -1508,6 +1733,94 @@ mod tests {
                 )?)
             })
             .expect("read direct repository");
+
+        assert_eq!(repository, "code-repository");
+        assert!(store.health().expect("storage health").is_healthy());
+    }
+
+    #[test]
+    fn stamped_schema_15_requires_explicit_direct_ownership_repair() {
+        let directory = TempDir::new().expect("temporary directory");
+        let path = directory.path().join("workboard.sqlite");
+        let mut store = SqliteStore::open(&path).expect("open store");
+        store.write(seed_hierarchy).expect("seed hierarchy");
+        drop(store);
+
+        let connection = Connection::open(&path).expect("open raw database");
+        connection
+            .execute_batch(
+                "DROP TRIGGER import_batch_repository_parent_immutable;
+                 DROP TRIGGER import_batch_repository_attestations_no_update;
+                 DROP TRIGGER import_batch_repository_attestations_no_delete;
+                 DROP TABLE import_batch_repository_attestations;
+                 DELETE FROM schema_migrations WHERE version >= 16;
+                 PRAGMA user_version = 15;
+                 INSERT INTO repositories (
+                     id, workspace_id, slug, title, git_common_directory, default_branch,
+                     is_planning_store, created_at
+                 ) VALUES (
+                     'aaa-repository', 'workspace', 'unrelated', 'Unrelated',
+                     'C:/unrelated/.git', 'main', 0, '2026-08-27T08:00:00Z'
+                 );
+                 INSERT INTO repository_paths (
+                     id, repository_id, path, observed_from, observed_until
+                 ) VALUES (
+                     'conflicting-history', 'aaa-repository', 'C:/code-linked',
+                     '2026-08-27T08:00:00Z', '2026-08-27T09:00:00Z'
+                 );",
+            )
+            .expect("prepare stamped schema 15");
+        connection
+            .execute(
+                "INSERT INTO import_batches (
+                     id, workspace_id, repository_id, kind, source_path, source_head,
+                     preview_hash, planning_commit, imported_at
+                 ) VALUES (
+                     'lost-direct-batch', 'workspace', 'aaa-repository',
+                     'concertable_plans', 'C:/code-linked', 'source-head',
+                     'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+                     'planning-commit', ?1
+                 )",
+                [OffsetDateTime::now_utc().unix_timestamp_nanos().to_string()],
+            )
+            .expect("seed overwritten direct ownership");
+        drop(connection);
+
+        let error = match SqliteStore::open(&path) {
+            Ok(_) => panic!("lost direct provenance must fail"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("lost-direct-batch"));
+        assert!(error.to_string().contains("explicit_repair"));
+
+        let connection = Connection::open(&path).expect("open repair database");
+        let version: i64 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .expect("schema version");
+        assert_eq!(version, 17);
+        connection
+            .execute(
+                "INSERT INTO import_batch_repository_attestations (
+                     import_id, repository_id, authority, confirmed_at
+                 ) VALUES (
+                     'lost-direct-batch', 'code-repository', 'explicit_repair',
+                     '2026-08-28T12:00:00Z'
+                 )",
+                [],
+            )
+            .expect("attest repaired ownership");
+        drop(connection);
+
+        let store = SqliteStore::open(&path).expect("retry attested migration");
+        let repository: String = store
+            .read(|connection| {
+                Ok(connection.query_row(
+                    "SELECT repository_id FROM import_batches WHERE id = 'lost-direct-batch'",
+                    [],
+                    |row| row.get(0),
+                )?)
+            })
+            .expect("read attested repository");
 
         assert_eq!(repository, "code-repository");
         assert!(store.health().expect("storage health").is_healthy());
