@@ -5,8 +5,8 @@
 > irreversible or ambiguous finding: record its durable disposition, take the safe path, and keep going.
 
 **Review status:** `complete`
-**Reviewed up to commit:** `6c711084c83b5654820eb357664b321dca192626`  `(2026-08-28)`
-**Security-reviewed up to commit:** `6c711084c83b5654820eb357664b321dca192626`  `(2026-08-28)`
+**Reviewed up to commit:** `75298f3a57263cd613a42d4aba5b122ada0c07b5`  `(2026-08-28)`
+**Security-reviewed up to commit:** `75298f3a57263cd613a42d4aba5b122ada0c07b5`  `(2026-08-28)`
 **Judgment:** `changes-requested`
 
 ## Review pass — 2026-08-28 — full
@@ -449,3 +449,44 @@ No findings.
   Resolved by a schema-24 fixture that accepts one of two memberships, proves migration 25 rolls back without
   a stamp or lost rows, repairs the missing membership and source mapping, and then reaches healthy schema 26
   with the original valid replay counts unchanged.
+
+## Review pass — 2026-08-28 — incremental
+
+**Candidate base:** `6c711084c83b5654820eb357664b321dca192626`
+**Candidate head:** `75298f3a57263cd613a42d4aba5b122ada0c07b5`
+**Candidate branch:** `Feature/Phase7-Migration-Completion`
+**Candidate scope:** `all`
+**Candidate path-set:** `sha256:ee1d4e28380659a67492628d9d3728cfc1c21bcb266f3d6de81dbe3f80572119` `(4 paths)`
+**Candidate bundle:** `C:\Users\TommySeery\AppData\Local\Temp\agent-workboard-review-02217b8f3c594509b4f6fae07d7d4e76`
+**Candidate bundle identity:** `sha256:054d698dd915b22d28826b4c3ea50a67fe14525519d3020562989134b2995321`
+**Work-order path:** `reviews/Feature-Phase7-Migration-Completion.md`
+**Work-order mode:** `append`
+**Pass judgment:** `changes-requested`
+
+### Findings
+
+- [x] **P7-029 — MEDIUM — test** — `crates/workboard-application/src/concertable_import.rs:2347`
+  The upgrade regression deletes migration 25 and therefore cannot prove the forward-only schema-26 path
+  rejects invalid cohort evidence in a genuinely stamped schema-25 database. Preserve the canonical schema-25
+  stamp, prove schema 26 rolls back without lost rows, repair the cohort, and prove healthy retry and replay.
+  Resolved by extending the migration fixture with a canonical schema-25 Epic-only finalization. Schema 26
+  rejects it without a stamp or lost rows; adding its missing Feature evidence reaches healthy schema 28 and
+  preserves the original replay outcome.
+
+- [x] **P7-030 — HIGH — integrity** — `crates/workboard-application/src/storage.rs:273`
+  Finalized revision evidence is identified only by document, commit, and timestamp, so a matching revision
+  can be duplicated, mutated, or replaced while replay remains trusted. Persist the exact revision identity
+  and hash for every member and fail closed on any matching-row ambiguity or evidence mismatch while allowing
+  ordinary later revisions with a different observation tuple.
+  Resolved by schemas 27 and 28's immutable per-member revision number and content hash. Replay rejects hash
+  mutation, duplicate observation tuples, and revision replacement while accepting a later revision with a
+  different commit and timestamp.
+
+- [x] **P7-031 — HIGH — integrity** — `crates/workboard-application/src/storage.rs:368`
+  Source provenance has no immutable per-member cardinality or synthetic marker. A missing source-backed Epic
+  mapping can be mistaken for a generated Epic, and multiple mappings can inflate replay. Persist explicit
+  source versus synthetic provenance, require exactly one mapping for sourced members and zero only for an
+  attested synthetic Epic, and derive replay counts from that durable evidence.
+  Resolved by immutable source/synthetic evidence, preview-time synthetic attestations, explicit repair
+  attestations for legacy imports, exact source cardinality validation, and replay counts derived from the
+  evidence table. Missing and duplicate mappings fail finalization while normal synthetic import succeeds.

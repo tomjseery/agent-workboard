@@ -12,7 +12,7 @@ use workboard_core::{ConversationId, LaunchLeaseId};
 
 use crate::AppError;
 
-const CURRENT_SCHEMA_VERSION: i64 = 26;
+const CURRENT_SCHEMA_VERSION: i64 = 28;
 const FOUNDATION_SCHEMA_CHECKSUM: &str = "agent-workboard-foundation-v1";
 const LAUNCH_LEASE_SCHEMA_CHECKSUM: &str = "agent-workboard-launch-leases-v1";
 const WORKBOARD_DOMAIN_SCHEMA_CHECKSUM: &str = "agent-workboard-domain-v1";
@@ -639,6 +639,334 @@ const IMPORT_DOCUMENT_COHORT_GUARDS_SQL: &str =
  )
  OR EXISTS (
      SELECT 1 FROM concertable_import_cohort_evidence_failures failure
+      WHERE failure.import_id = NEW.import_id
+ )
+ BEGIN
+     SELECT RAISE(ABORT, 'import document membership finalization is invalid');
+ END;";
+const IMPORT_DOCUMENT_DURABLE_EVIDENCE_SCHEMA_CHECKSUM: &str =
+    "agent-workboard-import-document-durable-evidence-v1";
+const IMPORT_DOCUMENT_DURABLE_EVIDENCE_SQL: &str = "CREATE TABLE import_document_evidence (
+     import_id TEXT NOT NULL,
+     document_id TEXT NOT NULL,
+     revision INTEGER NOT NULL CHECK (revision > 0),
+     revision_content_hash TEXT NOT NULL CHECK (length(revision_content_hash) = 64),
+     source_provenance TEXT NOT NULL CHECK (source_provenance IN ('source', 'synthetic')),
+     source_path TEXT,
+     source_hash TEXT,
+     CHECK (
+         (source_provenance = 'source'
+          AND source_path IS NOT NULL AND source_path <> ''
+          AND source_hash IS NOT NULL AND length(source_hash) = 64)
+         OR (source_provenance = 'synthetic' AND source_path IS NULL AND source_hash IS NULL)
+     ),
+     PRIMARY KEY (import_id, document_id),
+     FOREIGN KEY (import_id, document_id)
+         REFERENCES import_document_memberships(import_id, document_id) ON DELETE RESTRICT
+ );
+ CREATE TABLE import_document_synthetic_attestations (
+     import_id TEXT NOT NULL,
+     document_id TEXT NOT NULL,
+     authority TEXT NOT NULL CHECK (authority IN ('import_preview', 'explicit_repair')),
+     attested_at TEXT NOT NULL,
+     PRIMARY KEY (import_id, document_id),
+     FOREIGN KEY (import_id, document_id)
+         REFERENCES import_document_memberships(import_id, document_id) ON DELETE RESTRICT
+ );
+ CREATE TRIGGER import_document_evidence_valid
+ BEFORE INSERT ON import_document_evidence
+ WHEN NOT EXISTS (
+     SELECT 1
+       FROM import_document_memberships membership
+       JOIN import_batches batch ON batch.id = membership.import_id
+       JOIN documents document ON document.id = membership.document_id
+       JOIN document_revisions revision
+         ON revision.document_id = membership.document_id
+        AND revision.revision = NEW.revision
+        AND revision.content_hash = NEW.revision_content_hash
+        AND revision.observed_commit = batch.planning_commit
+        AND revision.observed_at = batch.imported_at
+      WHERE membership.import_id = NEW.import_id
+        AND membership.document_id = NEW.document_id
+        AND (
+            (
+                NEW.source_provenance = 'source'
+                AND EXISTS (
+                    SELECT 1 FROM import_source_destinations source
+                     WHERE source.import_id = membership.import_id
+                       AND source.document_id = membership.document_id
+                       AND source.destination_kind = membership.destination_kind
+                       AND source.source_path = NEW.source_path
+                       AND source.source_hash = NEW.source_hash
+                )
+            )
+            OR (
+                NEW.source_provenance = 'synthetic'
+                AND membership.destination_kind = 'epic'
+                AND EXISTS (
+                    SELECT 1 FROM import_document_synthetic_attestations attestation
+                     WHERE attestation.import_id = membership.import_id
+                       AND attestation.document_id = membership.document_id
+                )
+                AND NOT EXISTS (
+                    SELECT 1 FROM import_source_destinations source
+                     WHERE source.import_id = membership.import_id
+                       AND source.document_id = membership.document_id
+                       AND source.destination_kind = membership.destination_kind
+                )
+            )
+        )
+ )
+ BEGIN
+     SELECT RAISE(ABORT, 'import document evidence is invalid');
+ END;
+ CREATE TRIGGER import_document_evidence_no_update
+ BEFORE UPDATE ON import_document_evidence
+ BEGIN
+     SELECT RAISE(ABORT, 'import document evidence is immutable');
+ END;
+ CREATE TRIGGER import_document_evidence_no_delete
+ BEFORE DELETE ON import_document_evidence
+ BEGIN
+     SELECT RAISE(ABORT, 'import document evidence cannot be deleted');
+ END;
+ CREATE TRIGGER import_document_synthetic_attestations_valid
+ BEFORE INSERT ON import_document_synthetic_attestations
+ WHEN NOT EXISTS (
+     SELECT 1
+       FROM import_document_memberships membership
+       JOIN documents document ON document.id = membership.document_id
+      WHERE membership.import_id = NEW.import_id
+        AND membership.document_id = NEW.document_id
+        AND membership.destination_kind = 'epic'
+        AND (
+            (
+                NEW.authority = 'import_preview'
+                AND NOT EXISTS (
+                    SELECT 1 FROM import_document_membership_finalizations finalization
+                     WHERE finalization.import_id = membership.import_id
+                )
+            )
+            OR (
+                NEW.authority = 'explicit_repair'
+                AND EXISTS (
+                    SELECT 1 FROM import_document_membership_finalizations finalization
+                     WHERE finalization.import_id = membership.import_id
+                )
+            )
+        )
+        AND NOT EXISTS (
+            SELECT 1 FROM import_source_destinations source
+             WHERE source.import_id = membership.import_id
+               AND source.document_id = membership.document_id
+               AND source.destination_kind = membership.destination_kind
+        )
+        AND EXISTS (
+            SELECT 1
+              FROM features feature
+              JOIN documents feature_document ON feature_document.feature_id = feature.id
+              JOIN import_document_memberships feature_membership
+                ON feature_membership.import_id = membership.import_id
+               AND feature_membership.document_id = feature_document.id
+               AND feature_membership.destination_kind = 'feature'
+              JOIN import_source_destinations source
+                ON source.import_id = membership.import_id
+               AND source.document_id = feature_document.id
+               AND source.destination_kind = 'feature'
+             WHERE feature.epic_id = document.epic_id
+        )
+ )
+ BEGIN
+     SELECT RAISE(ABORT, 'synthetic import document attestation is invalid');
+ END;
+ CREATE TRIGGER import_document_synthetic_attestations_no_update
+ BEFORE UPDATE ON import_document_synthetic_attestations
+ BEGIN
+     SELECT RAISE(ABORT, 'synthetic import document attestation is immutable');
+ END;
+ CREATE TRIGGER import_document_synthetic_attestations_no_delete
+ BEFORE DELETE ON import_document_synthetic_attestations
+ BEGIN
+     SELECT RAISE(ABORT, 'synthetic import document attestation cannot be deleted');
+ END;";
+const IMPORT_DOCUMENT_EVIDENCE_FINALIZATION_SCHEMA_CHECKSUM: &str =
+    "agent-workboard-import-document-evidence-finalization-v1";
+const IMPORT_DOCUMENT_EVIDENCE_FINALIZATION_SQL: &str = "INSERT INTO import_document_evidence (
+     import_id, document_id, revision, revision_content_hash,
+     source_provenance, source_path, source_hash
+ )
+ SELECT membership.import_id, membership.document_id, revision.revision,
+        revision.content_hash, 'source', source.source_path, source.source_hash
+   FROM import_document_memberships membership
+   JOIN import_document_membership_finalizations finalization
+     ON finalization.import_id = membership.import_id
+   JOIN import_batches batch ON batch.id = membership.import_id
+   JOIN document_revisions revision
+     ON revision.document_id = membership.document_id
+    AND revision.observed_commit = batch.planning_commit
+    AND revision.observed_at = batch.imported_at
+   JOIN import_source_destinations source
+     ON source.import_id = membership.import_id
+    AND source.document_id = membership.document_id
+    AND source.destination_kind = membership.destination_kind
+  WHERE (
+      SELECT COUNT(*) FROM document_revisions candidate
+       WHERE candidate.document_id = membership.document_id
+         AND candidate.observed_commit = batch.planning_commit
+         AND candidate.observed_at = batch.imported_at
+  ) = 1
+    AND (
+      SELECT COUNT(*) FROM import_source_destinations candidate
+       WHERE candidate.import_id = membership.import_id
+         AND candidate.document_id = membership.document_id
+         AND candidate.destination_kind = membership.destination_kind
+  ) = 1;
+ INSERT INTO import_document_evidence (
+     import_id, document_id, revision, revision_content_hash,
+     source_provenance, source_path, source_hash
+ )
+ SELECT membership.import_id, membership.document_id, revision.revision,
+        revision.content_hash, 'synthetic', NULL, NULL
+   FROM import_document_memberships membership
+   JOIN import_document_membership_finalizations finalization
+     ON finalization.import_id = membership.import_id
+   JOIN import_batches batch ON batch.id = membership.import_id
+   JOIN document_revisions revision
+     ON revision.document_id = membership.document_id
+    AND revision.observed_commit = batch.planning_commit
+    AND revision.observed_at = batch.imported_at
+   JOIN import_document_synthetic_attestations attestation
+     ON attestation.import_id = membership.import_id
+    AND attestation.document_id = membership.document_id
+  WHERE membership.destination_kind = 'epic'
+    AND (
+      SELECT COUNT(*) FROM document_revisions candidate
+       WHERE candidate.document_id = membership.document_id
+         AND candidate.observed_commit = batch.planning_commit
+         AND candidate.observed_at = batch.imported_at
+  ) = 1
+    AND NOT EXISTS (
+      SELECT 1 FROM import_source_destinations source
+       WHERE source.import_id = membership.import_id
+         AND source.document_id = membership.document_id
+         AND source.destination_kind = membership.destination_kind
+  );
+ CREATE VIEW concertable_import_durable_evidence_failures AS
+ SELECT batch.id AS import_id
+   FROM import_batches batch
+  WHERE batch.kind = 'concertable_plans'
+    AND (
+        EXISTS (
+            SELECT 1
+              FROM import_document_memberships membership
+              LEFT JOIN import_document_evidence evidence
+                ON evidence.import_id = membership.import_id
+               AND evidence.document_id = membership.document_id
+             WHERE membership.import_id = batch.id
+               AND evidence.document_id IS NULL
+        )
+        OR EXISTS (
+            SELECT 1
+              FROM import_document_evidence evidence
+              LEFT JOIN document_revisions revision
+                ON revision.document_id = evidence.document_id
+               AND revision.revision = evidence.revision
+              JOIN import_document_memberships membership
+                ON membership.import_id = evidence.import_id
+               AND membership.document_id = evidence.document_id
+             WHERE evidence.import_id = batch.id
+               AND (
+                   revision.document_id IS NULL
+                   OR revision.content_hash <> evidence.revision_content_hash
+                   OR revision.observed_commit IS NOT batch.planning_commit
+                   OR revision.observed_at <> batch.imported_at
+                   OR (
+                       SELECT COUNT(*) FROM document_revisions candidate
+                        WHERE candidate.document_id = evidence.document_id
+                          AND candidate.observed_commit = batch.planning_commit
+                          AND candidate.observed_at = batch.imported_at
+                   ) <> 1
+               )
+        )
+        OR EXISTS (
+            SELECT 1
+              FROM import_document_evidence evidence
+              JOIN import_document_memberships membership
+                ON membership.import_id = evidence.import_id
+               AND membership.document_id = evidence.document_id
+             WHERE evidence.import_id = batch.id
+               AND evidence.source_provenance = 'source'
+               AND (
+                   (
+                       SELECT COUNT(*) FROM import_source_destinations source
+                        WHERE source.import_id = evidence.import_id
+                          AND source.document_id = evidence.document_id
+                          AND source.destination_kind = membership.destination_kind
+                   ) <> 1
+                   OR NOT EXISTS (
+                       SELECT 1 FROM import_source_destinations source
+                        WHERE source.import_id = evidence.import_id
+                          AND source.document_id = evidence.document_id
+                          AND source.destination_kind = membership.destination_kind
+                          AND source.source_path = evidence.source_path
+                          AND source.source_hash = evidence.source_hash
+                   )
+               )
+        )
+        OR EXISTS (
+            SELECT 1
+              FROM import_document_evidence evidence
+              JOIN import_document_memberships membership
+                ON membership.import_id = evidence.import_id
+               AND membership.document_id = evidence.document_id
+              JOIN documents document ON document.id = evidence.document_id
+             WHERE evidence.import_id = batch.id
+               AND evidence.source_provenance = 'synthetic'
+               AND (
+                   membership.destination_kind <> 'epic'
+                   OR EXISTS (
+                       SELECT 1 FROM import_source_destinations source
+                        WHERE source.import_id = evidence.import_id
+                          AND source.document_id = evidence.document_id
+                          AND source.destination_kind = membership.destination_kind
+                   )
+                   OR NOT EXISTS (
+                       SELECT 1
+                         FROM features feature
+                         JOIN documents feature_document
+                           ON feature_document.feature_id = feature.id
+                         JOIN import_document_memberships feature_membership
+                           ON feature_membership.import_id = evidence.import_id
+                          AND feature_membership.document_id = feature_document.id
+                          AND feature_membership.destination_kind = 'feature'
+                         JOIN import_document_evidence feature_evidence
+                           ON feature_evidence.import_id = evidence.import_id
+                          AND feature_evidence.document_id = feature_document.id
+                          AND feature_evidence.source_provenance = 'source'
+                        WHERE feature.epic_id = document.epic_id
+                   )
+               )
+        )
+    );
+ DROP TRIGGER import_document_membership_finalizations_valid;
+ CREATE TRIGGER import_document_membership_finalizations_valid
+ BEFORE INSERT ON import_document_membership_finalizations
+ WHEN NOT EXISTS (
+     SELECT 1 FROM import_batches batch
+      WHERE batch.id = NEW.import_id
+        AND batch.kind = 'concertable_plans'
+        AND batch.imported_at = NEW.finalized_at
+ )
+ OR EXISTS (
+     SELECT 1 FROM concertable_import_membership_evidence_failures failure
+      WHERE failure.import_id = NEW.import_id
+ )
+ OR EXISTS (
+     SELECT 1 FROM concertable_import_cohort_evidence_failures failure
+      WHERE failure.import_id = NEW.import_id
+ )
+ OR EXISTS (
+     SELECT 1 FROM concertable_import_durable_evidence_failures failure
       WHERE failure.import_id = NEW.import_id
  )
  BEGIN
@@ -1703,6 +2031,19 @@ fn migrate(connection: &Connection) -> Result<(), AppError> {
         IMPORT_DOCUMENT_COHORT_GUARDS_SQL,
         validate_finalized_import_document_cohorts,
     )?;
+    apply_migration(
+        connection,
+        27,
+        IMPORT_DOCUMENT_DURABLE_EVIDENCE_SCHEMA_CHECKSUM,
+        IMPORT_DOCUMENT_DURABLE_EVIDENCE_SQL,
+    )?;
+    apply_validated_migration(
+        connection,
+        28,
+        IMPORT_DOCUMENT_EVIDENCE_FINALIZATION_SCHEMA_CHECKSUM,
+        IMPORT_DOCUMENT_EVIDENCE_FINALIZATION_SQL,
+        validate_finalized_import_document_evidence,
+    )?;
     Ok(())
 }
 
@@ -2429,6 +2770,35 @@ fn validate_finalized_import_document_cohorts(
     )))
 }
 
+fn validate_finalized_import_document_evidence(
+    transaction: &Transaction<'_>,
+) -> Result<(), AppError> {
+    let invalid = transaction
+        .prepare(
+            "SELECT finalization.import_id
+               FROM import_document_membership_finalizations finalization
+               LEFT JOIN concertable_import_membership_evidence_failures membership_failure
+                 ON membership_failure.import_id = finalization.import_id
+               LEFT JOIN concertable_import_cohort_evidence_failures cohort_failure
+                 ON cohort_failure.import_id = finalization.import_id
+               LEFT JOIN concertable_import_durable_evidence_failures evidence_failure
+                 ON evidence_failure.import_id = finalization.import_id
+              WHERE membership_failure.import_id IS NOT NULL
+                 OR cohort_failure.import_id IS NOT NULL
+                 OR evidence_failure.import_id IS NOT NULL
+              ORDER BY finalization.import_id",
+        )?
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    if invalid.is_empty() {
+        return Ok(());
+    }
+    Err(AppError::Domain(format!(
+        "schema migration 28 cannot validate durable Concertable import evidence for {}; remove ambiguous source or revision evidence and explicitly attest every verified synthetic Epic in import_document_synthetic_attestations, then retry",
+        invalid.join(", ")
+    )))
+}
+
 fn create_import_batch_repository_immutable_trigger(
     transaction: &Transaction<'_>,
 ) -> Result<(), AppError> {
@@ -2475,6 +2845,15 @@ mod tests {
                 "DROP TRIGGER IF EXISTS import_work_item_repositories_finalized_insert;
                  DROP TRIGGER IF EXISTS import_work_item_repositories_finalized_update;
                  DROP TRIGGER IF EXISTS import_work_item_repositories_finalized_delete;
+                 DROP VIEW IF EXISTS concertable_import_durable_evidence_failures;
+                 DROP TRIGGER IF EXISTS import_document_evidence_valid;
+                 DROP TRIGGER IF EXISTS import_document_evidence_no_update;
+                 DROP TRIGGER IF EXISTS import_document_evidence_no_delete;
+                 DROP TRIGGER IF EXISTS import_document_synthetic_attestations_valid;
+                 DROP TRIGGER IF EXISTS import_document_synthetic_attestations_no_update;
+                 DROP TRIGGER IF EXISTS import_document_synthetic_attestations_no_delete;
+                 DROP TABLE IF EXISTS import_document_evidence;
+                 DROP TABLE IF EXISTS import_document_synthetic_attestations;
                  DROP TRIGGER IF EXISTS import_planning_repository_parent_immutable;
                  DROP TRIGGER IF EXISTS import_workspace_planning_repository_immutable;
                  DROP TRIGGER IF EXISTS import_work_item_membership_parent_immutable;
@@ -3295,7 +3674,7 @@ mod tests {
         assert_eq!(preserved_attestation, valid_attestation);
         assert_eq!(legacy_authority, "immutable_evidence");
         let health = store.health().expect("storage health");
-        assert_eq!(health.schema_version, 26);
+        assert_eq!(health.schema_version, 28);
         assert!(health.is_healthy());
         let audited_attestations: Vec<(String, String, String, String)> = store
             .read(|connection| {
@@ -3340,7 +3719,7 @@ mod tests {
             .expect("read upgraded schema 20 attestations");
         assert_eq!(upgraded_attestations, audited_attestations);
         let health = store.health().expect("upgraded storage health");
-        assert_eq!(health.schema_version, 26);
+        assert_eq!(health.schema_version, 28);
         assert!(health.is_healthy());
         drop(store);
 
