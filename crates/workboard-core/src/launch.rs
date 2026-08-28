@@ -61,6 +61,7 @@ pub struct ManagedLaunchRequest {
     pub mode: ManagedLaunchMode,
     pub working_directory: PathBuf,
     pub title: String,
+    pub terminal_window: Option<String>,
     pub launch_token: String,
     pub workflow_token: Option<String>,
     pub initial_prompt: Option<String>,
@@ -86,6 +87,7 @@ impl ManagedLaunchSpec {
             mode,
             working_directory,
             title,
+            terminal_window,
             launch_token,
             workflow_token,
             initial_prompt,
@@ -99,6 +101,11 @@ impl ManagedLaunchSpec {
             .is_some_and(|token| token.is_empty() || token.chars().any(char::is_control))
         {
             return Err(LaunchSpecError::UnsafeLaunchToken);
+        }
+        if terminal_window.as_deref().is_some_and(|window| {
+            window.is_empty() || window.len() > 120 || window.chars().any(char::is_control)
+        }) {
+            return Err(LaunchSpecError::UnsafeTerminalWindow);
         }
         if native_executable.as_os_str().is_empty() {
             return Err(LaunchSpecError::EmptyExecutable);
@@ -147,6 +154,7 @@ impl ManagedLaunchSpec {
             &working_directory,
             &title,
             native.executable(),
+            terminal_window.as_deref(),
         );
         arguments.extend(native.arguments().iter().cloned());
         Ok(Self {
@@ -238,6 +246,7 @@ impl ResumeLaunchSpec {
             &working_directory,
             &title,
             native.executable(),
+            None,
         );
         terminal_arguments.extend(native.arguments().iter().cloned());
         let terminal = CommandSpec::new(terminal_executable, terminal_arguments);
@@ -278,11 +287,12 @@ fn terminal_arguments(
     working_directory: &Path,
     title: &str,
     native_executable: &Path,
+    terminal_window: Option<&str>,
 ) -> Vec<OsString> {
     match terminal_kind {
         TerminalKind::WindowsTerminal => vec![
             OsString::from("--window"),
-            OsString::from("new"),
+            OsString::from(terminal_window.unwrap_or("new")),
             OsString::from("new-tab"),
             OsString::from("--startingDirectory"),
             working_directory.as_os_str().to_owned(),
@@ -312,6 +322,7 @@ pub enum LaunchSpecError {
     UnsafeNativeId,
     UnsafeLaunchToken,
     UnsafeInitialPrompt,
+    UnsafeTerminalWindow,
 }
 
 impl Display for LaunchSpecError {
@@ -333,6 +344,9 @@ impl Display for LaunchSpecError {
             }
             Self::UnsafeLaunchToken => formatter.write_str("launch token is empty or unsafe"),
             Self::UnsafeInitialPrompt => formatter.write_str("initial prompt is empty or unsafe"),
+            Self::UnsafeTerminalWindow => {
+                formatter.write_str("terminal window identity is empty or unsafe")
+            }
         }
     }
 }
@@ -398,6 +412,7 @@ mod tests {
             mode: ManagedLaunchMode::New,
             working_directory: directory.clone(),
             title: "Planning".to_owned(),
+            terminal_window: Some("workboard-feature-feature-123".to_owned()),
             launch_token: "opaque-token".to_owned(),
             workflow_token: Some("workflow-token".to_owned()),
             initial_prompt: Some("Use the managed Feature planning workflow.".to_owned()),
@@ -413,6 +428,13 @@ mod tests {
         );
         assert_eq!(new_launch.launch_token(), "opaque-token");
         assert_eq!(new_launch.workflow_token(), Some("workflow-token"));
+        assert_eq!(
+            &new_launch.terminal().arguments()[..2],
+            [
+                OsString::from("--window"),
+                OsString::from("workboard-feature-feature-123")
+            ]
+        );
         let command = new_launch.direct_child_command();
         assert_eq!(command.get_current_dir(), Some(directory.as_path()));
         assert_eq!(
@@ -438,6 +460,7 @@ mod tests {
             mode: ManagedLaunchMode::Resume("session-123".to_owned()),
             working_directory: directory.clone(),
             title: "Delivery".to_owned(),
+            terminal_window: Some("workboard-feature-feature-123".to_owned()),
             launch_token: "opaque-token".to_owned(),
             workflow_token: None,
             initial_prompt: None,

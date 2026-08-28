@@ -11,7 +11,7 @@ use workboard_core::{ConversationId, LaunchLeaseId};
 
 use crate::AppError;
 
-const CURRENT_SCHEMA_VERSION: i64 = 9;
+const CURRENT_SCHEMA_VERSION: i64 = 10;
 const FOUNDATION_SCHEMA_CHECKSUM: &str = "agent-workboard-foundation-v1";
 const LAUNCH_LEASE_SCHEMA_CHECKSUM: &str = "agent-workboard-launch-leases-v1";
 const WORKBOARD_DOMAIN_SCHEMA_CHECKSUM: &str = "agent-workboard-domain-v1";
@@ -21,6 +21,7 @@ const INTEGRATION_STATE_SCHEMA_CHECKSUM: &str = "agent-workboard-integration-sta
 const FEATURE_PLANNING_SCHEMA_CHECKSUM: &str = "agent-workboard-feature-planning-v1";
 const WORKFLOW_CREDENTIAL_SCHEMA_CHECKSUM: &str = "agent-workboard-workflow-credential-v1";
 const SESSION_REQUEST_SCHEMA_CHECKSUM: &str = "agent-workboard-session-request-v1";
+const MANAGED_RECOVERY_SCHEMA_CHECKSUM: &str = "agent-workboard-managed-recovery-v1";
 
 pub struct SqliteStore {
     path: PathBuf,
@@ -781,6 +782,54 @@ fn migrate(connection: &Connection) -> Result<(), AppError> {
              requested_at TEXT NOT NULL,
              launch_intent_id TEXT UNIQUE REFERENCES launch_intents(id) ON DELETE RESTRICT,
              failure TEXT
+         );",
+    )?;
+    apply_migration(
+        connection,
+        10,
+        MANAGED_RECOVERY_SCHEMA_CHECKSUM,
+        "ALTER TABLE launch_intents ADD COLUMN terminal_window TEXT;
+         CREATE TABLE restore_entries (
+             session_id TEXT PRIMARY KEY REFERENCES native_sessions(id) ON DELETE RESTRICT,
+             epic_id TEXT REFERENCES epics(id) ON DELETE RESTRICT,
+             feature_id TEXT REFERENCES features(id) ON DELETE RESTRICT,
+             work_item_id TEXT REFERENCES work_items(id) ON DELETE RESTRICT,
+             added_at TEXT NOT NULL,
+             removed_at TEXT,
+             remove_reason TEXT,
+             CHECK (
+                 (epic_id IS NOT NULL) + (feature_id IS NOT NULL) + (work_item_id IS NOT NULL) = 1
+             ),
+             CHECK (removed_at IS NULL OR removed_at >= added_at)
+         );
+         INSERT INTO restore_entries (
+             session_id, epic_id, feature_id, work_item_id, added_at
+         )
+         SELECT managed.session_id, association.epic_id, association.feature_id,
+                association.work_item_id, MIN(managed.managed_from)
+         FROM managed_sessions managed
+         JOIN native_session_associations association
+           ON association.session_id = managed.session_id
+          AND association.associated_until IS NULL
+         GROUP BY managed.session_id;
+         CREATE TABLE recovery_attempts (
+             id TEXT PRIMARY KEY,
+             workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE RESTRICT,
+             idempotency_key TEXT NOT NULL UNIQUE CHECK (idempotency_key <> ''),
+             requested_at TEXT NOT NULL,
+             plan_json TEXT NOT NULL CHECK (plan_json <> ''),
+             status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'partial')),
+             completed_at TEXT
+         );
+         CREATE TABLE recovery_entry_outcomes (
+             attempt_id TEXT NOT NULL REFERENCES recovery_attempts(id) ON DELETE RESTRICT,
+             session_id TEXT NOT NULL REFERENCES native_sessions(id) ON DELETE RESTRICT,
+             status TEXT NOT NULL CHECK (status IN ('skipped', 'launched', 'bound', 'conflict', 'failed')),
+             launch_intent_id TEXT REFERENCES launch_intents(id) ON DELETE RESTRICT,
+             code TEXT,
+             message TEXT,
+             observed_at TEXT NOT NULL,
+             PRIMARY KEY (attempt_id, session_id)
          );",
     )?;
     Ok(())

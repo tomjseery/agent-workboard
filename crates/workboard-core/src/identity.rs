@@ -68,6 +68,7 @@ define_id!(SessionBindingId);
 define_id!(ManagedSessionId);
 define_id!(WorkItemCheckpointId);
 define_id!(ManagedSessionRequestId);
+define_id!(RecoveryAttemptId);
 
 #[cfg(test)]
 mod tests {

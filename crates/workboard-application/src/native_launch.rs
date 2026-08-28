@@ -94,6 +94,7 @@ pub struct PrepareManagedLaunch {
     pub mode: ManagedLaunchMode,
     pub working_directory: PathBuf,
     pub title: String,
+    pub terminal_window: Option<String>,
     pub terminal: PathBuf,
     pub native: PathBuf,
     pub launch_token: String,
@@ -236,6 +237,7 @@ pub fn prepare_managed_launch(
         mode: request.mode,
         working_directory: request.working_directory,
         title: request.title,
+        terminal_window: request.terminal_window,
         launch_token: request.launch_token,
         workflow_token: request.workflow_token,
         initial_prompt: request.initial_prompt,
@@ -356,6 +358,10 @@ fn resolve_executable(requested: &Path) -> Option<PathBuf> {
         }
     }
     None
+}
+
+pub fn native_executable_available(requested: &Path) -> bool {
+    resolve_executable(requested).is_some()
 }
 
 fn executable_extensions(requested: &Path) -> Vec<OsString> {

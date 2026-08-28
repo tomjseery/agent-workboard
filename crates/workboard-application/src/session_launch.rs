@@ -32,6 +32,7 @@ pub struct BeginManagedSessionLaunch {
     pub checkout_id: CheckoutId,
     pub working_directory: PathBuf,
     pub title: String,
+    pub terminal_window: Option<String>,
     pub terminal_executable: PathBuf,
     pub native_executable: PathBuf,
     pub idempotency_key: String,
@@ -159,6 +160,7 @@ impl<'a> SessionLaunchService<'a> {
             mode: request.mode.clone(),
             working_directory: request.working_directory.clone(),
             title: request.title.clone(),
+            terminal_window: request.terminal_window.clone(),
             terminal: request.terminal_executable.clone(),
             native: request.native_executable.clone(),
             launch_token: token.clone(),
@@ -688,6 +690,7 @@ fn bind_transaction(
     )?;
     let restore_membership_id =
         ensure_restore_membership(transaction, session_id, owner, observed_at)?;
+    ensure_restore_entry(transaction, session_id, owner, observed_at)?;
     activate_planning_for_binding(transaction, owner, role, observed_at)?;
     insert_live_observation(
         transaction,
@@ -762,11 +765,6 @@ fn close_managed_session(
          WHERE session_id = ?1 AND managed_until IS NULL",
         params![session_id.to_string(), timestamp],
     )?;
-    transaction.execute(
-        "UPDATE restore_memberships SET active_until = ?2
-         WHERE session_id = ?1 AND active_until IS NULL",
-        params![session_id.to_string(), timestamp],
-    )?;
     Ok(())
 }
 
@@ -783,10 +781,11 @@ fn insert_launch_intent(
         "INSERT INTO launch_intents (
              id, epic_id, feature_id, work_item_id, checkout_id, provider,
              idempotency_key, token_hash, status, created_at, expires_at, role,
-             expected_native_id, workflow_token_hash, workflow_token_expires_at
+             expected_native_id, workflow_token_hash, workflow_token_expires_at,
+             terminal_window
          ) VALUES (
              ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending', ?9, ?10, ?11, ?12,
-             ?13, ?14
+             ?13, ?14, ?15
          )",
         params![
             intent_id.to_string(),
@@ -803,6 +802,7 @@ fn insert_launch_intent(
             expected_native_id,
             workflow_token_hash,
             timestamp(request.created_at + time::Duration::hours(12)),
+            request.terminal_window,
         ],
     )?;
     Ok(())
@@ -981,6 +981,34 @@ fn ensure_restore_membership(
         ],
     )?;
     Ok(Some(id))
+}
+
+fn ensure_restore_entry(
+    transaction: &Transaction<'_>,
+    session_id: ConversationId,
+    owner: HierarchyOwner,
+    observed_at: OffsetDateTime,
+) -> Result<(), AppError> {
+    let (epic_id, feature_id, work_item_id) = owner_columns(owner);
+    transaction.execute(
+        "INSERT INTO restore_entries (
+             session_id, epic_id, feature_id, work_item_id, added_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(session_id) DO UPDATE SET
+             epic_id = excluded.epic_id,
+             feature_id = excluded.feature_id,
+             work_item_id = excluded.work_item_id,
+             removed_at = NULL,
+             remove_reason = NULL",
+        params![
+            session_id.to_string(),
+            epic_id,
+            feature_id,
+            work_item_id,
+            timestamp(observed_at),
+        ],
+    )?;
+    Ok(())
 }
 
 struct LiveObservationInput<'a> {
@@ -1345,6 +1373,7 @@ mod tests {
             checkout_id: fixture.checkout_id,
             working_directory: fixture.checkout_path.clone(),
             title: "Availability API".to_owned(),
+            terminal_window: Some(format!("workboard-work-item-{}", fixture.work_item_id)),
             terminal_executable: fixture.terminal.clone(),
             native_executable: fixture.native.clone(),
             idempotency_key: idempotency_key.to_owned(),
@@ -1505,7 +1534,8 @@ mod tests {
                              (SELECT COUNT(*) FROM managed_sessions),
                              (SELECT COUNT(*) FROM restore_memberships),
                              (SELECT COUNT(*) FROM live_observations),
-                             (SELECT status FROM launch_intents WHERE id = ?1)",
+                             (SELECT status FROM launch_intents WHERE id = ?1),
+                             (SELECT terminal_window FROM launch_intents WHERE id = ?1)",
                         [prepared.intent_id.to_string()],
                         |row| {
                             Ok((
@@ -1515,13 +1545,25 @@ mod tests {
                                 row.get::<_, i64>(3)?,
                                 row.get::<_, i64>(4)?,
                                 row.get::<_, String>(5)?,
+                                row.get::<_, String>(6)?,
                             ))
                         },
                     )
                     .map_err(Into::into)
             })
             .expect("binding counts");
-        assert_eq!(counts, (1, 1, 1, 1, 1, "bound".to_owned()));
+        assert_eq!(
+            counts,
+            (
+                1,
+                1,
+                1,
+                1,
+                1,
+                "bound".to_owned(),
+                format!("workboard-work-item-{}", fixture.work_item_id)
+            )
+        );
     }
 
     #[test]
@@ -1704,7 +1746,7 @@ mod tests {
     }
 
     #[test]
-    fn ongoing_hooks_update_liveness_and_end_restore_membership() {
+    fn ongoing_hooks_end_liveness_but_preserve_restore_membership() {
         let mut fixture = fixture();
         let launch_request = request(&fixture, "ongoing-hooks");
         let prepared = SessionLaunchService::new(&mut fixture.store)
@@ -1743,7 +1785,8 @@ mod tests {
                              (SELECT status FROM live_observations
                               ORDER BY observed_at DESC LIMIT 1),
                              (SELECT status FROM managed_sessions),
-                             (SELECT active_until IS NOT NULL FROM restore_memberships),
+                             (SELECT active_until IS NULL FROM restore_memberships),
+                             (SELECT removed_at IS NULL FROM restore_entries),
                              (SELECT COUNT(*) FROM live_observations)",
                         [],
                         |row| {
@@ -1752,13 +1795,14 @@ mod tests {
                                 row.get::<_, String>(1)?,
                                 row.get::<_, i64>(2)?,
                                 row.get::<_, i64>(3)?,
+                                row.get::<_, i64>(4)?,
                             ))
                         },
                     )
                     .map_err(Into::into)
             })
             .expect("managed lifecycle state");
-        assert_eq!(state, ("stopped".to_owned(), "stopped".to_owned(), 1, 3));
+        assert_eq!(state, ("stopped".to_owned(), "stopped".to_owned(), 1, 1, 3));
     }
 
     #[test]

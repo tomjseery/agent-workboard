@@ -193,6 +193,42 @@ pub fn pick(
     }
 }
 
+pub fn checklist(
+    title: &str,
+    candidates: Vec<SelectionCandidate>,
+) -> Result<Option<Vec<String>>, AppError> {
+    let mut state = ChecklistState {
+        title: title.to_owned(),
+        selected: vec![true; candidates.len()],
+        candidates,
+        cursor: 0,
+    };
+    let mut terminal = TerminalSession::new()?;
+    loop {
+        terminal
+            .terminal
+            .draw(|frame| render_checklist(frame, &state))
+            .map_err(terminal_error)?;
+        if event::poll(Duration::from_millis(100)).map_err(terminal_error)?
+            && let Event::Key(key) = event::read().map_err(terminal_error)?
+            && matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+        {
+            match key.code {
+                KeyCode::Esc => return Ok(None),
+                KeyCode::Enter => return Ok(Some(state.selection())),
+                KeyCode::Down | KeyCode::Char('j') => state.move_down(),
+                KeyCode::Up | KeyCode::Char('k') => {
+                    state.cursor = state.cursor.saturating_sub(1);
+                }
+                KeyCode::Char(' ') => state.toggle(),
+                KeyCode::Char('a') => state.selected.fill(true),
+                KeyCode::Char('n') => state.selected.fill(false),
+                _ => {}
+            }
+        }
+    }
+}
+
 pub fn plain(snapshot: &WorkspaceSnapshot) -> String {
     let mut output = format!(
         "Agent Workboard: {}\nRepositories: {}\nEpics: {}\nFeatures: {}\nWork items: {}\n",
@@ -248,6 +284,37 @@ struct PickerState {
     candidates: Vec<SelectionCandidate>,
     query: String,
     selected: usize,
+}
+
+struct ChecklistState {
+    title: String,
+    candidates: Vec<SelectionCandidate>,
+    selected: Vec<bool>,
+    cursor: usize,
+}
+
+impl ChecklistState {
+    fn move_down(&mut self) {
+        self.cursor = self
+            .cursor
+            .saturating_add(1)
+            .min(self.candidates.len().saturating_sub(1));
+    }
+
+    fn toggle(&mut self) {
+        if let Some(selected) = self.selected.get_mut(self.cursor) {
+            *selected = !*selected;
+        }
+    }
+
+    fn selection(&self) -> Vec<String> {
+        self.candidates
+            .iter()
+            .zip(&self.selected)
+            .filter(|(_, selected)| **selected)
+            .map(|(candidate, _)| candidate.id.clone())
+            .collect()
+    }
 }
 
 impl PickerState {
@@ -316,6 +383,37 @@ fn render_picker(frame: &mut Frame<'_>, picker: &PickerState) {
     frame.render_widget(
         Paragraph::new("↑/↓ navigate  Enter select  Esc cancel"),
         sections[2],
+    );
+}
+
+fn render_checklist(frame: &mut Frame<'_>, state: &ChecklistState) {
+    let sections =
+        Layout::vertical([Constraint::Min(4), Constraint::Length(2)]).split(frame.area());
+    let items = state
+        .candidates
+        .iter()
+        .zip(&state.selected)
+        .enumerate()
+        .map(|(index, (candidate, selected))| {
+            let cursor = if index == state.cursor { ">" } else { " " };
+            let check = if *selected { "x" } else { " " };
+            ListItem::new(format!(
+                "{cursor} [{check}] {}  {}",
+                candidate.label, candidate.metadata
+            ))
+        })
+        .collect::<Vec<_>>();
+    frame.render_widget(
+        List::new(items).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(state.title.clone()),
+        ),
+        sections[0],
+    );
+    frame.render_widget(
+        Paragraph::new("Up/Down navigate  Space toggle  a all  n none  Enter recover  Esc cancel"),
+        sections[1],
     );
 }
 

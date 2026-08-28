@@ -62,6 +62,66 @@ pub trait GitWorktreeCreator {
 
 pub struct GitCli;
 
+impl GitCli {
+    pub fn restore_missing_worktree(
+        &self,
+        repository: &Path,
+        target: &Path,
+        branch: &str,
+    ) -> Result<ResolvedWorktree, AppError> {
+        if !target.is_absolute() {
+            return Err(AppError::WorktreePathNotAbsolute(target.to_owned()));
+        }
+        if target.exists() {
+            return Err(AppError::RecreateCheckoutPathExists(target.to_owned()));
+        }
+        let discovered = self.discover(repository)?;
+        let full_branch = format!("refs/heads/{branch}");
+        let missing_registration = discovered.worktrees.iter().any(|worktree| {
+            !worktree.present && worktree.branch.as_deref() == Some(full_branch.as_str())
+        });
+        if !missing_registration {
+            return self.recreate(repository, target, branch, false, branch);
+        }
+        if discovered.worktrees.iter().any(|worktree| {
+            worktree.present
+                && worktree.branch.as_deref() == Some(full_branch.as_str())
+                && !paths_equal(&worktree.path, target)
+        }) {
+            return Err(AppError::GitCommand {
+                message: format!("branch {branch} is already checked out elsewhere"),
+            });
+        }
+        let parent = target
+            .parent()
+            .filter(|value| value.is_dir())
+            .ok_or_else(|| AppError::RecreateCheckoutParentMissing(target.to_owned()))?;
+        let file_name = target
+            .file_name()
+            .ok_or_else(|| AppError::RecreateCheckoutParentMissing(target.to_owned()))?;
+        let target = git_compatible_path(
+            &parent
+                .canonicalize()
+                .map_err(AppError::GitIo)?
+                .join(file_name),
+        );
+        successful_text(run_git(
+            repository,
+            &["check-ref-format", "--branch", branch],
+        )?)?;
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(repository)
+            .args(["worktree", "add", "--force", "--"])
+            .arg(&target)
+            .arg(branch)
+            .output()
+            .map_err(AppError::GitIo)?;
+        successful_text(output)?;
+        self.resolve(&target)
+    }
+}
+
 impl GitWorktreeCreator for GitCli {
     fn recreate(
         &self,
@@ -383,9 +443,17 @@ fn git_compatible_path(path: &Path) -> PathBuf {
 
 #[cfg(windows)]
 fn paths_equal(left: &Path, right: &Path) -> bool {
-    left.as_os_str()
-        .to_string_lossy()
-        .eq_ignore_ascii_case(&right.as_os_str().to_string_lossy())
+    windows_path_text(left).eq_ignore_ascii_case(&windows_path_text(right))
+}
+
+#[cfg(windows)]
+fn windows_path_text(path: &Path) -> String {
+    let value = path.as_os_str().to_string_lossy().replace('/', "\\");
+    value
+        .strip_prefix(r"\\?\")
+        .unwrap_or(&value)
+        .trim_end_matches('\\')
+        .to_owned()
 }
 
 #[cfg(not(windows))]

@@ -24,9 +24,9 @@ pub use identity::{
     AssociationEventId, AssociationIntervalId, CheckoutId, CheckoutPathId, ConversationId,
     DocumentId, DocumentReferenceId, EpicId, FeatureId, GitOperationIntentId, LaunchIntentId,
     LaunchLeaseId, LiveObservationId, ManagedSessionId, ManagedSessionRequestId, OperationIntentId,
-    RepositoryId, RepositoryPathId, RestoreMembershipId, SessionBindingId, TerminalLayoutId,
-    TerminalTabId, WorkItemCheckpointId, WorkItemId, WorkflowEventId, WorkflowRunId, WorkspaceId,
-    WorktreeId,
+    RecoveryAttemptId, RepositoryId, RepositoryPathId, RestoreMembershipId, SessionBindingId,
+    TerminalLayoutId, TerminalTabId, WorkItemCheckpointId, WorkItemId, WorkflowEventId,
+    WorkflowRunId, WorkspaceId, WorktreeId,
 };
 pub use launch::{
     CommandSpec, LaunchSpecError, ManagedLaunchMode, ManagedLaunchRequest, ManagedLaunchSpec,

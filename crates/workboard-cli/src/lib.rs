@@ -36,6 +36,7 @@ use crate::selector::{SelectionCandidate, SelectionResult};
 
 mod board;
 mod mcp;
+mod recovery;
 mod selector;
 
 #[derive(Debug, Parser)]
@@ -65,11 +66,34 @@ enum Command {
     Session(SessionArgs),
     Integration(IntegrationArgs),
     Workflow(WorkflowArgs),
+    Recover(RecoverArgs),
     Mcp,
     Snapshot,
     Backup(DestinationArgs),
     Export(DestinationArgs),
     Import(ImportArgs),
+}
+
+#[derive(Debug, Args)]
+struct RecoverArgs {
+    #[arg(long)]
+    since: Option<String>,
+    #[arg(long)]
+    dry_run: bool,
+    #[arg(long)]
+    yes: bool,
+    #[arg(long)]
+    replace_unresumable: bool,
+    #[arg(long = "session")]
+    sessions: Vec<String>,
+    #[arg(long)]
+    terminal: Option<PathBuf>,
+    #[arg(long)]
+    claude: Option<PathBuf>,
+    #[arg(long)]
+    codex: Option<PathBuf>,
+    #[arg(long)]
+    idempotency_key: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -232,6 +256,11 @@ enum SessionCommand {
         work_item: Option<String>,
         #[arg(long, value_enum)]
         tool: Option<ToolArg>,
+    },
+    RemoveFromRestore {
+        session: Option<String>,
+        #[arg(long, default_value = "removed by user")]
+        reason: String,
     },
 }
 
@@ -687,6 +716,7 @@ fn execute(cli: Cli) -> Result<String, AppError> {
                 checkout_id: checkout.checkout_id,
                 working_directory: checkout.path,
                 title: work_item.title,
+                terminal_window: Some(format!("workboard-feature-{}", work_item.feature_id)),
                 terminal_executable: terminal.unwrap_or_else(default_terminal_executable),
                 native_executable: native.unwrap_or_else(|| default_native_executable(tool)),
                 idempotency_key: idempotency_key.unwrap_or_else(new_idempotency_key),
@@ -749,6 +779,7 @@ fn execute(cli: Cli) -> Result<String, AppError> {
             let session =
                 select_session(&snapshot, session.as_deref(), requested_tool, cli.json)?.clone();
             let target = application.managed_session_target(session.id)?;
+            let terminal_window = terminal_window_key(&snapshot, target.owner);
             let context = application.native_sources().resume_context(
                 session.id,
                 target.checkout.path.clone(),
@@ -763,6 +794,7 @@ fn execute(cli: Cli) -> Result<String, AppError> {
                 checkout_id: target.checkout.checkout_id,
                 working_directory: target.checkout.path,
                 title: target.checkout.title,
+                terminal_window: Some(terminal_window),
                 terminal_executable: terminal.unwrap_or_else(default_terminal_executable),
                 native_executable: native.unwrap_or_else(|| default_native_executable(target.tool)),
                 idempotency_key: idempotency_key.unwrap_or_else(new_idempotency_key),
@@ -804,6 +836,26 @@ fn execute(cli: Cli) -> Result<String, AppError> {
                 &binding,
                 cli.json,
                 format!("Adopted session into {}", work_item.title),
+            )
+        }
+        Some(Command::Session(SessionArgs {
+            command: SessionCommand::RemoveFromRestore { session, reason },
+        })) => {
+            let workspace_id = resolve_workspace(&application, cli.workspace)?;
+            let snapshot = application.snapshot(workspace_id)?;
+            let session = select_session(&snapshot, session.as_deref(), None, cli.json)?.clone();
+            application.recovery().remove_from_restore(
+                session.id,
+                &reason,
+                time::OffsetDateTime::now_utc(),
+            )?;
+            output(
+                &session,
+                cli.json,
+                format!(
+                    "Removed {} from the restore set",
+                    session.native.native_id()
+                ),
             )
         }
         Some(Command::Workflow(WorkflowArgs { command })) => {
@@ -977,6 +1029,10 @@ fn execute(cli: Cli) -> Result<String, AppError> {
                 cli.json,
             )
         }
+        Some(Command::Recover(arguments)) => {
+            let workspace_id = resolve_workspace(&application, cli.workspace)?;
+            recovery::execute_recover(&mut application, workspace_id, arguments, cli.json)
+        }
         Some(Command::Snapshot) => {
             let workspace_id = resolve_workspace(&application, cli.workspace)?;
             let snapshot = application.snapshot(workspace_id)?;
@@ -1033,6 +1089,24 @@ fn output<T: Serialize>(value: &T, json: bool, human: String) -> Result<String, 
     }
 }
 
+fn terminal_window_key(
+    snapshot: &workboard_core::WorkspaceSnapshot,
+    owner: HierarchyOwner,
+) -> String {
+    match owner {
+        HierarchyOwner::Epic(id) => format!("workboard-epic-{id}"),
+        HierarchyOwner::Feature(id) => format!("workboard-feature-{id}"),
+        HierarchyOwner::WorkItem(id) => snapshot
+            .work_items
+            .iter()
+            .find(|item| item.id == id)
+            .map_or_else(
+                || format!("workboard-work-item-{id}"),
+                |item| format!("workboard-feature-{}", item.feature_id),
+            ),
+    }
+}
+
 fn resolve_workspace(
     application: &WorkboardApplication,
     requested: Option<WorkspaceId>,
@@ -1067,6 +1141,7 @@ fn execute_epic_continue(
             checkout_id: checkout.checkout_id,
             working_directory: checkout.path,
             title: epic.title.clone(),
+            terminal_window: Some(format!("workboard-epic-{}", epic.id)),
             terminal_executable: arguments
                 .terminal
                 .unwrap_or_else(default_terminal_executable),
@@ -1198,6 +1273,7 @@ fn execute_feature_create(
             checkout_id: checkout.checkout_id,
             working_directory: checkout.path,
             title: draft.title.clone(),
+            terminal_window: Some(format!("workboard-feature-{}", draft.feature_id)),
             terminal_executable: arguments
                 .terminal
                 .unwrap_or_else(default_terminal_executable),
@@ -1623,6 +1699,11 @@ fn execute_managed_session_request(
     now: time::OffsetDateTime,
 ) -> Result<serde_json::Value, AppError> {
     ensure_integration(application, request.tool, now)?;
+    let hierarchy = application.assigned_hierarchy(workflow_token, now)?;
+    let terminal_window = terminal_window_key(
+        &hierarchy.snapshot,
+        HierarchyOwner::WorkItem(request.work_item_id),
+    );
     let idempotency_key = request.idempotency_key.clone();
     let terminal = request.terminal.unwrap_or_else(default_terminal_executable);
     let native = request
@@ -1659,6 +1740,7 @@ fn execute_managed_session_request(
             checkout_id: requested.checkout_id,
             working_directory: requested.working_directory.clone(),
             title: requested.title.clone(),
+            terminal_window: Some(terminal_window),
             terminal_executable: terminal,
             native_executable: native,
             idempotency_key: format!("{}:launch", requested.request_id),
@@ -1764,11 +1846,14 @@ fn markdown_title(body: &str) -> Option<String> {
 mod tests {
     use std::process::Command;
 
+    use clap::Parser;
     use tempfile::TempDir;
 
     use crate::selector::SelectionCandidate;
 
-    use super::{execute_from, select_candidate, slugify};
+    use super::{
+        Cli, Command as CliCommand, SessionCommand, execute_from, select_candidate, slugify,
+    };
 
     #[test]
     fn derives_safe_slugs() {
@@ -1781,6 +1866,44 @@ mod tests {
         let error =
             execute_from(["workboard", "epic", "create"]).expect_err("missing title should fail");
         assert_eq!(error.code(), "domain");
+    }
+
+    #[test]
+    fn recovery_commands_parse_period_selection_confirmation_and_removal() {
+        let cli = Cli::try_parse_from([
+            "workboard",
+            "recover",
+            "--since",
+            "yesterday",
+            "--dry-run",
+            "--session",
+            "thread-one",
+        ])
+        .expect("recover command");
+        let Some(CliCommand::Recover(arguments)) = cli.command else {
+            panic!("expected recover command");
+        };
+        assert_eq!(arguments.since.as_deref(), Some("yesterday"));
+        assert!(arguments.dry_run);
+        assert_eq!(arguments.sessions, ["thread-one"]);
+
+        let cli = Cli::try_parse_from([
+            "workboard",
+            "session",
+            "remove-from-restore",
+            "thread-one",
+            "--reason",
+            "completed",
+        ])
+        .expect("remove restore command");
+        let Some(CliCommand::Session(arguments)) = cli.command else {
+            panic!("expected session command");
+        };
+        assert!(matches!(
+            arguments.command,
+            SessionCommand::RemoveFromRestore { session, reason }
+                if session.as_deref() == Some("thread-one") && reason == "completed"
+        ));
     }
 
     #[test]
