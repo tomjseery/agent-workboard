@@ -5,8 +5,8 @@
 > irreversible or ambiguous finding: record its durable disposition, take the safe path, and keep going.
 
 **Review status:** `complete`
-**Reviewed up to commit:** `a43df92ba0e9929cf002d9782123c6c61fe57258`  `(2026-08-28)`
-**Security-reviewed up to commit:** `a43df92ba0e9929cf002d9782123c6c61fe57258`  `(2026-08-28)`
+**Reviewed up to commit:** `118cd48287ede1451bf898c4ef2952340a6fa384`  `(2026-08-28)`
+**Security-reviewed up to commit:** `118cd48287ede1451bf898c4ef2952340a6fa384`  `(2026-08-28)`
 **Judgment:** `changes-requested`
 
 ## Review pass — 2026-08-28 — full
@@ -265,3 +265,29 @@
   Resolved by adding a new pre-audit compatibility migration that classifies attestations against the issued
   audit contract, removes only unusable pre-audit rows, preserves completed evidence, and reinstalls insert,
   update, and delete guards; the expanded schema-17 fixture proves each path and a healthy retry.
+
+## Review pass — 2026-08-28 — incremental
+
+**Candidate base:** `a43df92ba0e9929cf002d9782123c6c61fe57258`
+**Candidate head:** `118cd48287ede1451bf898c4ef2952340a6fa384`
+**Candidate branch:** `Feature/Phase7-Migration-Completion`
+**Candidate scope:** `all`
+**Candidate path-set:** `sha256:335501e5eaca737f34a0cb43006d8cf5027a0d61ee71065c04c0aafd85397c3c` `(3 paths)`
+**Candidate bundle:** `C:\Users\TOMMYS~1\AppData\Local\Temp\agent-workboard-review-6bd8d6e430434b769e8504d7592957ca`
+**Candidate bundle identity:** `sha256:31bdc48cb7ee4f49807ce3e8afbd086bbdf8d8cc3baaa828676afeacaa51d284`
+**Work-order path:** `reviews/Feature-Phase7-Migration-Completion.md`
+**Work-order mode:** `append`
+**Pass judgment:** `changes-requested`
+
+### Findings
+
+- [x] **P7-019 — HIGH — security/correctness** — `crates/workboard-application/src/storage.rs:1334`
+  Migration 21 performs its classification cleanup only once. After audit 18 fails at that checkpoint, a
+  same-workspace direct attestation with a non-`explicit_repair` authority or any pre-audit legacy attestation
+  passes the repository-only insert guard, becomes immutable, and is never cleaned because migration 21 is
+  already stamped. Re-run classification cleanup before every pending audit retry or install a repair-aware
+  guard, and prove post-checkpoint unusable rows remain recoverable while a genuine schema-20 audited row is
+  preserved unchanged through the final guard upgrade.
+  Resolved by re-running the transactional classification cleanup before every pending audit attempt. The
+  regression injects unusable rows after schema 21, proves retry removes them, and verifies a complete
+  schema-20 attestation set and all three guards survive upgrade to schema 22 unchanged.

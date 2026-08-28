@@ -1118,6 +1118,7 @@ fn apply_import_repository_migrations(
             IMPORT_BATCH_PRE_AUDIT_ATTESTATION_REPAIR_SQL,
             repair_pre_audit_attestations,
         )?;
+        prepare_import_batch_repository_audit(connection)?;
     }
     apply_validated_migration(
         connection,
@@ -1356,6 +1357,14 @@ fn repair_pre_audit_attestations(transaction: &Transaction<'_>) -> Result<(), Ap
              SELECT RAISE(ABORT, 'import batch repository attestation cannot be deleted');
          END;",
     )?;
+    Ok(())
+}
+
+fn prepare_import_batch_repository_audit(connection: &Connection) -> Result<(), AppError> {
+    let transaction = Transaction::new_unchecked(connection, TransactionBehavior::Immediate)?;
+    transaction.execute_batch(IMPORT_BATCH_PRE_AUDIT_ATTESTATION_REPAIR_SQL)?;
+    repair_pre_audit_attestations(&transaction)?;
+    transaction.commit()?;
     Ok(())
 }
 
@@ -2327,6 +2336,44 @@ mod tests {
         );
         assert!(invalid_attestation.is_err());
         connection
+            .execute_batch(
+                "INSERT INTO import_batch_repository_attestations (
+                     import_id, repository_id, authority, confirmed_at
+                 ) VALUES (
+                     'unusable-authority-batch', 'code-repository', 'captured_direct',
+                     '2026-08-28T12:00:00Z'
+                 );
+                 INSERT INTO import_batch_repository_attestations (
+                     import_id, repository_id, authority, confirmed_at
+                 ) VALUES (
+                     'legacy-attestation-batch', 'code-repository', 'explicit_repair',
+                     '2026-08-28T12:00:00Z'
+                 );",
+            )
+            .expect("seed unusable attestations after repair checkpoint");
+        drop(connection);
+
+        let error = match SqliteStore::open(&path) {
+            Ok(_) => panic!("post-checkpoint unusable attestations must be cleared"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("invalid-attestation-batch"));
+        assert!(error.to_string().contains("unusable-authority-batch"));
+
+        let connection = Connection::open(&path).expect("reopen repair database");
+        let discarded_retry_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM import_batch_repository_attestations
+                  WHERE import_id IN (
+                      'unusable-authority-batch',
+                      'legacy-attestation-batch'
+                  )",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count retry-discarded attestations");
+        assert_eq!(discarded_retry_count, 0);
+        connection
             .execute(
                 "INSERT INTO import_batch_repository_attestations (
                      import_id, repository_id, authority, confirmed_at
@@ -2391,6 +2438,99 @@ mod tests {
         let health = store.health().expect("storage health");
         assert_eq!(health.schema_version, 22);
         assert!(health.is_healthy());
+        let audited_attestations: Vec<(String, String, String, String)> = store
+            .read(|connection| {
+                Ok(connection
+                    .prepare(
+                        "SELECT import_id, repository_id, authority, confirmed_at
+                           FROM import_batch_repository_attestations
+                          ORDER BY import_id",
+                    )?
+                    .query_map([], |row| {
+                        Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?)
+            })
+            .expect("snapshot audited attestations");
+        drop(store);
+
+        let connection = Connection::open(&path).expect("open schema 20 database");
+        connection
+            .execute_batch(
+                "DELETE FROM schema_migrations WHERE version >= 21;
+                 PRAGMA user_version = 20;",
+            )
+            .expect("prepare completed schema 20 audit");
+        drop(connection);
+
+        let store = SqliteStore::open(&path).expect("upgrade completed schema 20 audit");
+        let upgraded_attestations: Vec<(String, String, String, String)> = store
+            .read(|connection| {
+                Ok(connection
+                    .prepare(
+                        "SELECT import_id, repository_id, authority, confirmed_at
+                           FROM import_batch_repository_attestations
+                          ORDER BY import_id",
+                    )?
+                    .query_map([], |row| {
+                        Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?)
+            })
+            .expect("read upgraded schema 20 attestations");
+        assert_eq!(upgraded_attestations, audited_attestations);
+        let health = store.health().expect("upgraded storage health");
+        assert_eq!(health.schema_version, 22);
+        assert!(health.is_healthy());
+        drop(store);
+
+        let connection = Connection::open(&path).expect("inspect upgraded guards");
+        connection
+            .execute(
+                "INSERT INTO import_batches (
+                     id, workspace_id, repository_id, kind, source_path, source_head,
+                     preview_hash, planning_commit, imported_at
+                 ) VALUES (
+                     'post-audit-validation-batch', 'workspace', 'code-repository',
+                     'concertable_plans', 'C:/post-audit-validation', 'source-head',
+                     'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff',
+                     'planning-commit', ?1
+                 )",
+                [OffsetDateTime::now_utc().unix_timestamp_nanos().to_string()],
+            )
+            .expect("seed post-audit validation batch");
+        assert!(
+            connection
+                .execute(
+                    "INSERT INTO import_batch_repository_attestations (
+                         import_id, repository_id, authority, confirmed_at
+                     ) VALUES (
+                         'post-audit-validation-batch', 'store-repository',
+                         'explicit_repair', '2026-08-28T14:00:00Z'
+                     )",
+                    [],
+                )
+                .is_err()
+        );
+        assert!(
+            connection
+                .execute(
+                    "UPDATE import_batch_repository_attestations
+                        SET confirmed_at = '2026-08-28T14:00:00Z'
+                      WHERE import_id = 'valid-attestation-batch'",
+                    [],
+                )
+                .is_err()
+        );
+        assert!(
+            connection
+                .execute(
+                    "DELETE FROM import_batch_repository_attestations
+                      WHERE import_id = 'valid-attestation-batch'",
+                    [],
+                )
+                .is_err()
+        );
     }
 
     #[test]
