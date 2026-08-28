@@ -1443,6 +1443,7 @@ mod tests {
                 checkout_id: checkout.checkout_id,
                 working_directory: fixture.checkout.clone(),
                 title: draft.title.clone(),
+                terminal_window: Some(format!("workboard-feature-{}", draft.feature_id)),
                 terminal_executable: fixture.terminal.clone(),
                 native_executable: fixture.native.clone(),
                 idempotency_key: "launch-availability-planner".to_owned(),

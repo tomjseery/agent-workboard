@@ -20,6 +20,7 @@ use crate::integration_service::IntegrationService;
 use crate::native_sources::NativeSourceService;
 use crate::planning_store::{DocumentFrontMatter, PlanningStore, StoredDocument};
 use crate::planning_workflow::PlanningWorkflowService;
+use crate::recovery::RecoveryService;
 use crate::session_launch::SessionLaunchService;
 use crate::storage::{SqliteStore, StorageHealth};
 use crate::workflow_operations::{AssignedHierarchy, WorkflowOperationService};
@@ -98,6 +99,10 @@ impl WorkboardApplication {
 
     pub fn planning_workflows(&mut self) -> PlanningWorkflowService<'_> {
         PlanningWorkflowService::new(&mut self.store)
+    }
+
+    pub fn recovery(&mut self) -> RecoveryService<'_> {
+        RecoveryService::new(&mut self.store)
     }
 
     pub fn workflow_operations(&mut self) -> WorkflowOperationService<'_> {
