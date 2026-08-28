@@ -1764,6 +1764,15 @@ mod tests {
         assert_eq!(membership_count, 6);
         assert_eq!(unrelated_membership, 0);
         let synthetic_document_id = preview.epics[1].document_id;
+        let recursive_triggers: i64 = application
+            .store
+            .read(|connection| {
+                connection
+                    .pragma_query_value(None, "recursive_triggers", |row| row.get(0))
+                    .map_err(Into::into)
+            })
+            .expect("read recursive trigger setting");
+        assert_eq!(recursive_triggers, 0);
         let (evidence_before, attestation_before) = application
             .store
             .read(|connection| {
@@ -1836,6 +1845,59 @@ mod tests {
                 .expect_err("reject immutable evidence mutation");
             assert!(error.to_string().contains(expected), "{error}");
         }
+        let replacement_hash = "a".repeat(64);
+        let evidence_replace_error = application
+            .store
+            .write(|transaction| {
+                transaction.execute(
+                    "UPDATE document_revisions SET content_hash = ?2
+                      WHERE document_id = ?1 AND revision = ?3",
+                    params![
+                        synthetic_document_id.to_string(),
+                        replacement_hash,
+                        evidence_before.0,
+                    ],
+                )?;
+                transaction.execute(
+                    "INSERT OR REPLACE INTO import_document_evidence (
+                         import_id, document_id, revision, revision_content_hash,
+                         source_provenance, source_path, source_hash
+                     ) VALUES (?1, ?2, ?3, ?4, 'synthetic', NULL, NULL)",
+                    params![
+                        first.import_id.to_string(),
+                        synthetic_document_id.to_string(),
+                        evidence_before.0,
+                        replacement_hash,
+                    ],
+                )?;
+                Ok(())
+            })
+            .expect_err("reject coordinated revision and evidence replacement");
+        assert!(
+            evidence_replace_error
+                .to_string()
+                .contains("import document evidence is immutable")
+        );
+        let attestation_replace_error = application
+            .store
+            .write(|transaction| {
+                transaction.execute(
+                    "INSERT OR REPLACE INTO import_document_synthetic_attestations (
+                         import_id, document_id, authority, attested_at
+                     ) VALUES (?1, ?2, 'explicit_repair', 'replacement')",
+                    params![
+                        first.import_id.to_string(),
+                        synthetic_document_id.to_string(),
+                    ],
+                )?;
+                Ok(())
+            })
+            .expect_err("reject synthetic attestation replacement");
+        assert!(
+            attestation_replace_error
+                .to_string()
+                .contains("synthetic import document attestation is immutable")
+        );
         let (evidence_after, attestation_after) = application
             .store
             .read(|connection| {
@@ -1873,6 +1935,20 @@ mod tests {
             .expect("reread immutable import evidence");
         assert_eq!(evidence_after, evidence_before);
         assert_eq!(attestation_after, attestation_before);
+        let revision_hash_after: String = application
+            .store
+            .read(|connection| {
+                connection
+                    .query_row(
+                        "SELECT content_hash FROM document_revisions
+                          WHERE document_id = ?1 AND revision = ?2",
+                        params![synthetic_document_id.to_string(), evidence_before.0],
+                        |row| row.get(0),
+                    )
+                    .map_err(Into::into)
+            })
+            .expect("read revision after rejected replacement");
+        assert_eq!(revision_hash_after, evidence_before.1);
         let partial_feature_id = FeatureId::generate();
         let partial_document_id = DocumentId::generate();
         application
@@ -3080,7 +3156,7 @@ mod tests {
         let target_document_id = preview.epics[0].document_id;
         drop(application);
 
-        let connection = Connection::open(&database).expect("open schema 29 database");
+        let connection = Connection::open(&database).expect("open schema 30 database");
         restore_schema_26_import_database(&connection);
         connection
             .execute_batch("DROP TRIGGER import_source_destinations_finalized_insert;")
@@ -3178,14 +3254,14 @@ mod tests {
         drop(connection);
 
         let mut application =
-            WorkboardApplication::open(&database).expect("complete repaired schema 29 upgrade");
+            WorkboardApplication::open(&database).expect("complete repaired schema 30 upgrade");
         assert_eq!(
             application
                 .store
                 .health()
-                .expect("repaired schema 29 health")
+                .expect("repaired schema 30 health")
                 .schema_version,
-            29
+            30
         );
         let (membership_count, evidence_count, source_evidence_count): (i64, i64, i64) = application
             .store
@@ -3255,7 +3331,7 @@ mod tests {
         let synthetic_document_id = preview.epics[1].document_id;
         drop(application);
 
-        let connection = Connection::open(&database).expect("open schema 29 database");
+        let connection = Connection::open(&database).expect("open schema 30 database");
         restore_schema_28_import_database(&connection);
         connection
             .execute_batch("DROP TRIGGER import_document_synthetic_attestations_no_delete;")
@@ -3334,10 +3410,209 @@ mod tests {
         drop(connection);
 
         let mut application =
-            WorkboardApplication::open(&database).expect("complete repaired schema 29 upgrade");
+            WorkboardApplication::open(&database).expect("complete repaired schema 30 upgrade");
         let replay = application
             .apply_concertable_import(workspace.workspace.id, repository.id, &preview)
             .expect("replay repaired schema 28 import");
+        assert!(replay.already_applied);
+        assert_eq!(replay.import_id, first.import_id);
+        assert_eq!(replay.epics, first.epics);
+        assert_eq!(replay.features, first.features);
+        assert_eq!(replay.work_items, first.work_items);
+        assert_eq!(replay.source_destinations, first.source_destinations);
+    }
+
+    #[test]
+    fn schema_28_contradictory_source_attestation_requires_repair_before_upgrade() {
+        let fixture = Fixture::new();
+        let database = fixture.directory.path().join("workboard.sqlite");
+        let planning_store = fixture.directory.path().join("planning-store");
+        let mut application = WorkboardApplication::open(&database).expect("open Workboard");
+        let workspace = application
+            .initialise_workspace(InitialiseWorkspace {
+                slug: Slug::new("demo").expect("workspace slug"),
+                title: "Demo".to_owned(),
+                planning_store_path: planning_store,
+            })
+            .expect("initialise workspace");
+        let repository = application
+            .register_repository(RegisterRepository {
+                workspace_id: workspace.workspace.id,
+                slug: Slug::new("concertable").expect("repository slug"),
+                title: "Concertable".to_owned(),
+                path: fixture.source.clone(),
+            })
+            .expect("register repository");
+        let preview = preview_concertable_plans(&fixture.source).expect("preview plans");
+        let first = application
+            .apply_concertable_import(workspace.workspace.id, repository.id, &preview)
+            .expect("apply import");
+        let target_document_id = preview.epics[0].document_id;
+        let source: (String, String, String, String) = application
+            .store
+            .read(|connection| {
+                connection
+                    .query_row(
+                        "SELECT source_path, source_hash, destination_kind, destination_id
+                           FROM import_source_destinations
+                          WHERE import_id = ?1 AND document_id = ?2",
+                        params![first.import_id.to_string(), target_document_id.to_string(),],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                    )
+                    .map_err(Into::into)
+            })
+            .expect("read source-backed Epic evidence");
+        drop(application);
+
+        let connection = Connection::open(&database).expect("open schema 30 database");
+        restore_schema_28_import_database(&connection);
+        connection
+            .execute_batch(
+                "DROP TRIGGER import_source_destinations_finalized_insert;
+                 DROP TRIGGER import_source_destinations_finalized_delete;",
+            )
+            .expect("open schema 28 source repair slots");
+        connection
+            .execute(
+                "DELETE FROM import_source_destinations
+                  WHERE import_id = ?1 AND document_id = ?2",
+                params![first.import_id.to_string(), target_document_id.to_string(),],
+            )
+            .expect("temporarily remove schema 28 source");
+        connection
+            .execute(
+                "INSERT INTO import_document_synthetic_attestations (
+                     import_id, document_id, authority, attested_at
+                 ) VALUES (?1, ?2, 'explicit_repair', 'contradictory-repair')",
+                params![first.import_id.to_string(), target_document_id.to_string(),],
+            )
+            .expect("record contradictory schema 28 attestation");
+        connection
+            .execute(
+                "INSERT INTO import_source_destinations (
+                     import_id, source_path, source_hash, destination_kind,
+                     destination_id, document_id
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    first.import_id.to_string(),
+                    source.0,
+                    source.1,
+                    source.2,
+                    source.3,
+                    target_document_id.to_string(),
+                ],
+            )
+            .expect("restore contradictory schema 28 source");
+        connection
+            .execute_batch(
+                "CREATE TRIGGER import_source_destinations_finalized_insert
+                 BEFORE INSERT ON import_source_destinations
+                 WHEN EXISTS (
+                     SELECT 1 FROM import_document_membership_finalizations finalization
+                      WHERE finalization.import_id = NEW.import_id
+                 )
+                 BEGIN
+                     SELECT RAISE(ABORT, 'import source destinations are finalized');
+                 END;
+                 CREATE TRIGGER import_source_destinations_finalized_delete
+                 BEFORE DELETE ON import_source_destinations
+                 WHEN EXISTS (
+                     SELECT 1 FROM import_document_membership_finalizations finalization
+                      WHERE finalization.import_id = OLD.import_id
+                 )
+                 BEGIN
+                     SELECT RAISE(ABORT, 'import source destinations are finalized');
+                 END;",
+            )
+            .expect("close schema 28 source repair slots");
+        drop(connection);
+
+        let upgrade_error = match WorkboardApplication::open(&database) {
+            Ok(_) => panic!("contradictory schema 28 provenance must stop schema 29"),
+            Err(error) => error,
+        };
+        assert!(upgrade_error.to_string().contains("schema migration 29"));
+        assert!(
+            upgrade_error
+                .to_string()
+                .contains(&first.import_id.to_string())
+        );
+        let connection = Connection::open(&database).expect("open rejected schema 28 database");
+        let version: i64 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .expect("read rejected contradiction upgrade version");
+        let migration_state: (i64, i64) = connection
+            .query_row(
+                "SELECT
+                     (SELECT COUNT(*) FROM schema_migrations WHERE version = 29),
+                     (SELECT COUNT(*) FROM schema_migrations WHERE version = 30)",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("read rejected contradiction migration stamps");
+        let preserved_state: (i64, i64, i64, i64, i64) = connection
+            .query_row(
+                "SELECT
+                     (SELECT COUNT(*) FROM import_source_destinations
+                       WHERE import_id = ?1 AND document_id = ?2),
+                     (SELECT COUNT(*) FROM import_document_evidence
+                       WHERE import_id = ?1 AND document_id = ?2
+                         AND source_provenance = 'source'),
+                     (SELECT COUNT(*) FROM import_document_synthetic_attestations
+                       WHERE import_id = ?1 AND document_id = ?2),
+                     (SELECT COUNT(*) FROM import_document_memberships
+                       WHERE import_id = ?1 AND document_id = ?2),
+                     (SELECT COUNT(*) FROM import_document_membership_finalizations
+                       WHERE import_id = ?1)",
+                params![first.import_id.to_string(), target_document_id.to_string(),],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .expect("read preserved contradictory provenance");
+        assert_eq!(version, 28);
+        assert_eq!(migration_state, (0, 0));
+        assert_eq!(preserved_state, (1, 1, 1, 1, 1));
+        connection
+            .execute_batch("DROP TRIGGER import_document_synthetic_attestations_no_delete;")
+            .expect("open schema 28 attestation repair slot");
+        connection
+            .execute(
+                "DELETE FROM import_document_synthetic_attestations
+                  WHERE import_id = ?1 AND document_id = ?2",
+                params![first.import_id.to_string(), target_document_id.to_string(),],
+            )
+            .expect("remove contradictory attestation");
+        connection
+            .execute_batch(
+                "CREATE TRIGGER import_document_synthetic_attestations_no_delete
+                 BEFORE DELETE ON import_document_synthetic_attestations
+                 BEGIN
+                     SELECT RAISE(ABORT, 'synthetic import document attestation cannot be deleted');
+                 END;",
+            )
+            .expect("close schema 28 attestation repair slot");
+        drop(connection);
+
+        let mut application =
+            WorkboardApplication::open(&database).expect("complete repaired schema 30 upgrade");
+        assert_eq!(
+            application
+                .store
+                .health()
+                .expect("repaired schema 30 health")
+                .schema_version,
+            30
+        );
+        let replay = application
+            .apply_concertable_import(workspace.workspace.id, repository.id, &preview)
+            .expect("replay repaired contradictory provenance");
         assert!(replay.already_applied);
         assert_eq!(replay.import_id, first.import_id);
         assert_eq!(replay.epics, first.epics);
@@ -3378,7 +3653,7 @@ mod tests {
         let partial_feature_id = FeatureId::generate();
         let partial_epic_document_id = DocumentId::generate();
         let partial_feature_document_id = DocumentId::generate();
-        let connection = Connection::open(&database).expect("open schema 29 database");
+        let connection = Connection::open(&database).expect("open schema 30 database");
         restore_schema_24_import_database(&connection);
         connection
             .execute(
@@ -3586,14 +3861,14 @@ mod tests {
         drop(connection);
 
         let mut application =
-            WorkboardApplication::open(&database).expect("complete schema 29 upgrade");
+            WorkboardApplication::open(&database).expect("complete schema 30 upgrade");
         assert_eq!(
             application
                 .store
                 .health()
-                .expect("schema 29 health")
+                .expect("schema 30 health")
                 .schema_version,
-            29
+            30
         );
         let replay = application
             .apply_concertable_import(workspace.workspace.id, repository.id, &preview)
@@ -3611,7 +3886,7 @@ mod tests {
         let cohort_feature_id = FeatureId::generate();
         let cohort_epic_document_id = DocumentId::generate();
         let cohort_feature_document_id = DocumentId::generate();
-        let connection = Connection::open(&database).expect("reopen schema 29 database");
+        let connection = Connection::open(&database).expect("reopen schema 30 database");
         restore_schema_25_import_database(&connection);
         connection
             .execute(
@@ -3832,14 +4107,14 @@ mod tests {
         drop(connection);
 
         let mut application =
-            WorkboardApplication::open(&database).expect("complete schema 29 cohort upgrade");
+            WorkboardApplication::open(&database).expect("complete schema 30 cohort upgrade");
         assert_eq!(
             application
                 .store
                 .health()
-                .expect("repaired schema 29 health")
+                .expect("repaired schema 30 health")
                 .schema_version,
-            29
+            30
         );
         let replay = application
             .apply_concertable_import(workspace.workspace.id, repository.id, &preview)
@@ -4035,7 +4310,7 @@ mod tests {
                 .health()
                 .expect("upgraded storage health")
                 .schema_version,
-            29
+            30
         );
     }
 
@@ -4368,6 +4643,8 @@ mod tests {
         connection
             .execute_batch(
                 "DROP TRIGGER IF EXISTS import_document_membership_finalizations_valid;
+                 DROP TRIGGER IF EXISTS import_document_evidence_no_replace;
+                 DROP TRIGGER IF EXISTS import_document_synthetic_attestations_no_replace;
                  DROP TRIGGER IF EXISTS import_source_destinations_no_synthetic_attestation_insert;
                  DROP TRIGGER IF EXISTS import_source_destinations_no_synthetic_attestation_update;
                  DROP TRIGGER IF EXISTS import_document_evidence_source_attestation_valid;
@@ -4406,6 +4683,8 @@ mod tests {
         connection
             .execute_batch(
                 "DROP TRIGGER IF EXISTS import_document_membership_finalizations_valid;
+                 DROP TRIGGER IF EXISTS import_document_evidence_no_replace;
+                 DROP TRIGGER IF EXISTS import_document_synthetic_attestations_no_replace;
                  DROP TRIGGER IF EXISTS import_source_destinations_no_synthetic_attestation_insert;
                  DROP TRIGGER IF EXISTS import_source_destinations_no_synthetic_attestation_update;
                  DROP TRIGGER IF EXISTS import_document_evidence_source_attestation_valid;

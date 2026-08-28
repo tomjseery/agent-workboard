@@ -37,6 +37,7 @@ timestamp-owned hierarchy cohort and makes replay fail closed if finalized evide
 expanded. Schemas 27 and 28 persist exact revision and source provenance per member, require explicit repair
 attestation for legacy synthetic Epics, and reject revision or source cardinality ambiguity. Schema 29 makes
 source and synthetic provenance mutually exclusive and revalidates the attestation bijection on replay.
+Schema 30 closes SQLite replacement semantics at the immutable evidence primary keys.
 
 ## Next Steps
 
@@ -66,7 +67,7 @@ and generic planning/session-recovery machinery.
   `C:\Users\TOMMYS~1\AppData\Local\Temp\agent-workboard-phase7-parity-2d6f6666170a439a98b534e463fa3625`.
   It published 168 planning-store files in clean commit `25afbd312d3540c0aa46bc65c4dfd2d14d79c338`.
   Real replay exposed a synthetic-Epic undercount and a same-commit crash-retry ambiguity. The isolated
-  database upgraded through schema 29, and replay now returns the original 10/25/132 hierarchy counts from
+  database upgraded through schema 30, and replay now returns the original 10/25/132 hierarchy counts from
   immutable import membership rather than source mappings or commit coincidence. Schema 28 stopped at its
   fail-closed repair boundary until the preview's one source-less `Marketplace` Epic was explicitly attested.
 - The isolated legacy apply stopped before mutation because all 1,793 session candidates are unselected.
@@ -76,7 +77,7 @@ and generic planning/session-recovery machinery.
 
 - Phases 1–6 shipped through `f5eae79`.
 - Phase 7 planning and native-session import shipped through `d2b5647`.
-- All thirty-four findings from the full and incremental review passes have been resolved in the local
+- All thirty-six findings from the full and incremental review passes have been resolved in the local
   candidate.
 - Real Concertable dogfood found and repaired replay undercounting and same-commit overcounting.
 
@@ -89,8 +90,8 @@ and generic planning/session-recovery machinery.
 
 ## Reviews
 
-The full review of `f5eae79..89c6cc1` and all incremental reviews through `cac358f` are complete. The
-canonical work order is `reviews/Feature-Phase7-Migration-Completion.md`; all thirty-four findings are
+The full review of `f5eae79..89c6cc1` and all incremental reviews through `ed01584` are complete. The
+canonical work order is `reviews/Feature-Phase7-Migration-Completion.md`; all thirty-six findings are
 resolved, and the latest remediation requires a clean incremental pass.
 
 ## Decisions, discoveries, blockers, and deviations

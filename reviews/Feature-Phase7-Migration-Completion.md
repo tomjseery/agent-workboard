@@ -502,7 +502,7 @@ No findings.
 **Candidate bundle identity:** `sha256:f09ff04deb7f6e06e15e0a202450c05843a96ade11626d8ac57966b00ae67e3f`
 **Work-order path:** `reviews/Feature-Phase7-Migration-Completion.md`
 **Work-order mode:** `append`
-**Pass judgment:** `pending`
+**Pass judgment:** `changes-requested`
 
 ### Findings
 
@@ -528,3 +528,34 @@ No findings.
   mutations are rejected, the rows remain byte-for-byte unchanged, and replay remains equal afterward.
   Resolved by direct update/delete assertions for both durable evidence tables, byte-for-byte row comparison,
   and the unchanged idempotent replay assertion in the same test.
+
+## Review pass — 2026-08-28 — incremental
+
+**Candidate base:** `cac358f0e1201222dd94d1454effde531ed297f9`
+**Candidate head:** `ed015849ac9ecb38ddea67d1af48e3c44751d783`
+**Candidate branch:** `Feature/Phase7-Migration-Completion`
+**Candidate scope:** `all`
+**Candidate path-set:** `sha256:ee1d4e28380659a67492628d9d3728cfc1c21bcb266f3d6de81dbe3f80572119` `(4 paths)`
+**Candidate bundle:** `C:\Users\TommySeery\AppData\Local\Temp\agent-workboard-review-127a805e1aa242eaa2fbefbf786382cc`
+**Candidate bundle identity:** `sha256:604ece9b44c7d45e22f66b38f44432596429b5b35f7ed695695b1b83b66dd331`
+**Work-order path:** `reviews/Feature-Phase7-Migration-Completion.md`
+**Work-order mode:** `append`
+**Pass judgment:** `pending`
+
+### Findings
+
+- [x] **P7-035 — HIGH — integrity** — `crates/workboard-application/src/storage.rs:723`
+  With SQLite recursive triggers disabled, `INSERT OR REPLACE` can replace durable evidence or an attestation
+  without firing their delete guards. Add insert-time primary-key conflict guards so coordinated revision and
+  evidence replacement, or attestation replacement, aborts and preserves the original rows and replay trust.
+  Resolved by schema 30's insert-time primary-key conflict guards. With recursive triggers asserted off, the
+  regression proves coordinated revision/evidence replacement and attestation replacement both roll back,
+  leave the original rows byte-for-byte unchanged, and preserve the accepted replay.
+
+- [x] **P7-036 — MEDIUM — test** — `crates/workboard-application/src/storage.rs:987`
+  Schema 29's direct upgrade fixture covers missing synthetic attestation but not the legacy contradiction of
+  source evidence plus a synthetic attestation. Build that exact stamped schema-28 state, prove migration 29
+  rolls back without lost evidence or a stamp, then repair it and prove healthy replay equality.
+  Resolved by a stamped schema-28 fixture that creates the formerly legal source-evidence-plus-attestation
+  state, proves schema 29 leaves both later stamps absent and preserves mapping, evidence, attestation,
+  membership, and finalization rows, then reaches healthy schema 30 with unchanged replay after repair.
