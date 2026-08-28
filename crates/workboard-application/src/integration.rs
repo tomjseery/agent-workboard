@@ -921,17 +921,27 @@ fn hook_arguments(tool: &str, database: &str) -> Vec<String> {
 }
 
 fn shell_command(executable: &str, arguments: &[String], windows: bool) -> String {
+    if windows {
+        let executable = powershell_quote(executable);
+        let arguments = arguments
+            .iter()
+            .map(|value| powershell_quote(value))
+            .collect::<Vec<_>>()
+            .join(" ");
+        return format!(
+            "$workboard = {executable}; if (Test-Path -LiteralPath $workboard) {{ & $workboard {arguments}; exit $LASTEXITCODE }}"
+        );
+    }
+
     std::iter::once(executable)
         .chain(arguments.iter().map(String::as_str))
-        .map(|value| {
-            if windows {
-                format!("\"{}\"", value.replace('"', "\"\""))
-            } else {
-                format!("'{}'", value.replace('\'', "'\"'\"'"))
-            }
-        })
+        .map(|value| format!("'{}'", value.replace('\'', "'\"'\"'")))
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn powershell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
 }
 
 fn remove_owned(mut value: Value) -> Result<Value, AppError> {
@@ -1477,8 +1487,22 @@ mod tests {
     use super::{
         ADAPTER_VERSION, INTEGRATION_OWNER, IntegrationObservations, IntegrationOperation,
         IntegrationPlan, IntegrationRegistration, IntegrationRequest, IntegrationState,
-        replace_configuration, replace_configuration_with,
+        replace_configuration, replace_configuration_with, shell_command,
     };
+
+    #[test]
+    fn codex_windows_command_uses_the_powershell_call_operator() {
+        let command = shell_command(
+            "C:\\Agent Workboard\\workboard.exe",
+            &["integration".to_owned(), "Tom's data".to_owned()],
+            true,
+        );
+
+        assert_eq!(
+            command,
+            "$workboard = 'C:\\Agent Workboard\\workboard.exe'; if (Test-Path -LiteralPath $workboard) { & $workboard 'integration' 'Tom''s data'; exit $LASTEXITCODE }"
+        );
+    }
 
     #[test]
     fn claude_install_preserves_unrelated_settings_and_is_idempotent() {
