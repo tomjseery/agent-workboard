@@ -73,7 +73,8 @@ enum Command {
     Workflow(WorkflowArgs),
     Recover(RecoverArgs),
     Mcp,
-    Snapshot,
+    #[command(alias = "snapshot")]
+    Show,
     Backup(DestinationArgs),
     Export(DestinationArgs),
     Import(ImportArgs),
@@ -1267,7 +1268,7 @@ fn execute(cli: Cli) -> Result<String, AppError> {
             let workspace_id = resolve_workspace(&application, cli.workspace)?;
             recovery::execute_recover(&mut application, workspace_id, arguments, cli.json)
         }
-        Some(Command::Snapshot) => {
+        Some(Command::Show) => {
             let workspace_id = resolve_workspace(&application, cli.workspace)?;
             let snapshot = application.snapshot(workspace_id)?;
             output(&snapshot, cli.json, snapshot.workspace.title.clone())
@@ -2281,6 +2282,14 @@ mod tests {
         let error =
             execute_from(["workboard", "epic", "create"]).expect_err("missing title should fail");
         assert_eq!(error.code(), "domain");
+    }
+
+    #[test]
+    fn show_command_accepts_the_legacy_snapshot_alias() {
+        for command in ["show", "snapshot"] {
+            let cli = Cli::try_parse_from(["workboard", command]).expect("show command");
+            assert!(matches!(cli.command, Some(CliCommand::Show)));
+        }
     }
 
     #[test]
