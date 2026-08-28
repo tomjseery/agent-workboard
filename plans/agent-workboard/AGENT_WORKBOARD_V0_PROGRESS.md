@@ -43,10 +43,12 @@ containing spaces parse correctly and missing development executables do not fai
 
 ## Next Steps
 
-Run the external Concertable parity acceptance gate: review every active plan and session destination,
-exercise the real Claude/Codex create, resume, replacement, and restart-recovery workflows, and verify the
-planning-store and database backups. After owner acceptance, remove Concertable's migrated planning corpus
-and generic planning/session-recovery machinery.
+Paused: Tommy — review the current 10-Epic/25-Feature/132-Work-item Concertable preview, select or explicitly
+ignore every legacy-session candidate rather than inferring a destination, choose the accepted Workboard
+database and planning-store destination, and authorize the live apply plus the real Claude/Codex
+create/resume/replacement/restart-recovery exercise. Resume when the accepted destination and owner approval
+are recorded; then verify its backups and remove Concertable's migrated planning corpus and generic
+planning/session-recovery machinery.
 
 ## External parity preparation
 
