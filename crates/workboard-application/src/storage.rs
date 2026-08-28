@@ -12,7 +12,7 @@ use workboard_core::{ConversationId, LaunchLeaseId};
 
 use crate::AppError;
 
-const CURRENT_SCHEMA_VERSION: i64 = 29;
+const CURRENT_SCHEMA_VERSION: i64 = 30;
 const FOUNDATION_SCHEMA_CHECKSUM: &str = "agent-workboard-foundation-v1";
 const LAUNCH_LEASE_SCHEMA_CHECKSUM: &str = "agent-workboard-launch-leases-v1";
 const WORKBOARD_DOMAIN_SCHEMA_CHECKSUM: &str = "agent-workboard-domain-v1";
@@ -1071,6 +1071,29 @@ const IMPORT_DOCUMENT_PROVENANCE_CONSISTENCY_SQL: &str =
  )
  BEGIN
      SELECT RAISE(ABORT, 'import document membership finalization is invalid');
+ END;";
+const IMPORT_DOCUMENT_EVIDENCE_NO_REPLACE_SCHEMA_CHECKSUM: &str =
+    "agent-workboard-import-document-evidence-no-replace-v1";
+const IMPORT_DOCUMENT_EVIDENCE_NO_REPLACE_SQL: &str =
+    "CREATE TRIGGER import_document_evidence_no_replace
+ BEFORE INSERT ON import_document_evidence
+ WHEN EXISTS (
+     SELECT 1 FROM import_document_evidence evidence
+      WHERE evidence.import_id = NEW.import_id
+        AND evidence.document_id = NEW.document_id
+ )
+ BEGIN
+     SELECT RAISE(ABORT, 'import document evidence is immutable');
+ END;
+ CREATE TRIGGER import_document_synthetic_attestations_no_replace
+ BEFORE INSERT ON import_document_synthetic_attestations
+ WHEN EXISTS (
+     SELECT 1 FROM import_document_synthetic_attestations attestation
+      WHERE attestation.import_id = NEW.import_id
+        AND attestation.document_id = NEW.document_id
+ )
+ BEGIN
+     SELECT RAISE(ABORT, 'synthetic import document attestation is immutable');
  END;";
 const IMPORT_BATCH_REPOSITORY_REPAIR_SQL: &str = "UPDATE import_batches
     SET repository_id = (
@@ -2151,6 +2174,12 @@ fn migrate(connection: &Connection) -> Result<(), AppError> {
         IMPORT_DOCUMENT_PROVENANCE_CONSISTENCY_SQL,
         validate_finalized_import_document_provenance,
     )?;
+    apply_migration(
+        connection,
+        30,
+        IMPORT_DOCUMENT_EVIDENCE_NO_REPLACE_SCHEMA_CHECKSUM,
+        IMPORT_DOCUMENT_EVIDENCE_NO_REPLACE_SQL,
+    )?;
     Ok(())
 }
 
@@ -2974,6 +3003,8 @@ mod tests {
                 "DROP TRIGGER IF EXISTS import_work_item_repositories_finalized_insert;
                  DROP TRIGGER IF EXISTS import_work_item_repositories_finalized_update;
                  DROP TRIGGER IF EXISTS import_work_item_repositories_finalized_delete;
+                 DROP TRIGGER IF EXISTS import_document_evidence_no_replace;
+                 DROP TRIGGER IF EXISTS import_document_synthetic_attestations_no_replace;
                  DROP TRIGGER IF EXISTS import_source_destinations_no_synthetic_attestation_insert;
                  DROP TRIGGER IF EXISTS import_source_destinations_no_synthetic_attestation_update;
                  DROP TRIGGER IF EXISTS import_document_evidence_source_attestation_valid;
@@ -3808,7 +3839,7 @@ mod tests {
         assert_eq!(preserved_attestation, valid_attestation);
         assert_eq!(legacy_authority, "immutable_evidence");
         let health = store.health().expect("storage health");
-        assert_eq!(health.schema_version, 29);
+        assert_eq!(health.schema_version, 30);
         assert!(health.is_healthy());
         let audited_attestations: Vec<(String, String, String, String)> = store
             .read(|connection| {
@@ -3853,7 +3884,7 @@ mod tests {
             .expect("read upgraded schema 20 attestations");
         assert_eq!(upgraded_attestations, audited_attestations);
         let health = store.health().expect("upgraded storage health");
-        assert_eq!(health.schema_version, 29);
+        assert_eq!(health.schema_version, 30);
         assert!(health.is_healthy());
         drop(store);
 
