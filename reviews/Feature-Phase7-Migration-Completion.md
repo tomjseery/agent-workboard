@@ -5,8 +5,8 @@
 > irreversible or ambiguous finding: record its durable disposition, take the safe path, and keep going.
 
 **Review status:** `complete`
-**Reviewed up to commit:** `996f4e8870ddc3edb37c94d59ffbe6be578603b8`  `(2026-08-28)`
-**Security-reviewed up to commit:** `996f4e8870ddc3edb37c94d59ffbe6be578603b8`  `(2026-08-28)`
+**Reviewed up to commit:** `68c7a63e2110067ad7a1a8a4401f6485909b66af`  `(2026-08-28)`
+**Security-reviewed up to commit:** `68c7a63e2110067ad7a1a8a4401f6485909b66af`  `(2026-08-28)`
 **Judgment:** `changes-requested`
 
 ## Review pass — 2026-08-28 — full
@@ -216,3 +216,27 @@
   at insertion while leaving the repair slot available.
   Resolved by validating the repository against the batch workspace and non-planning role before insert;
   the fixture rejects an invalid immutable repair and then accepts a valid one.
+
+## Review pass — 2026-08-28 — incremental
+
+**Candidate base:** `996f4e8870ddc3edb37c94d59ffbe6be578603b8`
+**Candidate head:** `68c7a63e2110067ad7a1a8a4401f6485909b66af`
+**Candidate branch:** `Feature/Phase7-Migration-Completion`
+**Candidate scope:** `all`
+**Candidate path-set:** `sha256:335501e5eaca737f34a0cb43006d8cf5027a0d61ee71065c04c0aafd85397c3c` `(3 paths)`
+**Candidate bundle:** `C:\Users\TommySeery\AppData\Local\Temp\agent-workboard-review-1290a24447584448b5ebce37497e166e`
+**Candidate bundle identity:** `sha256:cf1e3c6759d700af73df4138ac11bb23c27f404d5d31fe4a731333ccd5f1b01b`
+**Work-order path:** `reviews/Feature-Phase7-Migration-Completion.md`
+**Work-order mode:** `append`
+**Pass judgment:** `changes-requested`
+
+### Findings
+
+- [x] **P7-017 — HIGH — security/correctness** — `crates/workboard-application/src/storage.rs:1065`
+  Migration 17 adds attestation validation without changing its issued version or checksum, so an already-
+  stamped schema-17 database skips the guard and can retain an invalid immutable repair that audit 18 rejects
+  but cannot replace. Restore the issued migration, add a versioned compatibility repair before audit, and
+  prove a genuine old schema-17 database can discard an invalid repair, reject another, accept a valid one,
+  and complete its upgrade.
+  Resolved by restoring the issued schema-17 SQL and applying a forward-only compatibility repair before the
+  audit; the schema-17 fixture proves invalid repairs are removed, valid repairs survive, and retry completes.

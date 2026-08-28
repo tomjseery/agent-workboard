@@ -22,6 +22,9 @@ Already-stamped schema-15 databases receive a separate versioned audit and stop 
 instructions whenever earlier direct provenance cannot be recovered safely.
 Schema-14 entrants apply the ownership migrations atomically, so interruption cannot lose a captured direct
 owner; explicit repair attestations are validated before becoming immutable.
+Already-stamped schema-17 databases receive a forward-only compatibility repair before audit: invalid legacy
+attestations are removed, valid attestations remain immutable, and the freed repair slot accepts only a valid
+same-workspace non-planning repository.
 
 ## Next Steps
 
@@ -32,18 +35,19 @@ before the external Concertable parity acceptance gate.
 
 - Phases 1–6 shipped through `f5eae79`.
 - Phase 7 planning and native-session import shipped through `d2b5647`.
-- All sixteen findings from the full and incremental review passes have been resolved in the local
+- All seventeen findings from the full and incremental review passes have been resolved in the local
   candidate.
 
 ## Verification
 
 - `cargo fmt --all -- --check`
 - `cargo clippy --workspace --all-targets -- -D warnings`
-- `cargo test --workspace` — 117 tests passed on 2026-08-28
+- `cargo test -p workboard-application` — 77 tests passed on 2026-08-28
+- `cargo test --workspace` — 135 tests passed on 2026-08-28
 
 ## Reviews
 
-The full review of `f5eae79..89c6cc1` and incremental reviews through `3b5e409` are complete with changes
+The full review of `f5eae79..89c6cc1` and incremental reviews through `68c7a63` are complete with changes
 requested. The canonical work order is `reviews/Feature-Phase7-Migration-Completion.md`; every recorded
 finding is resolved and the latest remediation requires a clean incremental pass.
 

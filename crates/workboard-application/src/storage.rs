@@ -12,7 +12,7 @@ use workboard_core::{ConversationId, LaunchLeaseId};
 
 use crate::AppError;
 
-const CURRENT_SCHEMA_VERSION: i64 = 18;
+const CURRENT_SCHEMA_VERSION: i64 = 20;
 const FOUNDATION_SCHEMA_CHECKSUM: &str = "agent-workboard-foundation-v1";
 const LAUNCH_LEASE_SCHEMA_CHECKSUM: &str = "agent-workboard-launch-leases-v1";
 const WORKBOARD_DOMAIN_SCHEMA_CHECKSUM: &str = "agent-workboard-domain-v1";
@@ -35,6 +35,10 @@ const IMPORT_BATCH_REPOSITORY_PARENT_SCHEMA_CHECKSUM: &str =
 const IMPORT_BATCH_ATTESTATION_SCHEMA_CHECKSUM: &str =
     "agent-workboard-import-batch-attestation-v1";
 const IMPORT_BATCH_AUDIT_SCHEMA_CHECKSUM: &str = "agent-workboard-import-batch-audit-v1";
+const IMPORT_BATCH_ATTESTATION_VALIDATION_SCHEMA_CHECKSUM: &str =
+    "agent-workboard-import-batch-attestation-validation-v1";
+const IMPORT_BATCH_AUDIT_CHECKPOINT_SCHEMA_CHECKSUM: &str =
+    "agent-workboard-import-batch-audit-checkpoint-v1";
 const IMPORT_BATCH_REPOSITORY_REPAIR_SQL: &str = "UPDATE import_batches
     SET repository_id = (
         SELECT MIN(record.destination_id)
@@ -96,6 +100,30 @@ const IMPORT_BATCH_ATTESTATION_SQL: &str = "CREATE TABLE import_batch_repository
      ),
      confirmed_at TEXT NOT NULL
  );
+ CREATE TRIGGER import_batch_repository_attestations_no_update
+ BEFORE UPDATE ON import_batch_repository_attestations
+ BEGIN
+     SELECT RAISE(ABORT, 'import batch repository attestation is immutable');
+ END;
+ CREATE TRIGGER import_batch_repository_attestations_no_delete
+ BEFORE DELETE ON import_batch_repository_attestations
+ BEGIN
+     SELECT RAISE(ABORT, 'import batch repository attestation cannot be deleted');
+ END;";
+const IMPORT_BATCH_ATTESTATION_VALIDATION_SQL: &str =
+    "DROP TRIGGER IF EXISTS import_batch_repository_attestations_valid;
+ DROP TRIGGER import_batch_repository_attestations_no_update;
+ DROP TRIGGER import_batch_repository_attestations_no_delete;
+ DELETE FROM import_batch_repository_attestations
+  WHERE NOT EXISTS (
+      SELECT 1
+        FROM import_batches batch
+        JOIN repositories repository
+          ON repository.id = import_batch_repository_attestations.repository_id
+         AND repository.workspace_id = batch.workspace_id
+         AND repository.is_planning_store = 0
+       WHERE batch.id = import_batch_repository_attestations.import_id
+  );
  CREATE TRIGGER import_batch_repository_attestations_valid
  BEFORE INSERT ON import_batch_repository_attestations
  WHEN NOT EXISTS (
@@ -1068,12 +1096,32 @@ fn apply_import_repository_migrations(
         IMPORT_BATCH_ATTESTATION_SCHEMA_CHECKSUM,
         IMPORT_BATCH_ATTESTATION_SQL,
     )?;
+    if !migration_exists(connection, 18)? {
+        apply_migration(
+            connection,
+            19,
+            IMPORT_BATCH_ATTESTATION_VALIDATION_SCHEMA_CHECKSUM,
+            IMPORT_BATCH_ATTESTATION_VALIDATION_SQL,
+        )?;
+    }
     apply_validated_migration(
         connection,
         18,
         IMPORT_BATCH_AUDIT_SCHEMA_CHECKSUM,
         "",
         |transaction| audit_import_batch_repository_ownership(transaction, direct_ownership),
+    )?;
+    apply_migration(
+        connection,
+        19,
+        IMPORT_BATCH_ATTESTATION_VALIDATION_SCHEMA_CHECKSUM,
+        IMPORT_BATCH_ATTESTATION_VALIDATION_SQL,
+    )?;
+    apply_migration(
+        connection,
+        20,
+        IMPORT_BATCH_AUDIT_CHECKPOINT_SCHEMA_CHECKSUM,
+        "",
     )
 }
 
@@ -1112,6 +1160,20 @@ fn apply_import_repository_migrations_atomically(
         IMPORT_BATCH_AUDIT_SCHEMA_CHECKSUM,
         "",
         |transaction| audit_import_batch_repository_ownership(transaction, direct_ownership),
+    )?;
+    apply_migration_step(
+        &transaction,
+        19,
+        IMPORT_BATCH_ATTESTATION_VALIDATION_SCHEMA_CHECKSUM,
+        IMPORT_BATCH_ATTESTATION_VALIDATION_SQL,
+        |_| Ok(()),
+    )?;
+    apply_migration_step(
+        &transaction,
+        20,
+        IMPORT_BATCH_AUDIT_CHECKPOINT_SCHEMA_CHECKSUM,
+        "",
+        |_| Ok(()),
     )?;
     transaction.commit()?;
     Ok(())
@@ -1944,7 +2006,7 @@ mod tests {
         let version: i64 = connection
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("schema version");
-        assert_eq!(version, 17);
+        assert_eq!(version, 19);
         let invalid_attestation = connection.execute(
             "INSERT INTO import_batch_repository_attestations (
                  import_id, repository_id, authority, confirmed_at
@@ -1980,6 +2042,139 @@ mod tests {
             .expect("read attested repository");
 
         assert_eq!(repository, "code-repository");
+        assert!(store.health().expect("storage health").is_healthy());
+    }
+
+    #[test]
+    fn schema_17_invalid_attestation_can_be_repaired() {
+        let directory = TempDir::new().expect("temporary directory");
+        let path = directory.path().join("workboard.sqlite");
+        let mut store = SqliteStore::open(&path).expect("open store");
+        store.write(seed_hierarchy).expect("seed hierarchy");
+        drop(store);
+
+        let connection = Connection::open(&path).expect("open raw database");
+        connection
+            .execute_batch(
+                "DROP TRIGGER import_batch_repository_attestations_valid;
+                 DELETE FROM schema_migrations WHERE version >= 18;
+                 PRAGMA user_version = 17;",
+            )
+            .expect("prepare prior schema 17");
+        let imported_at = OffsetDateTime::now_utc().unix_timestamp_nanos().to_string();
+        connection
+            .execute(
+                "INSERT INTO import_batches (
+                     id, workspace_id, repository_id, kind, source_path, source_head,
+                     preview_hash, planning_commit, imported_at
+                 ) VALUES (
+                     'invalid-attestation-batch', 'workspace', 'code-repository',
+                     'concertable_plans', 'C:/invalid-attestation', 'source-head',
+                     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                     'planning-commit', ?1
+                 )",
+                [&imported_at],
+            )
+            .expect("seed direct batch with invalid attestation");
+        connection
+            .execute(
+                "INSERT INTO import_batches (
+                     id, workspace_id, repository_id, kind, source_path, source_head,
+                     preview_hash, planning_commit, imported_at
+                 ) VALUES (
+                     'valid-attestation-batch', 'workspace', 'code-repository',
+                     'concertable_plans', 'C:/valid-attestation', 'source-head',
+                     'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+                     'planning-commit', ?1
+                 )",
+                [&imported_at],
+            )
+            .expect("seed direct batch with valid attestation");
+        connection
+            .execute_batch(
+                "INSERT INTO import_batch_repository_attestations (
+                     import_id, repository_id, authority, confirmed_at
+                 ) VALUES (
+                     'invalid-attestation-batch', 'store-repository', 'explicit_repair',
+                     '2026-08-28T11:00:00Z'
+                 );
+                 INSERT INTO import_batch_repository_attestations (
+                     import_id, repository_id, authority, confirmed_at
+                 ) VALUES (
+                     'valid-attestation-batch', 'code-repository', 'explicit_repair',
+                     '2026-08-28T11:00:00Z'
+                 );",
+            )
+            .expect("seed prior schema 17 attestations");
+        drop(connection);
+
+        let error = match SqliteStore::open(&path) {
+            Ok(_) => panic!("invalid prior attestation must require repair"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("invalid-attestation-batch"));
+        assert!(error.to_string().contains("explicit_repair"));
+
+        let connection = Connection::open(&path).expect("open repair database");
+        let version: i64 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .expect("schema version");
+        let invalid_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM import_batch_repository_attestations
+                  WHERE import_id = 'invalid-attestation-batch'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count discarded invalid attestation");
+        let valid_repository: String = connection
+            .query_row(
+                "SELECT repository_id FROM import_batch_repository_attestations
+                  WHERE import_id = 'valid-attestation-batch'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read preserved valid attestation");
+        assert_eq!(version, 19);
+        assert_eq!(invalid_count, 0);
+        assert_eq!(valid_repository, "code-repository");
+        let invalid_attestation = connection.execute(
+            "INSERT INTO import_batch_repository_attestations (
+                 import_id, repository_id, authority, confirmed_at
+             ) VALUES (
+                 'invalid-attestation-batch', 'store-repository', 'explicit_repair',
+                 '2026-08-28T12:00:00Z'
+             )",
+            [],
+        );
+        assert!(invalid_attestation.is_err());
+        connection
+            .execute(
+                "INSERT INTO import_batch_repository_attestations (
+                     import_id, repository_id, authority, confirmed_at
+                 ) VALUES (
+                     'invalid-attestation-batch', 'code-repository', 'explicit_repair',
+                     '2026-08-28T13:00:00Z'
+                 )",
+                [],
+            )
+            .expect("replace discarded attestation with valid repair");
+        drop(connection);
+
+        let store = SqliteStore::open(&path).expect("retry schema 17 upgrade");
+        let repaired_batches: i64 = store
+            .read(|connection| {
+                Ok(connection.query_row(
+                    "SELECT COUNT(*) FROM import_batches
+                      WHERE id IN ('invalid-attestation-batch', 'valid-attestation-batch')
+                        AND repository_id = 'code-repository'",
+                    [],
+                    |row| row.get(0),
+                )?)
+            })
+            .expect("read repaired batches");
+
+        assert_eq!(repaired_batches, 2);
         assert!(store.health().expect("storage health").is_healthy());
     }
 
