@@ -77,21 +77,21 @@ and generic planning/session-recovery machinery.
 
 - Phases 1–6 shipped through `f5eae79`.
 - Phase 7 planning and native-session import shipped through `d2b5647`.
-- All thirty-six findings from the full and incremental review passes have been resolved in the local
+- All thirty-seven findings from the full and incremental review passes have been resolved in the local
   candidate.
 - Real Concertable dogfood found and repaired replay undercounting and same-commit overcounting.
 
 ## Verification
 
-- `cargo fmt --all -- --check`
-- `cargo clippy --workspace --all-targets -- -D warnings`
-- `cargo test -p workboard-application --lib` — 79 tests passed on 2026-08-28
-- `cargo test --workspace` — 137 tests passed on 2026-08-28
+- `cargo fmt --all --check`
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- `cargo test -p workboard-application --lib` — 82 tests passed on 2026-08-28
+- `cargo test --workspace` — 140 tests passed on 2026-08-28
 
 ## Reviews
 
-The full review of `f5eae79..89c6cc1` and all incremental reviews through `ed01584` are complete. The
-canonical work order is `reviews/Feature-Phase7-Migration-Completion.md`; all thirty-six findings are
+The full review of `f5eae79..89c6cc1` and all incremental reviews through `7a083fd` are complete. The
+canonical work order is `reviews/Feature-Phase7-Migration-Completion.md`; all thirty-seven findings are
 resolved, and the latest remediation requires a clean incremental pass.
 
 ## Decisions, discoveries, blockers, and deviations

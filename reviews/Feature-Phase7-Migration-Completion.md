@@ -540,7 +540,7 @@ No findings.
 **Candidate bundle identity:** `sha256:604ece9b44c7d45e22f66b38f44432596429b5b35f7ed695695b1b83b66dd331`
 **Work-order path:** `reviews/Feature-Phase7-Migration-Completion.md`
 **Work-order mode:** `append`
-**Pass judgment:** `pending`
+**Pass judgment:** `changes-requested`
 
 ### Findings
 
@@ -559,3 +559,24 @@ No findings.
   Resolved by a stamped schema-28 fixture that creates the formerly legal source-evidence-plus-attestation
   state, proves schema 29 leaves both later stamps absent and preserves mapping, evidence, attestation,
   membership, and finalization rows, then reaches healthy schema 30 with unchanged replay after repair.
+
+## Review pass — 2026-08-28 — incremental
+
+**Candidate base:** `ed015849ac9ecb38ddea67d1af48e3c44751d783`
+**Candidate head:** `7a083fd4641d754945e392940aa152d1374e11d8`
+**Candidate branch:** `Feature/Phase7-Migration-Completion`
+**Candidate scope:** `all`
+**Candidate path-set:** `sha256:ee1d4e28380659a67492628d9d3728cfc1c21bcb266f3d6de81dbe3f80572119` `(4 paths)`
+**Candidate bundle:** `C:\Users\TommySeery\AppData\Local\Temp\agent-workboard-review-4122d2c716344679bb2ea4436d53f814`
+**Candidate bundle identity:** `sha256:99e8f7cd907312e2b9632838d31eaba0bdee2527ac895e9b32afcf5ba488fddb`
+**Work-order path:** `reviews/Feature-Phase7-Migration-Completion.md`
+**Work-order mode:** `append`
+**Pass judgment:** `pending`
+
+### Findings
+
+- [x] **P7-037 — LOW — documentation** — `plans/agent-workboard/AGENT_WORKBOARD_V0_PROGRESS.md:88`
+  The verification ledger still reports 79 application and 137 workspace tests, while this candidate contains
+  82 and 140. Rerun both documented test commands against `7a083fd` and record the actual passing counts.
+  Resolved by rerunning both documented commands against `7a083fd`: all 82 application tests and all 140
+  workspace tests pass, and the ledger now records those current counts and the exact stronger gate commands.
