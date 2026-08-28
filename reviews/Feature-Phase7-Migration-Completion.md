@@ -5,8 +5,8 @@
 > irreversible or ambiguous finding: record its durable disposition, take the safe path, and keep going.
 
 **Review status:** `complete`
-**Reviewed up to commit:** `2a9c6233ca368e431051e1553692be56c447f921`  `(2026-08-28)`
-**Security-reviewed up to commit:** `2a9c6233ca368e431051e1553692be56c447f921`  `(2026-08-28)`
+**Reviewed up to commit:** `0a9a67865225623cd9181ecf2f8d571280639393`  `(2026-08-28)`
+**Security-reviewed up to commit:** `0a9a67865225623cd9181ecf2f8d571280639393`  `(2026-08-28)`
 **Judgment:** `changes-requested`
 
 ## Review pass — 2026-08-28 — full
@@ -371,3 +371,42 @@ No findings.
   incomplete or ambiguous materialized batches roll back without a schema stamp. Regression coverage proves
   valid schema-22 backfill, missing-revision rejection, copied timestamp/commit rejection, and successful
   retry after evidence repair.
+
+## Review pass — 2026-08-28 — incremental
+
+**Candidate base:** `2a9c6233ca368e431051e1553692be56c447f921`
+**Candidate head:** `0a9a67865225623cd9181ecf2f8d571280639393`
+**Candidate branch:** `Feature/Phase7-Migration-Completion`
+**Candidate scope:** `all`
+**Candidate path-set:** `sha256:ee1d4e28380659a67492628d9d3728cfc1c21bcb266f3d6de81dbe3f80572119` `(4 paths)`
+**Candidate bundle:** `C:\Users\TommySeery\AppData\Local\Temp\agent-workboard-review-b6bc61bb86e94348b93a83d14687f381`
+**Candidate bundle identity:** `sha256:5d4ed4313e6be6dc110c22c454f0e401a20f305ef6c0269c2e81887d5f3a17be`
+**Work-order path:** `reviews/Feature-Phase7-Migration-Completion.md`
+**Work-order mode:** `append`
+**Pass judgment:** `changes-requested`
+
+### Findings
+
+- [x] **P7-023 — HIGH — integrity** — `crates/workboard-application/src/storage.rs:178`
+  The finalization trigger requires only one membership, so a partially populated legacy batch can be
+  finalized and then trusted by replay. Apply the complete hierarchy, source-mapping, and generated-Epic
+  evidence checks to every finalization insert, not only the schema-24 upgrade transaction.
+  Resolved by schema 25's shared evidence-failure view, which backs both the forward migration validation
+  and every later finalization insert; a partial two-document batch is rejected atomically.
+
+- [x] **P7-024 — HIGH — integrity** — `crates/workboard-application/src/storage.rs:211`
+  Finalization freezes a member document's repository and kind but not its owner columns or transitive
+  hierarchy and repository links. Freeze imported document ownership, hierarchy parent/workspace links,
+  planning-store ownership, and imported Work-item repository associations while leaving ordinary status
+  and workflow-state updates available.
+  Resolved by freezing every document owner field, hierarchy parent, workspace planning repository,
+  planning-repository parent, and imported Work-item repository association after finalization. The focused
+  regression rejects each identity mutation while allowing normal Feature workflow and Work-item status
+  updates.
+
+- [x] **P7-025 — MEDIUM — test** — `crates/workboard-application/src/concertable_import.rs:1674`
+  The regression proves finalized membership insertion is blocked but never exercises the separate
+  source-destination insert guard. Attempt a unique post-finalization source mapping and prove its row count
+  and the replay outcome remain unchanged.
+  Resolved by attempting a unique late source mapping, asserting the dedicated finalization error and an
+  unchanged mapping count, then proving the replay still returns the original outcome.
