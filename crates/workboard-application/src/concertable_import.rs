@@ -519,6 +519,42 @@ impl WorkboardApplication {
                     )?;
                 }
             }
+            for (prepared, stored) in prepared.iter().zip(&stored) {
+                let (source_provenance, source_path, source_hash) = match &prepared.source {
+                    Some(source) => (
+                        "source",
+                        Some(path_text(&source.relative_path)?.to_owned()),
+                        Some(source.content_hash.clone()),
+                    ),
+                    None => {
+                        transaction.execute(
+                            "INSERT INTO import_document_synthetic_attestations (
+                                 import_id, document_id, authority, attested_at
+                             ) VALUES (?1, ?2, 'import_preview', ?3)",
+                            params![
+                                import_id.to_string(),
+                                stored.front_matter.id.to_string(),
+                                imported_at,
+                            ],
+                        )?;
+                        ("synthetic", None, None)
+                    }
+                };
+                transaction.execute(
+                    "INSERT INTO import_document_evidence (
+                         import_id, document_id, revision, revision_content_hash,
+                         source_provenance, source_path, source_hash
+                     ) VALUES (?1, ?2, 1, ?3, ?4, ?5, ?6)",
+                    params![
+                        import_id.to_string(),
+                        stored.front_matter.id.to_string(),
+                        stored.content_hash,
+                        source_provenance,
+                        source_path,
+                        source_hash,
+                    ],
+                )?;
+            }
             transaction.execute(
                 "INSERT INTO import_document_membership_finalizations (import_id, finalized_at)
                  VALUES (?1, ?2)",
@@ -548,7 +584,8 @@ impl WorkboardApplication {
             let row = connection
                 .query_row(
                     "SELECT batch.id, batch.planning_commit, finalization.import_id,
-                            membership_failure.import_id, cohort_failure.import_id
+                            membership_failure.import_id, cohort_failure.import_id,
+                            evidence_failure.import_id
                        FROM import_batches batch
                        LEFT JOIN import_document_membership_finalizations finalization
                          ON finalization.import_id = batch.id
@@ -556,6 +593,8 @@ impl WorkboardApplication {
                          ON membership_failure.import_id = batch.id
                        LEFT JOIN concertable_import_cohort_evidence_failures cohort_failure
                          ON cohort_failure.import_id = batch.id
+                       LEFT JOIN concertable_import_durable_evidence_failures evidence_failure
+                         ON evidence_failure.import_id = batch.id
                      WHERE batch.preview_hash = ?1 AND batch.kind = 'concertable_plans'
                        AND batch.workspace_id = ?2
                        AND batch.repository_id = ?3",
@@ -571,6 +610,7 @@ impl WorkboardApplication {
                             row.get::<_, Option<String>>(2)?,
                             row.get::<_, Option<String>>(3)?,
                             row.get::<_, Option<String>>(4)?,
+                            row.get::<_, Option<String>>(5)?,
                         ))
                     },
                 )
@@ -582,13 +622,17 @@ impl WorkboardApplication {
                     finalization,
                     membership_failure,
                     cohort_failure,
+                    evidence_failure,
                 )| {
                 if finalization.is_none() {
                     return Err(AppError::Domain(format!(
                         "Concertable import batch {id} has no finalized document membership"
                     )));
                 }
-                if membership_failure.is_some() || cohort_failure.is_some() {
+                if membership_failure.is_some()
+                    || cohort_failure.is_some()
+                    || evidence_failure.is_some()
+                {
                     return Err(AppError::Domain(format!(
                         "Concertable import batch {id} has invalid finalized document membership evidence"
                     )));
@@ -613,7 +657,8 @@ impl WorkboardApplication {
                         .map_err(|_| AppError::Domain("invalid import count".to_owned()))?;
                 }
                 let source_destinations: i64 = connection.query_row(
-                    "SELECT COUNT(*) FROM import_source_destinations WHERE import_id = ?1",
+                    "SELECT COUNT(*) FROM import_document_evidence
+                      WHERE import_id = ?1 AND source_provenance = 'source'",
                     [id.as_str()],
                     |row| row.get(0),
                 )?;
@@ -1671,6 +1716,28 @@ mod tests {
             )
             .expect("record unrelated same-commit revision");
         drop(connection);
+        let evidence_upgrade_error = match WorkboardApplication::open(&database) {
+            Ok(_) => panic!("legacy synthetic Epic must require explicit evidence"),
+            Err(error) => error,
+        };
+        assert!(
+            evidence_upgrade_error
+                .to_string()
+                .contains("schema migration 28")
+        );
+        let connection = Connection::open(&database).expect("open schema 27 database");
+        connection
+            .execute(
+                "INSERT INTO import_document_synthetic_attestations (
+                     import_id, document_id, authority, attested_at
+                 ) VALUES (?1, ?2, 'explicit_repair', 'legacy-repair')",
+                params![
+                    first.import_id.to_string(),
+                    preview.epics[1].document_id.to_string(),
+                ],
+            )
+            .expect("attest legacy synthetic Epic");
+        drop(connection);
         let mut application =
             WorkboardApplication::open(&database).expect("upgrade import database");
         let (membership_count, unrelated_membership): (i64, i64) = application
@@ -1942,6 +2009,18 @@ mod tests {
                     ],
                 )?;
                 transaction.execute(
+                    "INSERT INTO import_document_evidence (
+                         import_id, document_id, revision, revision_content_hash,
+                         source_provenance, source_path, source_hash
+                     ) VALUES (?1, ?2, 1, ?3, 'source', 'partial.md', ?4)",
+                    params![
+                        partial_import_id.to_string(),
+                        unrelated_document_id.to_string(),
+                        "f".repeat(64),
+                        "c".repeat(64),
+                    ],
+                )?;
+                transaction.execute(
                     "INSERT INTO import_document_membership_finalizations (import_id, finalized_at)
                      VALUES (?1, ?2)",
                     params![partial_import_id.to_string(), "later"],
@@ -1954,6 +2033,182 @@ mod tests {
                 .to_string()
                 .contains("finalization is invalid"),
             "{partial_finalization_error}"
+        );
+        let missing_source_import_id = ImportBatchId::generate();
+        let missing_source_error = application
+            .store
+            .write(|transaction| {
+                transaction.execute(
+                    "INSERT INTO import_batches (
+                         id, workspace_id, kind, source_path, source_head, preview_hash,
+                         planning_commit, imported_at, repository_id
+                     ) VALUES (?1, ?2, 'concertable_plans', 'missing-source', ?3, ?4, ?5,
+                               'later', ?6)",
+                    params![
+                        missing_source_import_id.to_string(),
+                        workspace.workspace.id.to_string(),
+                        preview.source_head,
+                        "e".repeat(64),
+                        first.planning_commit,
+                        repository.id.to_string(),
+                    ],
+                )?;
+                for (document_id, kind) in [
+                    (unrelated_document_id, "epic"),
+                    (partial_document_id, "feature"),
+                ] {
+                    transaction.execute(
+                        "INSERT INTO import_document_memberships (
+                             import_id, document_id, destination_kind
+                         ) VALUES (?1, ?2, ?3)",
+                        params![
+                            missing_source_import_id.to_string(),
+                            document_id.to_string(),
+                            kind,
+                        ],
+                    )?;
+                }
+                transaction.execute(
+                    "INSERT INTO import_source_destinations (
+                         import_id, source_path, source_hash, destination_kind,
+                         destination_id, document_id
+                     ) VALUES (?1, 'missing-source-feature.md', ?2, 'feature', ?3, ?4)",
+                    params![
+                        missing_source_import_id.to_string(),
+                        "b".repeat(64),
+                        partial_feature_id.to_string(),
+                        partial_document_id.to_string(),
+                    ],
+                )?;
+                transaction.execute(
+                    "INSERT INTO import_document_evidence (
+                         import_id, document_id, revision, revision_content_hash,
+                         source_provenance, source_path, source_hash
+                     ) VALUES (?1, ?2, 1, ?3, 'source', 'missing-source-feature.md', ?4)",
+                    params![
+                        missing_source_import_id.to_string(),
+                        partial_document_id.to_string(),
+                        "b".repeat(64),
+                        "b".repeat(64),
+                    ],
+                )?;
+                transaction.execute(
+                    "INSERT INTO import_document_membership_finalizations (import_id, finalized_at)
+                     VALUES (?1, 'later')",
+                    [missing_source_import_id.to_string()],
+                )?;
+                Ok(())
+            })
+            .expect_err("reject source-backed Epic without source evidence");
+        assert!(
+            missing_source_error
+                .to_string()
+                .contains("finalization is invalid")
+        );
+        let duplicate_source_import_id = ImportBatchId::generate();
+        let duplicate_source_error = application
+            .store
+            .write(|transaction| {
+                transaction.execute(
+                    "INSERT INTO import_batches (
+                         id, workspace_id, kind, source_path, source_head, preview_hash,
+                         planning_commit, imported_at, repository_id
+                     ) VALUES (?1, ?2, 'concertable_plans', 'duplicate-source', ?3, ?4, ?5,
+                               'later', ?6)",
+                    params![
+                        duplicate_source_import_id.to_string(),
+                        workspace.workspace.id.to_string(),
+                        preview.source_head,
+                        "0".repeat(64),
+                        first.planning_commit,
+                        repository.id.to_string(),
+                    ],
+                )?;
+                for (document_id, kind) in [
+                    (unrelated_document_id, "epic"),
+                    (partial_document_id, "feature"),
+                ] {
+                    transaction.execute(
+                        "INSERT INTO import_document_memberships (
+                             import_id, document_id, destination_kind
+                         ) VALUES (?1, ?2, ?3)",
+                        params![
+                            duplicate_source_import_id.to_string(),
+                            document_id.to_string(),
+                            kind,
+                        ],
+                    )?;
+                }
+                for (path, hash) in [
+                    ("duplicate-source-one.md", "f".repeat(64)),
+                    ("duplicate-source-two.md", "e".repeat(64)),
+                ] {
+                    transaction.execute(
+                        "INSERT INTO import_source_destinations (
+                             import_id, source_path, source_hash, destination_kind,
+                             destination_id, document_id
+                         ) VALUES (?1, ?2, ?3, 'epic', ?4, ?5)",
+                        params![
+                            duplicate_source_import_id.to_string(),
+                            path,
+                            hash,
+                            unrelated_epic_id.to_string(),
+                            unrelated_document_id.to_string(),
+                        ],
+                    )?;
+                }
+                transaction.execute(
+                    "INSERT INTO import_source_destinations (
+                         import_id, source_path, source_hash, destination_kind,
+                         destination_id, document_id
+                     ) VALUES (?1, 'duplicate-source-feature.md', ?2, 'feature', ?3, ?4)",
+                    params![
+                        duplicate_source_import_id.to_string(),
+                        "b".repeat(64),
+                        partial_feature_id.to_string(),
+                        partial_document_id.to_string(),
+                    ],
+                )?;
+                for (document_id, revision_hash, path, source_hash) in [
+                    (
+                        unrelated_document_id,
+                        "f".repeat(64),
+                        "duplicate-source-one.md",
+                        "f".repeat(64),
+                    ),
+                    (
+                        partial_document_id,
+                        "b".repeat(64),
+                        "duplicate-source-feature.md",
+                        "b".repeat(64),
+                    ),
+                ] {
+                    transaction.execute(
+                        "INSERT INTO import_document_evidence (
+                             import_id, document_id, revision, revision_content_hash,
+                             source_provenance, source_path, source_hash
+                         ) VALUES (?1, ?2, 1, ?3, 'source', ?4, ?5)",
+                        params![
+                            duplicate_source_import_id.to_string(),
+                            document_id.to_string(),
+                            revision_hash,
+                            path,
+                            source_hash,
+                        ],
+                    )?;
+                }
+                transaction.execute(
+                    "INSERT INTO import_document_membership_finalizations (import_id, finalized_at)
+                     VALUES (?1, 'later')",
+                    [duplicate_source_import_id.to_string()],
+                )?;
+                Ok(())
+            })
+            .expect_err("reject duplicate source evidence");
+        assert!(
+            duplicate_source_error
+                .to_string()
+                .contains("finalization is invalid")
         );
         let missing_epic_import_id = ImportBatchId::generate();
         let missing_epic_id = EpicId::generate();
@@ -2040,6 +2295,18 @@ mod tests {
                     ],
                 )?;
                 transaction.execute(
+                    "INSERT INTO import_document_evidence (
+                         import_id, document_id, revision, revision_content_hash,
+                         source_provenance, source_path, source_hash
+                     ) VALUES (?1, ?2, 1, ?3, 'source', 'missing-epic-feature.md', ?4)",
+                    params![
+                        missing_epic_import_id.to_string(),
+                        missing_epic_feature_document_id.to_string(),
+                        "2".repeat(64),
+                        "2".repeat(64),
+                    ],
+                )?;
+                transaction.execute(
                     "INSERT INTO import_document_membership_finalizations (import_id, finalized_at)
                      VALUES (?1, 'missing-epic')",
                     [missing_epic_import_id.to_string()],
@@ -2123,6 +2390,18 @@ mod tests {
                     ],
                 )?;
                 transaction.execute(
+                    "INSERT INTO import_document_evidence (
+                         import_id, document_id, revision, revision_content_hash,
+                         source_provenance, source_path, source_hash
+                     ) VALUES (?1, ?2, 1, ?3, 'source', 'epic-only.md', ?4)",
+                    params![
+                        epic_only_import_id.to_string(),
+                        epic_only_document_id.to_string(),
+                        "4".repeat(64),
+                        "4".repeat(64),
+                    ],
+                )?;
+                transaction.execute(
                     "INSERT INTO import_document_membership_finalizations (import_id, finalized_at)
                      VALUES (?1, 'epic-only')",
                     [epic_only_import_id.to_string()],
@@ -2159,14 +2438,21 @@ mod tests {
             git_count(&fixture.directory.path().join("planning-store")),
             2
         );
-        let imported_at: String = application
+        let (imported_at, revision_content_hash): (String, String) = application
             .store
             .read(|connection| {
                 connection
                     .query_row(
-                        "SELECT imported_at FROM import_batches WHERE id = ?1",
-                        [first.import_id.to_string()],
-                        |row| row.get(0),
+                        "SELECT batch.imported_at, revision.content_hash
+                           FROM import_batches batch
+                           JOIN document_revisions revision
+                             ON revision.document_id = ?2 AND revision.revision = 1
+                          WHERE batch.id = ?1",
+                        params![
+                            first.import_id.to_string(),
+                            imported_document_id.to_string(),
+                        ],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
                     )
                     .map_err(Into::into)
             })
@@ -2201,6 +2487,146 @@ mod tests {
                 Ok(())
             })
             .expect("restore finalized revision evidence");
+        application
+            .store
+            .write(|transaction| {
+                transaction.execute(
+                    "UPDATE document_revisions SET content_hash = ?2
+                     WHERE document_id = ?1 AND revision = 1",
+                    params![imported_document_id.to_string(), "6".repeat(64)],
+                )?;
+                Ok(())
+            })
+            .expect("mutate finalized revision hash");
+        let revision_hash_error = application
+            .apply_concertable_import(workspace.workspace.id, repository.id, &preview)
+            .expect_err("reject replay with mutated revision hash");
+        assert!(
+            revision_hash_error
+                .to_string()
+                .contains("invalid finalized document membership evidence")
+        );
+        application
+            .store
+            .write(|transaction| {
+                transaction.execute(
+                    "UPDATE document_revisions SET content_hash = ?2
+                     WHERE document_id = ?1 AND revision = 1",
+                    params![imported_document_id.to_string(), revision_content_hash],
+                )?;
+                Ok(())
+            })
+            .expect("restore finalized revision hash");
+        application
+            .store
+            .write(|transaction| {
+                transaction.execute(
+                    "INSERT INTO document_revisions (
+                         document_id, revision, content_hash, observed_commit, observed_at
+                     ) VALUES (?1, 2, ?2, ?3, ?4)",
+                    params![
+                        imported_document_id.to_string(),
+                        "6".repeat(64),
+                        first.planning_commit,
+                        imported_at,
+                    ],
+                )?;
+                Ok(())
+            })
+            .expect("duplicate finalized revision tuple");
+        let duplicate_revision_error = application
+            .apply_concertable_import(workspace.workspace.id, repository.id, &preview)
+            .expect_err("reject replay with duplicate revision evidence");
+        assert!(
+            duplicate_revision_error
+                .to_string()
+                .contains("invalid finalized document membership evidence")
+        );
+        application
+            .store
+            .write(|transaction| {
+                transaction.execute(
+                    "DELETE FROM document_revisions WHERE document_id = ?1 AND revision = 2",
+                    [imported_document_id.to_string()],
+                )?;
+                Ok(())
+            })
+            .expect("remove duplicate revision evidence");
+        application
+            .store
+            .write(|transaction| {
+                transaction.execute(
+                    "DELETE FROM document_revisions WHERE document_id = ?1 AND revision = 1",
+                    [imported_document_id.to_string()],
+                )?;
+                transaction.execute(
+                    "INSERT INTO document_revisions (
+                         document_id, revision, content_hash, observed_commit, observed_at
+                     ) VALUES (?1, 2, ?2, ?3, ?4)",
+                    params![
+                        imported_document_id.to_string(),
+                        revision_content_hash,
+                        first.planning_commit,
+                        imported_at,
+                    ],
+                )?;
+                Ok(())
+            })
+            .expect("replace finalized revision identity");
+        let replacement_revision_error = application
+            .apply_concertable_import(workspace.workspace.id, repository.id, &preview)
+            .expect_err("reject replay with replaced revision identity");
+        assert!(
+            replacement_revision_error
+                .to_string()
+                .contains("invalid finalized document membership evidence")
+        );
+        application
+            .store
+            .write(|transaction| {
+                transaction.execute(
+                    "DELETE FROM document_revisions WHERE document_id = ?1 AND revision = 2",
+                    [imported_document_id.to_string()],
+                )?;
+                transaction.execute(
+                    "INSERT INTO document_revisions (
+                         document_id, revision, content_hash, observed_commit, observed_at
+                     ) VALUES (?1, 1, ?2, ?3, ?4)",
+                    params![
+                        imported_document_id.to_string(),
+                        revision_content_hash,
+                        first.planning_commit,
+                        imported_at,
+                    ],
+                )?;
+                Ok(())
+            })
+            .expect("restore finalized revision identity");
+        application
+            .store
+            .write(|transaction| {
+                transaction.execute(
+                    "INSERT INTO document_revisions (
+                         document_id, revision, content_hash, observed_commit, observed_at
+                     ) VALUES (?1, 2, ?2, 'later-commit', 'later-revision')",
+                    params![imported_document_id.to_string(), "6".repeat(64)],
+                )?;
+                Ok(())
+            })
+            .expect("record ordinary later revision");
+        application
+            .apply_concertable_import(workspace.workspace.id, repository.id, &preview)
+            .expect("allow replay with an ordinary later revision");
+        application
+            .store
+            .write(|transaction| {
+                transaction.execute(
+                    "DELETE FROM document_revisions WHERE document_id = ?1 AND revision = 2",
+                    [imported_document_id.to_string()],
+                )?;
+                Ok(())
+            })
+            .expect("remove ordinary later revision");
         application
             .store
             .write(|transaction| {
@@ -2343,7 +2769,7 @@ mod tests {
         let partial_feature_id = FeatureId::generate();
         let partial_epic_document_id = DocumentId::generate();
         let partial_feature_document_id = DocumentId::generate();
-        let connection = Connection::open(&database).expect("open schema 26 database");
+        let connection = Connection::open(&database).expect("open schema 28 database");
         restore_schema_24_import_database(&connection);
         connection
             .execute(
@@ -2551,18 +2977,264 @@ mod tests {
         drop(connection);
 
         let mut application =
-            WorkboardApplication::open(&database).expect("complete schema 26 upgrade");
+            WorkboardApplication::open(&database).expect("complete schema 28 upgrade");
         assert_eq!(
             application
                 .store
                 .health()
-                .expect("schema 26 health")
+                .expect("schema 28 health")
                 .schema_version,
-            26
+            28
         );
         let replay = application
             .apply_concertable_import(workspace.workspace.id, repository.id, &preview)
             .expect("replay valid import after repaired upgrade");
+        assert!(replay.already_applied);
+        assert_eq!(replay.import_id, first.import_id);
+        assert_eq!(replay.epics, first.epics);
+        assert_eq!(replay.features, first.features);
+        assert_eq!(replay.work_items, first.work_items);
+        assert_eq!(replay.source_destinations, first.source_destinations);
+        drop(application);
+
+        let cohort_import_id = ImportBatchId::generate();
+        let cohort_epic_id = EpicId::generate();
+        let cohort_feature_id = FeatureId::generate();
+        let cohort_epic_document_id = DocumentId::generate();
+        let cohort_feature_document_id = DocumentId::generate();
+        let connection = Connection::open(&database).expect("reopen schema 28 database");
+        restore_schema_25_import_database(&connection);
+        connection
+            .execute(
+                "INSERT INTO import_batches (
+                     id, workspace_id, kind, source_path, source_head, preview_hash,
+                     planning_commit, imported_at, repository_id
+                 ) VALUES (?1, ?2, 'concertable_plans', 'schema-25-cohort', ?3, ?4, ?5,
+                           'schema-25-cohort', ?6)",
+                params![
+                    cohort_import_id.to_string(),
+                    workspace.workspace.id.to_string(),
+                    preview.source_head,
+                    "a".repeat(64),
+                    first.planning_commit,
+                    repository.id.to_string(),
+                ],
+            )
+            .expect("record schema 25 cohort batch");
+        connection
+            .execute(
+                "INSERT INTO epics (id, workspace_id, slug, title, created_at)
+                 VALUES (?1, ?2, 'schema-25-cohort', 'Schema 25 cohort', 'schema-25-cohort')",
+                params![
+                    cohort_epic_id.to_string(),
+                    workspace.workspace.id.to_string(),
+                ],
+            )
+            .expect("record schema 25 cohort Epic");
+        connection
+            .execute(
+                "INSERT INTO documents (
+                     id, repository_id, epic_id, kind, relative_path, content_hash,
+                     observed_commit, observed_at
+                 ) VALUES (?1, ?2, ?3, 'epic', 'schema-25-cohort.md', ?4, ?5,
+                           'schema-25-cohort')",
+                params![
+                    cohort_epic_document_id.to_string(),
+                    workspace.workspace.planning_store_repository_id.to_string(),
+                    cohort_epic_id.to_string(),
+                    "b".repeat(64),
+                    first.planning_commit,
+                ],
+            )
+            .expect("record schema 25 cohort document");
+        connection
+            .execute(
+                "INSERT INTO document_revisions (
+                     document_id, revision, content_hash, observed_commit, observed_at
+                 ) VALUES (?1, 1, ?2, ?3, 'schema-25-cohort')",
+                params![
+                    cohort_epic_document_id.to_string(),
+                    "b".repeat(64),
+                    first.planning_commit,
+                ],
+            )
+            .expect("record schema 25 cohort revision");
+        connection
+            .execute(
+                "INSERT INTO import_document_memberships (
+                     import_id, document_id, destination_kind
+                 ) VALUES (?1, ?2, 'epic')",
+                params![
+                    cohort_import_id.to_string(),
+                    cohort_epic_document_id.to_string(),
+                ],
+            )
+            .expect("record schema 25 cohort membership");
+        connection
+            .execute(
+                "INSERT INTO import_source_destinations (
+                     import_id, source_path, source_hash, destination_kind,
+                     destination_id, document_id
+                 ) VALUES (?1, 'schema-25-cohort.md', ?2, 'epic', ?3, ?4)",
+                params![
+                    cohort_import_id.to_string(),
+                    "b".repeat(64),
+                    cohort_epic_id.to_string(),
+                    cohort_epic_document_id.to_string(),
+                ],
+            )
+            .expect("record schema 25 cohort source");
+        connection
+            .execute(
+                "INSERT INTO import_document_membership_finalizations (import_id, finalized_at)
+                 VALUES (?1, 'schema-25-cohort')",
+                [cohort_import_id.to_string()],
+            )
+            .expect("schema 25 accepts Epic-only cohort");
+        drop(connection);
+
+        let cohort_upgrade_error = match WorkboardApplication::open(&database) {
+            Ok(_) => panic!("incomplete schema 25 cohort must stop schema 26"),
+            Err(error) => error,
+        };
+        assert!(
+            cohort_upgrade_error
+                .to_string()
+                .contains("schema migration 26")
+        );
+        assert!(
+            cohort_upgrade_error
+                .to_string()
+                .contains(&cohort_import_id.to_string())
+        );
+        let connection = Connection::open(&database).expect("repair schema 25 cohort");
+        let version: i64 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .expect("read rejected cohort upgrade version");
+        let migration_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM schema_migrations WHERE version = 26",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count schema 26 stamps");
+        let cohort_state: (i64, i64) = connection
+            .query_row(
+                "SELECT
+                     (SELECT COUNT(*) FROM import_document_memberships WHERE import_id = ?1),
+                     (SELECT COUNT(*) FROM import_document_membership_finalizations
+                       WHERE import_id = ?1)",
+                [cohort_import_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("read preserved schema 25 cohort");
+        assert_eq!(version, 25);
+        assert_eq!(migration_count, 0);
+        assert_eq!(cohort_state, (1, 1));
+        connection
+            .execute_batch(
+                "DROP TRIGGER import_document_memberships_finalized;
+                 DROP TRIGGER import_source_destinations_finalized_insert;",
+            )
+            .expect("open schema 25 cohort repair slots");
+        connection
+            .execute(
+                "INSERT INTO features (id, epic_id, slug, title, workflow_state, created_at)
+                 VALUES (?1, ?2, 'schema-25-feature', 'Schema 25 feature', 'planned',
+                         'schema-25-cohort')",
+                params![cohort_feature_id.to_string(), cohort_epic_id.to_string()],
+            )
+            .expect("repair schema 25 Feature");
+        connection
+            .execute(
+                "INSERT INTO documents (
+                     id, repository_id, feature_id, kind, relative_path, content_hash,
+                     observed_commit, observed_at
+                 ) VALUES (?1, ?2, ?3, 'feature', 'schema-25-feature.md', ?4, ?5,
+                           'schema-25-cohort')",
+                params![
+                    cohort_feature_document_id.to_string(),
+                    workspace.workspace.planning_store_repository_id.to_string(),
+                    cohort_feature_id.to_string(),
+                    "c".repeat(64),
+                    first.planning_commit,
+                ],
+            )
+            .expect("repair schema 25 Feature document");
+        connection
+            .execute(
+                "INSERT INTO document_revisions (
+                     document_id, revision, content_hash, observed_commit, observed_at
+                 ) VALUES (?1, 1, ?2, ?3, 'schema-25-cohort')",
+                params![
+                    cohort_feature_document_id.to_string(),
+                    "c".repeat(64),
+                    first.planning_commit,
+                ],
+            )
+            .expect("repair schema 25 Feature revision");
+        connection
+            .execute(
+                "INSERT INTO import_document_memberships (
+                     import_id, document_id, destination_kind
+                 ) VALUES (?1, ?2, 'feature')",
+                params![
+                    cohort_import_id.to_string(),
+                    cohort_feature_document_id.to_string(),
+                ],
+            )
+            .expect("repair schema 25 Feature membership");
+        connection
+            .execute(
+                "INSERT INTO import_source_destinations (
+                     import_id, source_path, source_hash, destination_kind,
+                     destination_id, document_id
+                 ) VALUES (?1, 'schema-25-feature.md', ?2, 'feature', ?3, ?4)",
+                params![
+                    cohort_import_id.to_string(),
+                    "c".repeat(64),
+                    cohort_feature_id.to_string(),
+                    cohort_feature_document_id.to_string(),
+                ],
+            )
+            .expect("repair schema 25 Feature source");
+        connection
+            .execute_batch(
+                "CREATE TRIGGER import_document_memberships_finalized
+                 BEFORE INSERT ON import_document_memberships
+                 WHEN EXISTS (
+                     SELECT 1 FROM import_document_membership_finalizations finalization
+                      WHERE finalization.import_id = NEW.import_id
+                 )
+                 BEGIN
+                     SELECT RAISE(ABORT, 'import document membership is finalized');
+                 END;
+                 CREATE TRIGGER import_source_destinations_finalized_insert
+                 BEFORE INSERT ON import_source_destinations
+                 WHEN EXISTS (
+                     SELECT 1 FROM import_document_membership_finalizations finalization
+                      WHERE finalization.import_id = NEW.import_id
+                 )
+                 BEGIN
+                     SELECT RAISE(ABORT, 'import source destinations are finalized');
+                 END;",
+            )
+            .expect("close schema 25 cohort repair slots");
+        drop(connection);
+
+        let mut application =
+            WorkboardApplication::open(&database).expect("complete schema 28 cohort upgrade");
+        assert_eq!(
+            application
+                .store
+                .health()
+                .expect("repaired schema 28 health")
+                .schema_version,
+            28
+        );
+        let replay = application
+            .apply_concertable_import(workspace.workspace.id, repository.id, &preview)
+            .expect("replay after schema 25 cohort repair");
         assert!(replay.already_applied);
         assert_eq!(replay.import_id, first.import_id);
         assert_eq!(replay.epics, first.epics);
@@ -2754,7 +3426,7 @@ mod tests {
                 .health()
                 .expect("upgraded storage health")
                 .schema_version,
-            26
+            28
         );
     }
 
@@ -3083,12 +3755,57 @@ mod tests {
             .expect("numeric count")
     }
 
+    fn restore_schema_25_import_database(connection: &Connection) {
+        connection
+            .execute_batch(
+                "DROP TRIGGER IF EXISTS import_document_membership_finalizations_valid;
+                 DROP VIEW IF EXISTS concertable_import_durable_evidence_failures;
+                 DROP TRIGGER IF EXISTS import_document_evidence_valid;
+                 DROP TRIGGER IF EXISTS import_document_evidence_no_update;
+                 DROP TRIGGER IF EXISTS import_document_evidence_no_delete;
+                 DROP TRIGGER IF EXISTS import_document_synthetic_attestations_valid;
+                 DROP TRIGGER IF EXISTS import_document_synthetic_attestations_no_update;
+                 DROP TRIGGER IF EXISTS import_document_synthetic_attestations_no_delete;
+                 DROP TABLE IF EXISTS import_document_evidence;
+                 DROP TABLE IF EXISTS import_document_synthetic_attestations;
+                 DROP VIEW IF EXISTS concertable_import_cohort_evidence_failures;
+                 CREATE TRIGGER import_document_membership_finalizations_valid
+                 BEFORE INSERT ON import_document_membership_finalizations
+                 WHEN NOT EXISTS (
+                     SELECT 1 FROM import_batches batch
+                      WHERE batch.id = NEW.import_id
+                        AND batch.kind = 'concertable_plans'
+                        AND batch.imported_at = NEW.finalized_at
+                 )
+                 OR EXISTS (
+                     SELECT 1 FROM concertable_import_membership_evidence_failures failure
+                      WHERE failure.import_id = NEW.import_id
+                 )
+                 BEGIN
+                     SELECT RAISE(ABORT, 'import document membership finalization is invalid');
+                 END;
+                 DELETE FROM schema_migrations WHERE version >= 26;
+                 PRAGMA user_version = 25;",
+            )
+            .expect("restore schema 25 import database");
+    }
+
     fn restore_schema_24_import_database(connection: &Connection) {
+        restore_schema_25_import_database(connection);
         connection
             .execute_batch(
                 "DROP TRIGGER IF EXISTS import_work_item_repositories_finalized_insert;
                  DROP TRIGGER IF EXISTS import_work_item_repositories_finalized_update;
                  DROP TRIGGER IF EXISTS import_work_item_repositories_finalized_delete;
+                 DROP VIEW IF EXISTS concertable_import_durable_evidence_failures;
+                 DROP TRIGGER IF EXISTS import_document_evidence_valid;
+                 DROP TRIGGER IF EXISTS import_document_evidence_no_update;
+                 DROP TRIGGER IF EXISTS import_document_evidence_no_delete;
+                 DROP TRIGGER IF EXISTS import_document_synthetic_attestations_valid;
+                 DROP TRIGGER IF EXISTS import_document_synthetic_attestations_no_update;
+                 DROP TRIGGER IF EXISTS import_document_synthetic_attestations_no_delete;
+                 DROP TABLE IF EXISTS import_document_evidence;
+                 DROP TABLE IF EXISTS import_document_synthetic_attestations;
                  DROP TRIGGER IF EXISTS import_planning_repository_parent_immutable;
                  DROP TRIGGER IF EXISTS import_workspace_planning_repository_immutable;
                  DROP TRIGGER IF EXISTS import_work_item_membership_parent_immutable;
