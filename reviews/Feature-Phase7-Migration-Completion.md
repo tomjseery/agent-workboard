@@ -46,10 +46,12 @@
   Resolved by canonical containment checks, link/reparse detection through resolved-path equality, and a
   visited-directory set; edited source references now reject traversal and linked paths too.
 
-- [ ] **P7-004 — HIGH — correctness** — `crates/workboard-application/src/concertable_import.rs:301`
+- [x] **P7-004 — HIGH — correctness** — `crates/workboard-application/src/concertable_import.rs:301`
   Apply accepts any code repository in the workspace and can assign a Concertable preview to an unrelated
   repository. Require the registered repository Git common-directory identity to equal the preview source
   repository identity before publishing files or writing database rows.
+  Resolved by comparing the registered target and preview source Git common directories before preflight;
+  the unrelated-repository fixture proves no hierarchy state is written.
 
 - [x] **P7-005 — MEDIUM — correctness** — `crates/workboard-application/src/legacy_import.rs:1307`
   When an imported checkout already has a different current Workboard path, the legacy current path is
@@ -71,12 +73,16 @@
   Resolved by directory-qualified pairing keys and an explicit unmatched-progress error; fixtures cover
   identical filenames in separate directories and orphan progress documents.
 
-- [ ] **P7-008 — MEDIUM — correctness** — `crates/workboard-application/src/concertable_import.rs:289`
+- [x] **P7-008 — MEDIUM — correctness** — `crates/workboard-application/src/concertable_import.rs:289`
   Existing-import lookups are not scoped to workspace/repository and occur after mutable-source validation,
   so another target can inherit a false success while a valid replay fails after source retirement. Scope
   durable outcomes to the requested target and return a same-target prior outcome before source validation.
+  Resolved in both importers by scoping durable lookup to workspace and repository and performing it before
+  source validation; same-target replay survives source retirement and other targets cannot borrow success.
 
-- [ ] **P7-009 — HIGH — correctness** — `crates/workboard-application/src/concertable_import.rs:318`
+- [x] **P7-009 — HIGH — correctness** — `crates/workboard-application/src/concertable_import.rs:318`
   Preflight omits document IDs, allowing the planning-store commit to succeed before SQLite rejects an
   existing document ID. Preflight every selected document ID/path and prove collisions leave planning-store
   HEAD and Workboard state unchanged while safe retries remain idempotent.
+  Resolved by preflighting every prepared document ID and planning-store path before publication; the
+  collision fixture proves both planning HEAD and hierarchy/document projections remain unchanged.

@@ -13,6 +13,7 @@ use workboard_core::{
 };
 
 use crate::AppError;
+use crate::git::{GitCli, GitWorktreeResolver};
 use crate::planning_store::{DocumentFrontMatter, NewPlanningDocument, PlanningStore};
 use crate::workspace::WorkboardApplication;
 
@@ -306,24 +307,22 @@ impl WorkboardApplication {
         preview: &ConcertableImportPreview,
     ) -> Result<ConcertableImportOutcome, AppError> {
         validate_preview(preview)?;
-        validate_source(preview)?;
         let preview_hash = hash_bytes(&serde_json::to_vec(preview)?);
-        if let Some(mut outcome) = self.existing_concertable_import(&preview_hash)? {
-            let counts = selected_counts(preview);
-            outcome.epics = counts.0;
-            outcome.features = counts.1;
-            outcome.work_items = counts.2;
+        if let Some(outcome) =
+            self.existing_concertable_import(workspace_id, repository_id, &preview_hash)?
+        {
             return Ok(outcome);
         }
+        validate_source(preview)?;
         let (workspace_slug, planning_repository_id, planning_store_path) =
             self.workspace_planning_store(workspace_id)?;
-        let repository_slug = self.store.read(|connection| {
+        let (repository_slug, repository_common_directory) = self.store.read(|connection| {
             connection
                 .query_row(
-                    "SELECT slug FROM repositories
+                    "SELECT slug, git_common_directory FROM repositories
                      WHERE id = ?1 AND workspace_id = ?2 AND is_planning_store = 0",
                     params![repository_id.to_string(), workspace_id.to_string()],
-                    |row| row.get::<_, String>(0),
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
                 )
                 .optional()?
                 .ok_or_else(|| {
@@ -332,10 +331,19 @@ impl WorkboardApplication {
                     )
                 })
         })?;
+        let source_repository = GitCli.resolve(&preview.source_repository)?;
+        if !paths_equal(
+            &source_repository.common_dir,
+            Path::new(&repository_common_directory),
+        ) {
+            return Err(AppError::Domain(
+                "Concertable import target does not match the source repository".to_owned(),
+            ));
+        }
         let repository_slug =
             Slug::new(repository_slug).map_err(|error| AppError::Domain(error.to_string()))?;
-        self.preflight_import_collisions(workspace_id, preview)?;
         let prepared = prepare_documents(&workspace_slug, &repository_slug, preview)?;
+        self.preflight_import_collisions(workspace_id, planning_repository_id, preview, &prepared)?;
         let planning_store = PlanningStore::create_or_link(&planning_store_path)?;
         let new_documents = prepared
             .iter()
@@ -516,14 +524,31 @@ impl WorkboardApplication {
 
     fn existing_concertable_import(
         &self,
+        workspace_id: WorkspaceId,
+        repository_id: RepositoryId,
         preview_hash: &str,
     ) -> Result<Option<ConcertableImportOutcome>, AppError> {
         self.store.read(|connection| {
             let row = connection
                 .query_row(
-                    "SELECT id, planning_commit FROM import_batches
-                     WHERE preview_hash = ?1 AND kind = 'concertable_plans'",
-                    [preview_hash],
+                    "SELECT batch.id, batch.planning_commit FROM import_batches batch
+                     WHERE batch.preview_hash = ?1 AND batch.kind = 'concertable_plans'
+                       AND batch.workspace_id = ?2
+                       AND EXISTS (
+                           SELECT 1 FROM import_source_destinations destination
+                           JOIN work_items item
+                             ON destination.destination_kind = 'work_item'
+                            AND destination.destination_id = item.id
+                           JOIN work_item_repositories repository
+                             ON repository.work_item_id = item.id
+                           WHERE destination.import_id = batch.id
+                             AND repository.repository_id = ?3
+                       )",
+                    params![
+                        preview_hash,
+                        workspace_id.to_string(),
+                        repository_id.to_string(),
+                    ],
                     |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
                 )
                 .optional()?;
@@ -565,7 +590,9 @@ impl WorkboardApplication {
     fn preflight_import_collisions(
         &self,
         workspace_id: WorkspaceId,
+        planning_repository_id: RepositoryId,
         preview: &ConcertableImportPreview,
+        prepared: &[PreparedDocument],
     ) -> Result<(), AppError> {
         self.store.read(|connection| {
             for epic in preview.epics.iter().filter(|epic| epic.selected) {
@@ -597,6 +624,23 @@ impl WorkboardApplication {
                             return Err(AppError::IdempotencyConflict);
                         }
                     }
+                }
+            }
+            for document in prepared {
+                let collision: i64 = connection.query_row(
+                    "SELECT EXISTS (
+                         SELECT 1 FROM documents
+                         WHERE id = ?1 OR (repository_id = ?2 AND relative_path = ?3)
+                     )",
+                    params![
+                        document.document.front_matter.id.to_string(),
+                        planning_repository_id.to_string(),
+                        path_text(&document.document.relative_path)?,
+                    ],
+                    |row| row.get(0),
+                )?;
+                if collision != 0 {
+                    return Err(AppError::IdempotencyConflict);
                 }
             }
             Ok(())
@@ -1357,7 +1401,9 @@ mod tests {
         CONCERTABLE_IMPORT_FORMAT_VERSION, concertable_source_path, explicit_completed_status,
         preview_concertable_plans,
     };
-    use crate::workspace::{InitialiseWorkspace, RegisterRepository, WorkboardApplication};
+    use crate::workspace::{
+        CreateEpic, InitialiseWorkspace, RegisterRepository, WorkboardApplication,
+    };
 
     #[test]
     fn preview_preserves_roadmaps_plans_phases_and_progress() {
@@ -1540,6 +1586,159 @@ mod tests {
         );
     }
 
+    #[test]
+    fn apply_rejects_an_unrelated_target_repository() {
+        let fixture = Fixture::new();
+        let unrelated = fixture.directory.path().join("Unrelated");
+        fs::create_dir_all(&unrelated).expect("create unrelated repository");
+        fs::write(unrelated.join("README.md"), "# Unrelated\n").expect("write unrelated file");
+        initialise_repository(&unrelated);
+        let database = fixture.directory.path().join("workboard.sqlite");
+        let planning_store = fixture.directory.path().join("planning-store");
+        let mut application = WorkboardApplication::open(&database).expect("open Workboard");
+        let workspace = application
+            .initialise_workspace(InitialiseWorkspace {
+                slug: Slug::new("demo").expect("workspace slug"),
+                title: "Demo".to_owned(),
+                planning_store_path: planning_store,
+            })
+            .expect("initialise workspace");
+        application
+            .register_repository(RegisterRepository {
+                workspace_id: workspace.workspace.id,
+                slug: Slug::new("concertable").expect("repository slug"),
+                title: "Concertable".to_owned(),
+                path: fixture.source.clone(),
+            })
+            .expect("register source repository");
+        let unrelated = application
+            .register_repository(RegisterRepository {
+                workspace_id: workspace.workspace.id,
+                slug: Slug::new("unrelated").expect("repository slug"),
+                title: "Unrelated".to_owned(),
+                path: unrelated,
+            })
+            .expect("register unrelated repository");
+        let preview = preview_concertable_plans(&fixture.source).expect("preview plans");
+
+        let error = application
+            .apply_concertable_import(workspace.workspace.id, unrelated.id, &preview)
+            .expect_err("reject unrelated target");
+
+        assert!(error.to_string().contains("target does not match"));
+        assert!(
+            application
+                .snapshot(workspace.workspace.id)
+                .expect("snapshot")
+                .epics
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn replay_is_scoped_and_survives_source_retirement() {
+        let fixture = Fixture::new();
+        let unrelated_path = fixture.directory.path().join("Unrelated");
+        fs::create_dir_all(&unrelated_path).expect("create unrelated repository");
+        fs::write(unrelated_path.join("README.md"), "# Unrelated\n").expect("write unrelated file");
+        initialise_repository(&unrelated_path);
+        let database = fixture.directory.path().join("workboard.sqlite");
+        let planning_store = fixture.directory.path().join("planning-store");
+        let mut application = WorkboardApplication::open(&database).expect("open Workboard");
+        let workspace = application
+            .initialise_workspace(InitialiseWorkspace {
+                slug: Slug::new("demo").expect("workspace slug"),
+                title: "Demo".to_owned(),
+                planning_store_path: planning_store,
+            })
+            .expect("initialise workspace");
+        let repository = application
+            .register_repository(RegisterRepository {
+                workspace_id: workspace.workspace.id,
+                slug: Slug::new("concertable").expect("repository slug"),
+                title: "Concertable".to_owned(),
+                path: fixture.source.clone(),
+            })
+            .expect("register source repository");
+        let unrelated = application
+            .register_repository(RegisterRepository {
+                workspace_id: workspace.workspace.id,
+                slug: Slug::new("unrelated").expect("repository slug"),
+                title: "Unrelated".to_owned(),
+                path: unrelated_path,
+            })
+            .expect("register unrelated repository");
+        let preview = preview_concertable_plans(&fixture.source).expect("preview plans");
+        let first = application
+            .apply_concertable_import(workspace.workspace.id, repository.id, &preview)
+            .expect("apply import");
+        fs::rename(
+            &fixture.source,
+            fixture.directory.path().join("Retired-Concertable"),
+        )
+        .expect("retire source repository");
+
+        let replay = application
+            .apply_concertable_import(workspace.workspace.id, repository.id, &preview)
+            .expect("replay import");
+        let other_target =
+            application.apply_concertable_import(workspace.workspace.id, unrelated.id, &preview);
+
+        assert!(replay.already_applied);
+        assert_eq!(replay.import_id, first.import_id);
+        assert!(other_target.is_err());
+    }
+
+    #[test]
+    fn document_id_collision_precedes_planning_publication() {
+        let fixture = Fixture::new();
+        let database = fixture.directory.path().join("workboard.sqlite");
+        let planning_store = fixture.directory.path().join("planning-store");
+        let mut application = WorkboardApplication::open(&database).expect("open Workboard");
+        let workspace = application
+            .initialise_workspace(InitialiseWorkspace {
+                slug: Slug::new("demo").expect("workspace slug"),
+                title: "Demo".to_owned(),
+                planning_store_path: planning_store.clone(),
+            })
+            .expect("initialise workspace");
+        let repository = application
+            .register_repository(RegisterRepository {
+                workspace_id: workspace.workspace.id,
+                slug: Slug::new("concertable").expect("repository slug"),
+                title: "Concertable".to_owned(),
+                path: fixture.source.clone(),
+            })
+            .expect("register repository");
+        application
+            .create_epic(CreateEpic {
+                workspace_id: workspace.workspace.id,
+                slug: Slug::new("existing").expect("Epic slug"),
+                title: "Existing".to_owned(),
+                body: "# Existing\n\nExisting work.\n".to_owned(),
+            })
+            .expect("create existing Epic");
+        let before = application
+            .snapshot(workspace.workspace.id)
+            .expect("snapshot before collision");
+        let existing_document_id = before.documents[0].id;
+        let head = git_head(&planning_store);
+        let mut preview = preview_concertable_plans(&fixture.source).expect("preview plans");
+        preview.epics[0].document_id = existing_document_id;
+
+        let error = application
+            .apply_concertable_import(workspace.workspace.id, repository.id, &preview)
+            .expect_err("reject document collision");
+        let after = application
+            .snapshot(workspace.workspace.id)
+            .expect("snapshot after collision");
+
+        assert!(matches!(error, crate::AppError::IdempotencyConflict));
+        assert_eq!(git_head(&planning_store), head);
+        assert_eq!(after.epics, before.epics);
+        assert_eq!(after.documents, before.documents);
+    }
+
     struct Fixture {
         directory: TempDir,
         source: PathBuf,
@@ -1646,5 +1845,19 @@ mod tests {
             .trim()
             .parse()
             .expect("numeric count")
+    }
+
+    fn git_head(root: &Path) -> String {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .expect("read HEAD");
+        assert!(output.status.success());
+        String::from_utf8(output.stdout)
+            .expect("UTF-8 HEAD")
+            .trim()
+            .to_owned()
     }
 }

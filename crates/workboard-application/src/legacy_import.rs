@@ -430,6 +430,56 @@ impl WorkboardApplication {
     ) -> Result<LegacyImportOutcome, AppError> {
         validate_legacy_preview(preview)?;
         let preview_hash = hash_bytes(&serde_json::to_vec(preview)?);
+        if let Some(mut outcome) =
+            self.existing_legacy_import(workspace_id, repository_id, &preview_hash)?
+        {
+            if let Ok(snapshot) = verified_legacy_snapshot(&preview.source, &preview.source_hash) {
+                let source = &snapshot.connection;
+                let tables = legacy_tables(source)?;
+                let target_common_directory = self.store.read(|connection| {
+                    Ok(connection.query_row(
+                        "SELECT git_common_directory FROM repositories
+                         WHERE id = ?1 AND workspace_id = ?2 AND is_planning_store = 0",
+                        params![repository_id.to_string(), workspace_id.to_string()],
+                        |row| row.get::<_, String>(0),
+                    )?)
+                })?;
+                let legacy_repository_inventory = legacy_repositories(source, &tables)?;
+                let legacy_repository = legacy_repository_inventory
+                    .iter()
+                    .find(|repository| {
+                        paths_equal(
+                            &repository.common_directory,
+                            Path::new(&target_common_directory),
+                        )
+                    })
+                    .ok_or_else(|| {
+                        AppError::Domain(
+                            "no legacy repository has the registered Git common directory"
+                                .to_owned(),
+                        )
+                    })?;
+                let repository_evidence = LegacyRepositoryEvidence::read(source, &tables)?;
+                let current_candidates = legacy_session_candidates(source, &tables)?;
+                outcome.reconciled_session_candidates = self.reconcile_legacy_candidates(
+                    workspace_id,
+                    repository_id,
+                    outcome.import_id,
+                    &legacy_repository.source_id,
+                    &current_candidates,
+                    &repository_evidence,
+                )?;
+                self.enrich_legacy_candidates(
+                    workspace_id,
+                    repository_id,
+                    outcome.import_id,
+                    preview,
+                    source,
+                    &tables,
+                )?;
+            }
+            return Ok(outcome);
+        }
         let target_common_directory = self.store.read(|connection| {
             connection
                 .query_row(
@@ -464,25 +514,6 @@ impl WorkboardApplication {
             })?;
         let repository_evidence = LegacyRepositoryEvidence::read(source, &tables)?;
         let current_candidates = legacy_session_candidates(source, &tables)?;
-        if let Some(mut outcome) = self.existing_legacy_import(&preview_hash)? {
-            outcome.reconciled_session_candidates = self.reconcile_legacy_candidates(
-                workspace_id,
-                repository_id,
-                outcome.import_id,
-                &legacy_repository.source_id,
-                &current_candidates,
-                &repository_evidence,
-            )?;
-            self.enrich_legacy_candidates(
-                workspace_id,
-                repository_id,
-                outcome.import_id,
-                preview,
-                source,
-                &tables,
-            )?;
-            return Ok(outcome);
-        }
         let current_by_source = current_candidates
             .iter()
             .map(|candidate| (candidate.source_conversation_id.as_str(), candidate))
@@ -1206,14 +1237,27 @@ impl WorkboardApplication {
 
     fn existing_legacy_import(
         &self,
+        workspace_id: WorkspaceId,
+        repository_id: RepositoryId,
         preview_hash: &str,
     ) -> Result<Option<LegacyImportOutcome>, AppError> {
         self.store.read(|connection| {
             let id = connection
                 .query_row(
-                    "SELECT id FROM import_batches
-                     WHERE preview_hash = ?1 AND kind = 'context_catalogue'",
-                    [preview_hash],
+                    "SELECT batch.id FROM import_batches batch
+                     WHERE batch.preview_hash = ?1 AND batch.kind = 'context_catalogue'
+                       AND batch.workspace_id = ?2
+                       AND EXISTS (
+                           SELECT 1 FROM legacy_import_records record
+                           WHERE record.import_id = batch.id
+                             AND record.destination_kind = 'repository'
+                             AND record.destination_id = ?3
+                       )",
+                    params![
+                        preview_hash,
+                        workspace_id.to_string(),
+                        repository_id.to_string(),
+                    ],
                     |row| row.get::<_, String>(0),
                 )
                 .optional()?;
@@ -2077,8 +2121,10 @@ fn validate_repository_selection<'a>(
 }
 
 fn validate_legacy_preview(preview: &LegacyImportPreview) -> Result<(), AppError> {
-    validate_source_database(&preview.source)?;
-    if preview.source_hash.len() != 64 || preview.repository_inventory.is_empty() {
+    if !preview.source.is_absolute()
+        || preview.source_hash.len() != 64
+        || preview.repository_inventory.is_empty()
+    {
         return Err(AppError::Domain(
             "legacy import preview is invalid".to_owned(),
         ));
@@ -2657,6 +2703,62 @@ mod tests {
     }
 
     #[test]
+    fn legacy_replay_is_scoped_and_survives_source_retirement() {
+        let directory = TempDir::new().expect("temporary directory");
+        let source_repository = create_repository(directory.path(), "source");
+        let other_repository = create_repository(directory.path(), "other");
+        let common_directory = source_repository
+            .join(".git")
+            .canonicalize()
+            .expect("canonical source Git directory");
+        let legacy = directory.path().join("legacy.sqlite");
+        create_legacy_database(&legacy, &source_repository, &common_directory);
+        let backup = directory.path().join("backup/catalogue.sqlite");
+        let mut preview = snapshot_context_catalogue(&legacy, &backup).expect("snapshot catalogue");
+        preview.session_candidates[0].selected = true;
+        let mut application = WorkboardApplication::open(directory.path().join("workboard.sqlite"))
+            .expect("open Workboard");
+        let workspace = application
+            .initialise_workspace(InitialiseWorkspace {
+                slug: Slug::new("demo").expect("workspace slug"),
+                title: "Demo".to_owned(),
+                planning_store_path: directory.path().join("planning-store"),
+            })
+            .expect("initialise workspace");
+        let repository = application
+            .register_repository(RegisterRepository {
+                workspace_id: workspace.workspace.id,
+                slug: Slug::new("source").expect("repository slug"),
+                title: "Source".to_owned(),
+                path: source_repository,
+            })
+            .expect("register source repository");
+        let other = application
+            .register_repository(RegisterRepository {
+                workspace_id: workspace.workspace.id,
+                slug: Slug::new("other").expect("repository slug"),
+                title: "Other".to_owned(),
+                path: other_repository,
+            })
+            .expect("register other repository");
+        let first = application
+            .apply_context_catalogue_import(workspace.workspace.id, repository.id, &preview)
+            .expect("apply import");
+        fs::rename(&backup, directory.path().join("retired-catalogue.sqlite"))
+            .expect("retire legacy snapshot");
+
+        let replay = application
+            .apply_context_catalogue_import(workspace.workspace.id, repository.id, &preview)
+            .expect("replay import");
+        let other_target =
+            application.apply_context_catalogue_import(workspace.workspace.id, other.id, &preview);
+
+        assert!(replay.already_applied);
+        assert_eq!(replay.import_id, first.import_id);
+        assert!(other_target.is_err());
+    }
+
+    #[test]
     fn import_preserves_a_conflicting_legacy_checkout_path_as_history() {
         let directory = TempDir::new().expect("temporary directory");
         let source_repository = create_repository(directory.path(), "source");
@@ -2859,6 +2961,13 @@ mod tests {
                         preview.source_hash,
                         other.destination_session_id.to_string(),
                     ],
+                )?;
+                transaction.execute(
+                    "INSERT INTO legacy_import_records (
+                         import_id, source_table, source_key, destination_kind,
+                         destination_id, payload_json
+                     ) VALUES (?1, 'repositories', 'repo', 'repository', ?2, '{}')",
+                    params![import_id.to_string(), repository.id.to_string()],
                 )?;
                 transaction.execute(
                     "INSERT INTO imported_session_candidates (
