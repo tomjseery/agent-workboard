@@ -11,7 +11,7 @@ use workboard_core::{ConversationId, LaunchLeaseId};
 
 use crate::AppError;
 
-const CURRENT_SCHEMA_VERSION: i64 = 13;
+const CURRENT_SCHEMA_VERSION: i64 = 14;
 const FOUNDATION_SCHEMA_CHECKSUM: &str = "agent-workboard-foundation-v1";
 const LAUNCH_LEASE_SCHEMA_CHECKSUM: &str = "agent-workboard-launch-leases-v1";
 const WORKBOARD_DOMAIN_SCHEMA_CHECKSUM: &str = "agent-workboard-domain-v1";
@@ -26,6 +26,7 @@ const LEGACY_IMPORT_SCHEMA_CHECKSUM: &str = "agent-workboard-legacy-import-v1";
 const LEGACY_IMPORT_RECORD_SCHEMA_CHECKSUM: &str = "agent-workboard-legacy-import-record-v1";
 const LEGACY_CANDIDATE_METADATA_SCHEMA_CHECKSUM: &str =
     "agent-workboard-legacy-candidate-metadata-v1";
+const IMPORT_BATCH_REPOSITORY_SCHEMA_CHECKSUM: &str = "agent-workboard-import-batch-repository-v1";
 
 pub struct SqliteStore {
     path: PathBuf,
@@ -898,6 +899,46 @@ fn migrate(connection: &Connection) -> Result<(), AppError> {
          ALTER TABLE imported_session_candidates ADD COLUMN last_prompt_preview TEXT;
          ALTER TABLE imported_session_candidates ADD COLUMN last_activity_at TEXT;
          ALTER TABLE imported_session_candidates ADD COLUMN observed_cwd TEXT;",
+    )?;
+    apply_migration(
+        connection,
+        14,
+        IMPORT_BATCH_REPOSITORY_SCHEMA_CHECKSUM,
+        "ALTER TABLE import_batches ADD COLUMN repository_id TEXT
+             REFERENCES repositories(id) ON DELETE RESTRICT;
+         UPDATE import_batches
+            SET repository_id = (
+                SELECT record.destination_id
+                  FROM legacy_import_records record
+                 WHERE record.import_id = import_batches.id
+                   AND record.destination_kind = 'repository'
+                 ORDER BY record.source_table, record.source_key
+                 LIMIT 1
+            )
+          WHERE kind = 'context_catalogue';
+         UPDATE import_batches
+            SET repository_id = COALESCE(
+                (
+                    SELECT path.repository_id
+                      FROM repository_paths path
+                     WHERE path.path = import_batches.source_path
+                     ORDER BY path.observed_from, path.id
+                     LIMIT 1
+                ),
+                (
+                    SELECT relation.repository_id
+                      FROM import_source_destinations destination
+                      JOIN work_item_repositories relation
+                        ON destination.destination_kind = 'work_item'
+                       AND destination.destination_id = relation.work_item_id
+                     WHERE destination.import_id = import_batches.id
+                     ORDER BY relation.repository_id
+                     LIMIT 1
+                )
+            )
+          WHERE kind = 'concertable_plans';
+         CREATE INDEX import_batches_target
+             ON import_batches (workspace_id, repository_id, kind, preview_hash);",
     )?;
     Ok(())
 }

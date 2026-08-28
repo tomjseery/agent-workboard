@@ -5,8 +5,8 @@
 > irreversible or ambiguous finding: record its durable disposition, take the safe path, and keep going.
 
 **Review status:** `complete`
-**Reviewed up to commit:** `89c6cc14f15cd7c61dd8e39d8cddfc7be88d0126`  `(2026-08-28)`
-**Security-reviewed up to commit:** `89c6cc14f15cd7c61dd8e39d8cddfc7be88d0126`  `(2026-08-28)`
+**Reviewed up to commit:** `362bd0280f4e6c209a4efe44da69952fbfdf09b7`  `(2026-08-28)`
+**Security-reviewed up to commit:** `362bd0280f4e6c209a4efe44da69952fbfdf09b7`  `(2026-08-28)`
 **Judgment:** `changes-requested`
 
 ## Review pass — 2026-08-28 — full
@@ -86,3 +86,26 @@
   HEAD and Workboard state unchanged while safe retries remain idempotent.
   Resolved by preflighting every prepared document ID and planning-store path before publication; the
   collision fixture proves both planning HEAD and hierarchy/document projections remain unchanged.
+
+## Review pass — 2026-08-28 — incremental
+
+**Candidate base:** `89c6cc14f15cd7c61dd8e39d8cddfc7be88d0126`
+**Candidate head:** `362bd0280f4e6c209a4efe44da69952fbfdf09b7`
+**Candidate branch:** `Feature/Phase7-Migration-Completion`
+**Candidate scope:** `all`
+**Candidate path-set:** `sha256:1500621d06005029fa6ba970d8d3616dabb00456a50c05f89cabf9eec5f62573` `(4 paths)`
+**Candidate bundle:** `C:\Users\TOMMYS~1\AppData\Local\Temp\agent-workboard-review-2844f062604d4215bd837dac758ffd23`
+**Candidate bundle identity:** `sha256:95520be4e48935c4f28dd10f21af571ce808f591e562e7ad84f5fed18a2938b6`
+**Work-order path:** `reviews/Feature-Phase7-Migration-Completion.md`
+**Work-order mode:** `append`
+**Pass judgment:** `changes-requested`
+
+### Findings
+
+- [x] **P7-010 — HIGH — correctness** — `crates/workboard-application/src/concertable_import.rs:537`
+  Existing-import ownership is inferred through mutable `work_item_repositories`, so a valid import with no
+  selected Work items cannot replay, while later associating an imported Work item with another repository
+  can make that repository inherit the original outcome. Persist and query immutable target-repository
+  provenance on the import batch.
+  Resolved by migrating import batches to direct repository provenance and querying it for replays; focused
+  fixtures cover imports without Work items and later associations with a second repository.

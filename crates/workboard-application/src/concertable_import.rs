@@ -369,12 +369,13 @@ impl WorkboardApplication {
         self.store.write(|transaction| {
             transaction.execute(
                 "INSERT INTO import_batches (
-                     id, workspace_id, kind, source_path, source_head, preview_hash,
-                     planning_commit, imported_at
-                 ) VALUES (?1, ?2, 'concertable_plans', ?3, ?4, ?5, ?6, ?7)",
+                     id, workspace_id, repository_id, kind, source_path, source_head,
+                     preview_hash, planning_commit, imported_at
+                 ) VALUES (?1, ?2, ?3, 'concertable_plans', ?4, ?5, ?6, ?7, ?8)",
                 params![
                     import_id.to_string(),
                     workspace_id.to_string(),
+                    repository_id.to_string(),
                     path_text(&preview.source_repository)?,
                     preview.source_head,
                     preview_hash,
@@ -534,16 +535,7 @@ impl WorkboardApplication {
                     "SELECT batch.id, batch.planning_commit FROM import_batches batch
                      WHERE batch.preview_hash = ?1 AND batch.kind = 'concertable_plans'
                        AND batch.workspace_id = ?2
-                       AND EXISTS (
-                           SELECT 1 FROM import_source_destinations destination
-                           JOIN work_items item
-                             ON destination.destination_kind = 'work_item'
-                            AND destination.destination_id = item.id
-                           JOIN work_item_repositories repository
-                             ON repository.work_item_id = item.id
-                           WHERE destination.import_id = batch.id
-                             AND repository.repository_id = ?3
-                       )",
+                       AND batch.repository_id = ?3",
                     params![
                         preview_hash,
                         workspace_id.to_string(),
@@ -1672,6 +1664,22 @@ mod tests {
         let first = application
             .apply_concertable_import(workspace.workspace.id, repository.id, &preview)
             .expect("apply import");
+        let imported_work_item = application
+            .snapshot(workspace.workspace.id)
+            .expect("snapshot imported Work items")
+            .work_items[0]
+            .id;
+        application
+            .store
+            .write(|transaction| {
+                transaction.execute(
+                    "INSERT INTO work_item_repositories (work_item_id, repository_id)
+                     VALUES (?1, ?2)",
+                    [imported_work_item.to_string(), unrelated.id.to_string()],
+                )?;
+                Ok(())
+            })
+            .expect("associate imported Work item with unrelated repository");
         fs::rename(
             &fixture.source,
             fixture.directory.path().join("Retired-Concertable"),
@@ -1687,6 +1695,49 @@ mod tests {
         assert!(replay.already_applied);
         assert_eq!(replay.import_id, first.import_id);
         assert!(other_target.is_err());
+    }
+
+    #[test]
+    fn replay_without_selected_work_items_survives_source_retirement() {
+        let fixture = Fixture::new();
+        let database = fixture.directory.path().join("workboard.sqlite");
+        let planning_store = fixture.directory.path().join("planning-store");
+        let mut application = WorkboardApplication::open(&database).expect("open Workboard");
+        let workspace = application
+            .initialise_workspace(InitialiseWorkspace {
+                slug: Slug::new("demo").expect("workspace slug"),
+                title: "Demo".to_owned(),
+                planning_store_path: planning_store,
+            })
+            .expect("initialise workspace");
+        let repository = application
+            .register_repository(RegisterRepository {
+                workspace_id: workspace.workspace.id,
+                slug: Slug::new("concertable").expect("repository slug"),
+                title: "Concertable".to_owned(),
+                path: fixture.source.clone(),
+            })
+            .expect("register repository");
+        let mut preview = preview_concertable_plans(&fixture.source).expect("preview plans");
+        for item in &mut preview.epics[0].features[0].work_items {
+            item.selected = false;
+        }
+        let first = application
+            .apply_concertable_import(workspace.workspace.id, repository.id, &preview)
+            .expect("apply import");
+        fs::rename(
+            &fixture.source,
+            fixture.directory.path().join("Retired-Concertable"),
+        )
+        .expect("retire source repository");
+
+        let replay = application
+            .apply_concertable_import(workspace.workspace.id, repository.id, &preview)
+            .expect("replay import");
+
+        assert_eq!(first.work_items, 0);
+        assert!(replay.already_applied);
+        assert_eq!(replay.import_id, first.import_id);
     }
 
     #[test]

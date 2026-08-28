@@ -13,20 +13,21 @@
 
 Phases 1–6 are complete. The Phase 7 candidate implements editable Concertable planning import, legacy
 Context Catalogue evidence import, explicit imported-session adoption, imported-checkout attachment, and
-the CLI and documentation needed to operate those paths. The latest safety repair makes legacy session
-candidates opt-in, rejects selected sessions with evidence for another repository, and reconciles
-unconfirmed candidates misassigned by an older import.
+the CLI and documentation needed to operate those paths. The review remediation pins legacy snapshot
+identity, contains planning-source traversal, preflights destination collisions, scopes replays to immutable
+repository provenance, and preserves legacy checkout history.
 
 ## Next Steps
 
-Resolve the open findings in `reviews/Feature-Phase7-Migration-Completion.md`, then run an incremental
-review and repeat formatting, lint, and workspace tests before marking Phase 7 complete.
+Run an incremental review of the completed remediation, then repeat formatting, lint, and workspace tests
+before the external Concertable parity acceptance gate.
 
 ## Completed work
 
 - Phases 1–6 shipped through `f5eae79`.
-- Phase 7 planning and native-session import shipped through `d2b5647`, with the cross-repository safety
-  repair included in this commit.
+- Phase 7 planning and native-session import shipped through `d2b5647`.
+- All ten findings from the full and first incremental review passes have been resolved in the local
+  candidate.
 
 ## Verification
 
@@ -36,8 +37,9 @@ review and repeat formatting, lint, and workspace tests before marking Phase 7 c
 
 ## Reviews
 
-The full review of `f5eae79..89c6cc1` is complete with changes requested. The canonical work order is
-`reviews/Feature-Phase7-Migration-Completion.md`; remediation is in progress.
+The full review of `f5eae79..89c6cc1` and first incremental review through `362bd02` are complete with
+changes requested. The canonical work order is `reviews/Feature-Phase7-Migration-Completion.md`; every
+recorded finding is resolved and the remediation requires a clean incremental pass.
 
 ## Decisions, discoveries, blockers, and deviations
 
