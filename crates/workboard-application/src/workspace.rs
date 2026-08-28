@@ -67,7 +67,7 @@ pub struct ManagedSessionTarget {
 }
 
 pub struct WorkboardApplication {
-    store: SqliteStore,
+    pub(crate) store: SqliteStore,
 }
 
 impl WorkboardApplication {
@@ -823,7 +823,7 @@ impl WorkboardApplication {
         })
     }
 
-    fn workspace_planning_store(
+    pub(crate) fn workspace_planning_store(
         &self,
         workspace_id: WorkspaceId,
     ) -> Result<(Slug, RepositoryId, PathBuf), AppError> {
@@ -858,7 +858,10 @@ impl WorkboardApplication {
         })
     }
 
-    fn code_repository_slugs(&self, workspace_id: WorkspaceId) -> Result<Vec<Slug>, AppError> {
+    pub(crate) fn code_repository_slugs(
+        &self,
+        workspace_id: WorkspaceId,
+    ) -> Result<Vec<Slug>, AppError> {
         self.store.read(|connection| {
             let mut statement = connection.prepare(
                 "SELECT slug FROM repositories

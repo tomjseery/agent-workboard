@@ -11,12 +11,17 @@ use serde::Serialize;
 use workboard_application::AppError;
 use workboard_application::caller::{CallerIdentityProvider, EnvironmentCallerIdentity};
 use workboard_application::checkout::PrepareFeatureCheckout;
+use workboard_application::concertable_import::{
+    ConcertableImportPreview, preview_concertable_plans,
+};
 use workboard_application::hooks::{HookIngestionMutation, MAX_HOOK_INPUT_BYTES};
 use workboard_application::integration::{
     INTEGRATION_OWNER, IntegrationConfirmation, IntegrationOperation, IntegrationRequest,
     IntegrationResponse, IntegrationState,
 };
-use workboard_application::legacy_import::preview_context_catalogue;
+use workboard_application::legacy_import::{
+    ImportedSessionCandidate, LegacyImportPreview, snapshot_context_catalogue,
+};
 use workboard_application::native_launch::SystemLaunchExecutor;
 use workboard_application::native_sources::RefreshNativeSources;
 use workboard_application::planning_workflow::FeatureProposal;
@@ -262,6 +267,14 @@ enum SessionCommand {
         #[arg(long, default_value = "removed by user")]
         reason: String,
     },
+    ImportedCandidates,
+    AdoptImported {
+        session: String,
+        work_item: Option<String>,
+    },
+    IgnoreImported {
+        session: String,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -417,7 +430,44 @@ struct ImportArgs {
 
 #[derive(Debug, Subcommand)]
 enum ImportCommand {
-    ContextCatalogue { database: PathBuf },
+    ContextCatalogue {
+        #[command(subcommand)]
+        command: ContextCatalogueCommand,
+    },
+    ConcertablePlans {
+        #[command(subcommand)]
+        command: ConcertablePlansCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ContextCatalogueCommand {
+    Preview {
+        database: PathBuf,
+        #[arg(long)]
+        backup: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    Apply {
+        preview: PathBuf,
+        #[arg(long)]
+        repository: Option<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ConcertablePlansCommand {
+    Preview {
+        repository: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    Apply {
+        preview: PathBuf,
+        #[arg(long)]
+        repository: Option<String>,
+    },
 }
 
 pub fn run() {
@@ -468,19 +518,92 @@ where
 fn execute(cli: Cli) -> Result<String, AppError> {
     let current_directory = std::env::current_dir().map_err(AppError::GitIo)?;
     if let Some(Command::Import(ImportArgs {
-        command: ImportCommand::ContextCatalogue { database },
+        command:
+            ImportCommand::ContextCatalogue {
+                command:
+                    ContextCatalogueCommand::Preview {
+                        database,
+                        backup,
+                        output: destination,
+                    },
+            },
     })) = cli.command.as_ref()
     {
-        let preview = preview_context_catalogue(&absolute(&current_directory, database))?;
+        let database = absolute(&current_directory, database);
+        let backup = absolute(&current_directory, backup);
+        let destination = absolute(&current_directory, destination);
+        if destination.exists() {
+            return Err(AppError::Domain(format!(
+                "import preview already exists: {}",
+                destination.display()
+            )));
+        }
+        let preview = snapshot_context_catalogue(&database, &backup)?;
+        let bytes = serde_json::to_vec_pretty(&preview)?;
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent).map_err(|source| AppError::StorageIo {
+                operation: "creating the legacy import preview directory",
+                path: parent.to_path_buf(),
+                source,
+            })?;
+        }
+        fs::write(&destination, bytes).map_err(|source| AppError::StorageIo {
+            operation: "writing the legacy import preview",
+            path: destination.clone(),
+            source,
+        })?;
         return output(
             &preview,
             cli.json,
             format!(
-                "Preview: {} repositories, {} sessions, {} associations, {} checkouts",
+                "Backed up and previewed {} repositories, {} sessions, {} associations, and {} checkouts at {}",
                 preview.repositories,
                 preview.native_sessions,
                 preview.association_events,
-                preview.checkouts
+                preview.checkouts,
+                destination.display()
+            ),
+        );
+    }
+    if let Some(Command::Import(ImportArgs {
+        command:
+            ImportCommand::ConcertablePlans {
+                command:
+                    ConcertablePlansCommand::Preview {
+                        repository,
+                        output: destination,
+                    },
+            },
+    })) = cli.command.as_ref()
+    {
+        let repository = absolute(&current_directory, repository);
+        let destination = absolute(&current_directory, destination);
+        if destination.exists() {
+            return Err(AppError::Domain(format!(
+                "import preview already exists: {}",
+                destination.display()
+            )));
+        }
+        let preview = preview_concertable_plans(&repository)?;
+        let bytes = serde_json::to_vec_pretty(&preview)?;
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent).map_err(|source| AppError::PlanningStoreIo {
+                operation: "creating the import preview directory",
+                path: parent.to_path_buf(),
+                source,
+            })?;
+        }
+        fs::write(&destination, bytes).map_err(|source| AppError::PlanningStoreIo {
+            operation: "writing the import preview",
+            path: destination.clone(),
+            source,
+        })?;
+        return output(
+            &preview,
+            cli.json,
+            format!(
+                "Wrote editable Concertable import preview to {}",
+                destination.display()
             ),
         );
     }
@@ -858,6 +981,73 @@ fn execute(cli: Cli) -> Result<String, AppError> {
                 ),
             )
         }
+        Some(Command::Session(SessionArgs {
+            command: SessionCommand::ImportedCandidates,
+        })) => {
+            let workspace_id = resolve_workspace(&application, cli.workspace)?;
+            let candidates = application.imported_session_candidates(workspace_id)?;
+            let human = if candidates.is_empty() {
+                "No imported session candidates".to_owned()
+            } else {
+                candidates
+                    .iter()
+                    .map(|candidate| {
+                        format!(
+                            "{} {} {} {}",
+                            candidate.session_id,
+                            tool_title(candidate.tool),
+                            candidate.status,
+                            candidate
+                                .legacy_workstream_title
+                                .as_deref()
+                                .unwrap_or("unassigned")
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            output(&candidates, cli.json, human)
+        }
+        Some(Command::Session(SessionArgs {
+            command: SessionCommand::AdoptImported { session, work_item },
+        })) => {
+            let workspace_id = resolve_workspace(&application, cli.workspace)?;
+            let candidates = application.imported_session_candidates(workspace_id)?;
+            let candidate = select_imported_candidate(&candidates, &session, cli.json)?;
+            let snapshot = application.snapshot(workspace_id)?;
+            let work_item = select_work_item(&snapshot, work_item.as_deref(), cli.json)?;
+            application.adopt_imported_session_candidate(
+                workspace_id,
+                candidate.session_id,
+                work_item.id,
+                time::OffsetDateTime::now_utc(),
+            )?;
+            output(
+                &serde_json::json!({
+                    "sessionId": candidate.session_id,
+                    "workItemId": work_item.id,
+                    "status": "confirmed",
+                }),
+                cli.json,
+                format!("Adopted {} into {}", candidate.native_id, work_item.title),
+            )
+        }
+        Some(Command::Session(SessionArgs {
+            command: SessionCommand::IgnoreImported { session },
+        })) => {
+            let workspace_id = resolve_workspace(&application, cli.workspace)?;
+            let candidates = application.imported_session_candidates(workspace_id)?;
+            let candidate = select_imported_candidate(&candidates, &session, cli.json)?;
+            application.ignore_imported_session_candidate(workspace_id, candidate.session_id)?;
+            output(
+                &serde_json::json!({
+                    "sessionId": candidate.session_id,
+                    "status": "ignored",
+                }),
+                cli.json,
+                format!("Ignored imported session {}", candidate.native_id),
+            )
+        }
         Some(Command::Workflow(WorkflowArgs { command })) => {
             let workflow_token = workflow_token()?;
             let now = time::OffsetDateTime::now_utc();
@@ -1064,7 +1254,86 @@ fn execute(cli: Cli) -> Result<String, AppError> {
                 ))
             }
         }
-        Some(Command::Import(_)) => unreachable!(),
+        Some(Command::Import(ImportArgs {
+            command:
+                ImportCommand::ContextCatalogue {
+                    command:
+                        ContextCatalogueCommand::Apply {
+                            preview,
+                            repository,
+                        },
+                },
+        })) => {
+            let workspace_id = resolve_workspace(&application, cli.workspace)?;
+            let snapshot = application.snapshot(workspace_id)?;
+            let repository = select_repository(&snapshot, repository.as_deref(), cli.json)?.clone();
+            let preview_path = absolute(&current_directory, &preview);
+            let bytes = fs::read(&preview_path).map_err(|source| AppError::StorageIo {
+                operation: "reading the legacy import preview",
+                path: preview_path.clone(),
+                source,
+            })?;
+            let preview: LegacyImportPreview = serde_json::from_slice(&bytes)?;
+            let outcome = application.apply_context_catalogue_import(
+                workspace_id,
+                repository.id,
+                &preview,
+            )?;
+            output(
+                &outcome,
+                cli.json,
+                format!(
+                    "Imported {} sessions, {} checkouts, {} sources, and {} live observations",
+                    outcome.native_sessions,
+                    outcome.checkouts,
+                    outcome.session_sources,
+                    outcome.live_observations
+                ),
+            )
+        }
+        Some(Command::Import(ImportArgs {
+            command:
+                ImportCommand::ConcertablePlans {
+                    command:
+                        ConcertablePlansCommand::Apply {
+                            preview,
+                            repository,
+                        },
+                },
+        })) => {
+            let workspace_id = resolve_workspace(&application, cli.workspace)?;
+            let snapshot = application.snapshot(workspace_id)?;
+            let repository = select_repository(&snapshot, repository.as_deref(), cli.json)?.clone();
+            let preview_path = absolute(&current_directory, &preview);
+            let bytes = fs::read(&preview_path).map_err(|source| AppError::PlanningStoreIo {
+                operation: "reading the import preview",
+                path: preview_path.clone(),
+                source,
+            })?;
+            let preview: ConcertableImportPreview = serde_json::from_slice(&bytes)?;
+            let outcome =
+                application.apply_concertable_import(workspace_id, repository.id, &preview)?;
+            output(
+                &outcome,
+                cli.json,
+                format!(
+                    "Imported {} Epics, {} Features, and {} Work items in {}",
+                    outcome.epics, outcome.features, outcome.work_items, outcome.planning_commit
+                ),
+            )
+        }
+        Some(Command::Import(ImportArgs {
+            command:
+                ImportCommand::ContextCatalogue {
+                    command: ContextCatalogueCommand::Preview { .. },
+                },
+        }))
+        | Some(Command::Import(ImportArgs {
+            command:
+                ImportCommand::ConcertablePlans {
+                    command: ConcertablePlansCommand::Preview { .. },
+                },
+        })) => unreachable!(),
         Some(Command::Mcp) => unreachable!(),
     }
 }
@@ -1358,6 +1627,31 @@ fn select_repository<'a>(
         .iter()
         .find(|repository| repository.id.to_string() == candidate.id)
         .ok_or(AppError::ResumeRepositoryMismatch)
+}
+
+fn select_imported_candidate<'a>(
+    candidates: &'a [ImportedSessionCandidate],
+    query: &str,
+    structured: bool,
+) -> Result<&'a ImportedSessionCandidate, AppError> {
+    let options = candidates
+        .iter()
+        .filter(|candidate| candidate.status == "unassigned")
+        .map(|candidate| SelectionCandidate {
+            id: candidate.session_id.to_string(),
+            key: Some(candidate.native_id.clone()),
+            label: candidate
+                .legacy_workstream_title
+                .clone()
+                .unwrap_or_else(|| candidate.native_id.clone()),
+            metadata: format!("{} imported", tool_title(candidate.tool)),
+        })
+        .collect();
+    let selected = select_candidate("imported session", Some(query), options, structured)?;
+    candidates
+        .iter()
+        .find(|candidate| candidate.session_id.to_string() == selected.id)
+        .ok_or(AppError::ConversationNotFound)
 }
 
 fn select_feature<'a>(

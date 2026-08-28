@@ -11,7 +11,7 @@ use workboard_core::{ConversationId, LaunchLeaseId};
 
 use crate::AppError;
 
-const CURRENT_SCHEMA_VERSION: i64 = 10;
+const CURRENT_SCHEMA_VERSION: i64 = 12;
 const FOUNDATION_SCHEMA_CHECKSUM: &str = "agent-workboard-foundation-v1";
 const LAUNCH_LEASE_SCHEMA_CHECKSUM: &str = "agent-workboard-launch-leases-v1";
 const WORKBOARD_DOMAIN_SCHEMA_CHECKSUM: &str = "agent-workboard-domain-v1";
@@ -22,6 +22,8 @@ const FEATURE_PLANNING_SCHEMA_CHECKSUM: &str = "agent-workboard-feature-planning
 const WORKFLOW_CREDENTIAL_SCHEMA_CHECKSUM: &str = "agent-workboard-workflow-credential-v1";
 const SESSION_REQUEST_SCHEMA_CHECKSUM: &str = "agent-workboard-session-request-v1";
 const MANAGED_RECOVERY_SCHEMA_CHECKSUM: &str = "agent-workboard-managed-recovery-v1";
+const LEGACY_IMPORT_SCHEMA_CHECKSUM: &str = "agent-workboard-legacy-import-v1";
+const LEGACY_IMPORT_RECORD_SCHEMA_CHECKSUM: &str = "agent-workboard-legacy-import-record-v1";
 
 pub struct SqliteStore {
     path: PathBuf,
@@ -830,6 +832,59 @@ fn migrate(connection: &Connection) -> Result<(), AppError> {
              message TEXT,
              observed_at TEXT NOT NULL,
              PRIMARY KEY (attempt_id, session_id)
+         );",
+    )?;
+    apply_migration(
+        connection,
+        11,
+        LEGACY_IMPORT_SCHEMA_CHECKSUM,
+        "CREATE TABLE import_batches (
+             id TEXT PRIMARY KEY,
+             workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE RESTRICT,
+             kind TEXT NOT NULL CHECK (kind IN ('concertable_plans', 'context_catalogue')),
+             source_path TEXT NOT NULL CHECK (source_path <> ''),
+             source_head TEXT,
+             preview_hash TEXT NOT NULL UNIQUE CHECK (length(preview_hash) = 64),
+             planning_commit TEXT,
+             imported_at TEXT NOT NULL
+         );
+         CREATE TABLE import_source_destinations (
+             import_id TEXT NOT NULL REFERENCES import_batches(id) ON DELETE RESTRICT,
+             source_path TEXT NOT NULL CHECK (source_path <> ''),
+             source_hash TEXT NOT NULL CHECK (length(source_hash) = 64),
+             destination_kind TEXT NOT NULL CHECK (
+                 destination_kind IN ('epic', 'feature', 'work_item', 'session_candidate')
+             ),
+             destination_id TEXT NOT NULL CHECK (destination_id <> ''),
+             document_id TEXT,
+             PRIMARY KEY (import_id, source_path, destination_kind, destination_id)
+         );
+         CREATE TABLE imported_session_candidates (
+             workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE RESTRICT,
+             session_id TEXT NOT NULL REFERENCES native_sessions(id) ON DELETE RESTRICT,
+             repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE RESTRICT,
+             checkout_id TEXT REFERENCES checkouts(id) ON DELETE RESTRICT,
+             legacy_workstream_id TEXT,
+             legacy_workstream_title TEXT,
+             authority TEXT,
+             confidence TEXT,
+             status TEXT NOT NULL CHECK (status IN ('unassigned', 'confirmed', 'ignored')),
+             imported_at TEXT NOT NULL,
+             PRIMARY KEY (workspace_id, session_id)
+         );",
+    )?;
+    apply_migration(
+        connection,
+        12,
+        LEGACY_IMPORT_RECORD_SCHEMA_CHECKSUM,
+        "CREATE TABLE legacy_import_records (
+             import_id TEXT NOT NULL REFERENCES import_batches(id) ON DELETE RESTRICT,
+             source_table TEXT NOT NULL CHECK (source_table <> ''),
+             source_key TEXT NOT NULL CHECK (source_key <> ''),
+             destination_kind TEXT NOT NULL CHECK (destination_kind <> ''),
+             destination_id TEXT NOT NULL CHECK (destination_id <> ''),
+             payload_json TEXT NOT NULL CHECK (payload_json <> ''),
+             PRIMARY KEY (import_id, source_table, source_key)
          );",
     )?;
     Ok(())

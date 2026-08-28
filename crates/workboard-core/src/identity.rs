@@ -69,6 +69,7 @@ define_id!(ManagedSessionId);
 define_id!(WorkItemCheckpointId);
 define_id!(ManagedSessionRequestId);
 define_id!(RecoveryAttemptId);
+define_id!(ImportBatchId);
 
 #[cfg(test)]
 mod tests {

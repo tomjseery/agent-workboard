@@ -25,6 +25,40 @@ For non-interactive use, review `--dry-run` and then pass `--yes`. An unresumabl
 `--replace-unresumable` starts a confirmed new managed session for the same owner. Remove a session from future
 working sets explicitly with `workboard session remove-from-restore`.
 
+## Import existing work
+
+Concertable planning import is review-first. Generate an editable JSON preview, review its selected records,
+slugs, titles, statuses, bodies, and stable destination IDs, then apply that same file:
+
+```powershell
+workboard import concertable-plans preview C:\source\Concertable --output C:\migration\concertable.json
+workboard import concertable-plans apply C:\migration\concertable.json --repository concertable
+```
+
+Apply rechecks the source repository head and every selected source-document hash. It publishes all selected
+Epic, Feature, and Work-item documents in one planning-store commit and records every source-to-destination
+mapping in the database. Reapplying an unchanged preview returns the original import outcome.
+
+Legacy Context Catalogue migration starts by taking an integrity-checked, read-only SQLite backup. The preview
+references that immutable backup rather than the live catalogue:
+
+```powershell
+workboard import context-catalogue preview C:\legacy\catalogue.sqlite `
+  --backup C:\migration\catalogue.sqlite `
+  --output C:\migration\catalogue.json
+workboard import context-catalogue apply C:\migration\catalogue.json --repository concertable
+```
+
+The import preserves repository and worktree history, native session identity, transcript source locations and
+snapshots, live observations, and raw reconstruction evidence. It does not modify a transcript. Sessions with
+no reviewed Work-item destination remain visible for explicit resolution:
+
+```powershell
+workboard session imported-candidates
+workboard session adopt-imported <session> <work-item>
+workboard session ignore-imported <session>
+```
+
 ## Development
 
 The workspace requires Rust 1.97.1.
