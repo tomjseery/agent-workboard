@@ -289,7 +289,11 @@ impl WorkboardApplication {
         validate_preview(preview)?;
         validate_source(preview)?;
         let preview_hash = hash_bytes(&serde_json::to_vec(preview)?);
-        if let Some(outcome) = self.existing_concertable_import(&preview_hash)? {
+        if let Some(mut outcome) = self.existing_concertable_import(&preview_hash)? {
+            let counts = selected_counts(preview);
+            outcome.epics = counts.0;
+            outcome.features = counts.1;
+            outcome.work_items = counts.2;
             return Ok(outcome);
         }
         let (workspace_slug, planning_repository_id, planning_store_path) =
@@ -1287,6 +1291,9 @@ mod tests {
         assert!(!first.already_applied);
         assert!(second.already_applied);
         assert_eq!(first.import_id, second.import_id);
+        assert_eq!(first.epics, second.epics);
+        assert_eq!(first.features, second.features);
+        assert_eq!(first.work_items, second.work_items);
         assert_eq!(snapshot.epics.len(), 1);
         assert_eq!(snapshot.features.len(), 1);
         assert_eq!(snapshot.work_items.len(), 3);

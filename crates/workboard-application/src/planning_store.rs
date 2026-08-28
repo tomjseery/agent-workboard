@@ -86,6 +86,7 @@ impl PlanningStore {
         if !paths_equal(&root, &reported_root) {
             return Err(AppError::PlanningStoreInvalid(root));
         }
+        configure_platform_git(&root)?;
         Ok(Self { root })
     }
 
@@ -403,6 +404,24 @@ impl PlanningStore {
             .map_err(AppError::GitIo)?;
         successful_git(output).map(|value| !value.trim().is_empty())
     }
+}
+
+#[cfg(windows)]
+fn configure_platform_git(root: &Path) -> Result<(), AppError> {
+    successful_git(
+        Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(["config", "core.longpaths", "true"])
+            .output()
+            .map_err(AppError::GitIo)?,
+    )?;
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn configure_platform_git(_root: &Path) -> Result<(), AppError> {
+    Ok(())
 }
 
 fn render_document(front_matter: &DocumentFrontMatter, body: &str) -> Result<String, AppError> {
