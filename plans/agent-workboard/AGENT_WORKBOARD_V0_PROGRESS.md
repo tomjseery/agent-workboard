@@ -30,8 +30,35 @@ permanently unrecoverable.
 
 ## Next Steps
 
-Run an incremental review of the completed remediation, then repeat formatting, lint, and workspace tests
-before the external Concertable parity acceptance gate.
+Run the external Concertable parity acceptance gate: review every active plan and session destination,
+exercise the real Claude/Codex create, resume, replacement, and restart-recovery workflows, and verify the
+planning-store and database backups. After owner acceptance, remove Concertable's migrated planning corpus
+and generic planning/session-recovery machinery.
+
+## External parity preparation
+
+- Real Concertable preview: source head `74a7bf123750abdf38f568e6548e3cc9dac58464`; 10 Epics, 25 Features,
+  and 132 Work items; preview SHA-256
+  `5368941c2c8d5fc9457a211df75e0a05c4592fac97aa356d58da4cc4ec4dc864`; all entries remain selected for
+  owner review before apply. Preview:
+  `C:\Users\TOMMYS~1\AppData\Local\Temp\agent-workboard-phase7-concertable-preview-45d3e6e470c741ca939da13eb6d67f57.json`.
+- Real Context Catalogue snapshot: one repository, 1,793 native sessions, zero association events, and 32
+  checkouts; verified backup/source SHA-256
+  `df187ca0038c7cc5ef8d099b7f5f0b1afcc9b777a9928116f46ccc02ffcca07d`; preview SHA-256
+  `1797ae8e181a2fe3041bf1b4d1c9afeb3dc3a7cd0321461b02d8b77535f0822c`; zero warnings and all session
+  candidates remain unselected for explicit review.
+  Backup: `C:\Users\TOMMYS~1\AppData\Local\Temp\agent-workboard-phase7-catalogue-19fa9d7a1cd64c6c8658d35cae4df9ed.sqlite`.
+  Preview: `C:\Users\TOMMYS~1\AppData\Local\Temp\agent-workboard-phase7-catalogue-19fa9d7a1cd64c6c8658d35cae4df9ed.json`.
+- Neither preview has been applied to an accepted destination. The verified backup and both editable
+  previews remain available in the current user's temporary directory until destination review and owner
+  acceptance are complete.
+- The Concertable preview was also applied to an isolated Workboard database and planning store at
+  `C:\Users\TOMMYS~1\AppData\Local\Temp\agent-workboard-phase7-parity-2d6f6666170a439a98b534e463fa3625`.
+  It published 168 planning-store files in clean commit `25afbd312d3540c0aa46bc65c4dfd2d14d79c338`.
+  Real replay exposed and verified the repair for a synthetic-Epic count defect: replay now derives the
+  original 10/25/132 hierarchy counts from immutable document revisions rather than source mappings.
+- The isolated legacy apply stopped before mutation because all 1,793 session candidates are unselected.
+  Selecting exact Work-item destinations remains an explicit owner-review gate; the dry run did not guess.
 
 ## Completed work
 
@@ -39,6 +66,7 @@ before the external Concertable parity acceptance gate.
 - Phase 7 planning and native-session import shipped through `d2b5647`.
 - All nineteen findings from the full and incremental review passes have been resolved in the local
   candidate.
+- Real Concertable dogfood found and repaired replay undercounting for generated source-less Epics.
 
 ## Verification
 
@@ -49,13 +77,15 @@ before the external Concertable parity acceptance gate.
 
 ## Reviews
 
-The full review of `f5eae79..89c6cc1` and incremental reviews through `118cd48` are complete with changes
-requested. The canonical work order is `reviews/Feature-Phase7-Migration-Completion.md`; every recorded
-finding is resolved and the latest remediation requires a clean incremental pass.
+The full review of `f5eae79..89c6cc1` and all incremental reviews through `68b68fa` are complete. The
+canonical work order is `reviews/Feature-Phase7-Migration-Completion.md`; all nineteen findings are resolved
+and the current judgment is approved.
 
 ## Decisions, discoveries, blockers, and deviations
 
 - Legacy session import is review-first: candidates are unselected until the user explicitly selects them.
 - Repository ownership evidence can come from an explicit repository, a source worktree, or an absolute
   observed working directory beneath known repository paths.
+- Concertable planning/recovery deletion remains gated by reviewed import parity, real restart recovery, and
+  owner acceptance; the plan forbids deleting that external corpus before those checks pass.
 - The repository has no configured remote, so Phase 7 delivery is a local committed candidate.

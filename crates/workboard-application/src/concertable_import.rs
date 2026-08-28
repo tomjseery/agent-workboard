@@ -548,22 +548,29 @@ impl WorkboardApplication {
                 let import_id = id
                     .parse()
                     .map_err(|error| AppError::Domain(format!("invalid import ID: {error}")))?;
-                let mut counts = [0_usize; 4];
-                for (index, kind) in ["epic", "feature", "work_item", "all"].iter().enumerate() {
-                    let sql = if *kind == "all" {
-                        "SELECT COUNT(*) FROM import_source_destinations WHERE import_id = ?1"
-                    } else {
-                        "SELECT COUNT(*) FROM import_source_destinations
-                         WHERE import_id = ?1 AND destination_kind = ?2"
-                    };
-                    let count: i64 = if *kind == "all" {
-                        connection.query_row(sql, [id.as_str()], |row| row.get(0))?
-                    } else {
-                        connection.query_row(sql, params![id, kind], |row| row.get(0))?
-                    };
+                let mut counts = [0_usize; 3];
+                for (index, kind) in ["epic", "feature", "work_item"].iter().enumerate() {
+                    let count: i64 = connection.query_row(
+                        "SELECT COUNT(DISTINCT document.id)
+                           FROM documents document
+                           JOIN document_revisions revision
+                             ON revision.document_id = document.id
+                            AND revision.observed_commit = ?1
+                           JOIN workspaces workspace
+                             ON workspace.id = ?2
+                            AND workspace.planning_store_repository_id = document.repository_id
+                          WHERE document.kind = ?3",
+                        params![planning_commit, workspace_id.to_string(), kind],
+                        |row| row.get(0),
+                    )?;
                     counts[index] = usize::try_from(count)
                         .map_err(|_| AppError::Domain("invalid import count".to_owned()))?;
                 }
+                let source_destinations: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM import_source_destinations WHERE import_id = ?1",
+                    [id.as_str()],
+                    |row| row.get(0),
+                )?;
                 Ok(ConcertableImportOutcome {
                     import_id,
                     preview_hash: preview_hash.to_owned(),
@@ -571,7 +578,8 @@ impl WorkboardApplication {
                     epics: counts[0],
                     features: counts[1],
                     work_items: counts[2],
-                    source_destinations: counts[3],
+                    source_destinations: usize::try_from(source_destinations)
+                        .map_err(|_| AppError::Domain("invalid import count".to_owned()))?,
                     already_applied: true,
                 })
             })
@@ -1387,11 +1395,11 @@ mod tests {
     use std::process::Command;
 
     use tempfile::TempDir;
-    use workboard_core::Slug;
+    use workboard_core::{DocumentId, EpicId, Slug};
 
     use super::{
-        CONCERTABLE_IMPORT_FORMAT_VERSION, concertable_source_path, explicit_completed_status,
-        preview_concertable_plans,
+        CONCERTABLE_IMPORT_FORMAT_VERSION, ConcertableEpicImport, concertable_source_path,
+        explicit_completed_status, preview_concertable_plans,
     };
     use crate::workspace::{
         CreateEpic, InitialiseWorkspace, RegisterRepository, WorkboardApplication,
@@ -1551,7 +1559,18 @@ mod tests {
                 path: fixture.source.clone(),
             })
             .expect("register repository");
-        let preview = preview_concertable_plans(&fixture.source).expect("preview plans");
+        let mut preview = preview_concertable_plans(&fixture.source).expect("preview plans");
+        let imported_features = std::mem::take(&mut preview.epics[0].features);
+        preview.epics.push(ConcertableEpicImport {
+            selected: true,
+            id: EpicId::generate(),
+            document_id: DocumentId::generate(),
+            slug: Slug::new("synthetic-epic").expect("synthetic epic slug"),
+            title: "Synthetic epic".to_owned(),
+            body: "# Synthetic epic\n".to_owned(),
+            source: None,
+            features: imported_features,
+        });
         let first = application
             .apply_concertable_import(workspace.workspace.id, repository.id, &preview)
             .expect("apply import");
@@ -1568,10 +1587,12 @@ mod tests {
         assert_eq!(first.epics, second.epics);
         assert_eq!(first.features, second.features);
         assert_eq!(first.work_items, second.work_items);
-        assert_eq!(snapshot.epics.len(), 1);
+        assert_eq!(first.epics, 2);
+        assert_eq!(first.source_destinations, 5);
+        assert_eq!(snapshot.epics.len(), 2);
         assert_eq!(snapshot.features.len(), 1);
         assert_eq!(snapshot.work_items.len(), 3);
-        assert_eq!(snapshot.documents.len(), 5);
+        assert_eq!(snapshot.documents.len(), 6);
         assert_eq!(
             git_count(&fixture.directory.path().join("planning-store")),
             2
