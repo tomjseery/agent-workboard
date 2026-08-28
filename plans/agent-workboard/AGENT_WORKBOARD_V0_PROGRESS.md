@@ -50,10 +50,15 @@ and generic planning/session-recovery machinery.
 
 ## External parity preparation
 
+- Current Concertable preview: source head `5b9e20e7723aadc3813548ac833a339b1652b23b`; 10 Epics, 25 Features,
+  and 132 Work items; preview SHA-256
+  `58960b6c2090231ddb7187feb3da4f943f2dee3d2406320095f7b1a9e7d228b5`. It is the only preview eligible for
+  owner review and apply. Preview:
+  `C:\Users\TommySeery\AppData\Local\Temp\agent-workboard-phase7-concertable-preview-20260828-current.json`.
 - Real Concertable preview: source head `74a7bf123750abdf38f568e6548e3cc9dac58464`; 10 Epics, 25 Features,
   and 132 Work items; preview SHA-256
   `5368941c2c8d5fc9457a211df75e0a05c4592fac97aa356d58da4cc4ec4dc864`; all entries remain selected for
-  owner review before apply. Preview:
+  historical evidence only; it must not be applied. Preview:
   `C:\Users\TOMMYS~1\AppData\Local\Temp\agent-workboard-phase7-concertable-preview-45d3e6e470c741ca939da13eb6d67f57.json`.
 - Real Context Catalogue snapshot: one repository, 1,793 native sessions, zero association events, and 32
   checkouts; verified backup/source SHA-256
@@ -74,12 +79,15 @@ and generic planning/session-recovery machinery.
   fail-closed repair boundary until the preview's one source-less `Marketplace` Epic was explicitly attested.
 - The isolated legacy apply stopped before mutation because all 1,793 session candidates are unselected.
   Selecting exact Work-item destinations remains an explicit owner-review gate; the dry run did not guess.
+- The isolated parity database backup at
+  `C:\Users\TommySeery\AppData\Local\Temp\agent-workboard-phase7-parity-2d6f6666170a439a98b534e463fa3625\workboard-acceptance-backup-20260828.sqlite`
+  was created with `workboard backup` and reopened successfully with the 10/25/132 hierarchy intact.
 
 ## Completed work
 
 - Phases 1–6 shipped through `f5eae79`.
 - Phase 7 planning and native-session import shipped through `d2b5647`.
-- All thirty-seven findings from the full and incremental review passes have been resolved in the local
+- All thirty-eight findings from the full and incremental review passes have been resolved in the local
   candidate.
 - Real Concertable dogfood found and repaired replay undercounting and same-commit overcounting.
 - Native Codex integration no longer generates invalid PowerShell hook commands.
@@ -90,11 +98,15 @@ and generic planning/session-recovery machinery.
 - `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 - `cargo test -p workboard-application --lib` — 83 tests passed on 2026-08-28
 - `cargo test --workspace` — 141 tests passed on 2026-08-28
+- The current Concertable preview regenerated successfully at source head `5b9e20e`; it contains 10 Epics,
+  25 Features, and 132 Work items.
+- The isolated parity destination and its verified backup both report 10 Epics, 25 Features, 132 Work items,
+  and 167 planning documents.
 
 ## Reviews
 
-The full review of `f5eae79..89c6cc1` and all incremental reviews through `8300b20` are complete. The
-canonical work order is `reviews/Feature-Phase7-Migration-Completion.md`; all thirty-seven findings are
+The full review of `f5eae79..89c6cc1` and all incremental reviews through `66d9afd` are complete. The
+canonical work order is `reviews/Feature-Phase7-Migration-Completion.md`; all thirty-eight findings are
 resolved, and the latest incremental pass is approved and clean.
 
 ## Decisions, discoveries, blockers, and deviations
@@ -105,3 +117,6 @@ resolved, and the latest incremental pass is approved and clean.
 - Concertable planning/recovery deletion remains gated by reviewed import parity, real restart recovery, and
   owner acceptance; the plan forbids deleting that external corpus before those checks pass.
 - The repository has no configured remote, so Phase 7 delivery is a local committed candidate.
+- Concertable had advanced since the original preview, which made that snapshot stale even though its source
+  planning counts still matched. The refreshed preview is pinned to the current source commit and is the
+  only acceptable input for a live import.
