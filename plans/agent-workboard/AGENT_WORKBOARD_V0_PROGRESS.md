@@ -20,6 +20,8 @@ unambiguous immutable repository identity. Later direct provenance survives upgr
 batch-side and repository-side mutations preserve the ownership invariant.
 Already-stamped schema-15 databases receive a separate versioned audit and stop with durable explicit-repair
 instructions whenever earlier direct provenance cannot be recovered safely.
+Schema-14 entrants apply the ownership migrations atomically, so interruption cannot lose a captured direct
+owner; explicit repair attestations are validated before becoming immutable.
 
 ## Next Steps
 
@@ -30,7 +32,7 @@ before the external Concertable parity acceptance gate.
 
 - Phases 1–6 shipped through `f5eae79`.
 - Phase 7 planning and native-session import shipped through `d2b5647`.
-- All fourteen findings from the full and incremental review passes have been resolved in the local
+- All sixteen findings from the full and incremental review passes have been resolved in the local
   candidate.
 
 ## Verification
