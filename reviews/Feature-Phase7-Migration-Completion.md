@@ -49,10 +49,12 @@
   repository. Require the registered repository Git common-directory identity to equal the preview source
   repository identity before publishing files or writing database rows.
 
-- [ ] **P7-005 — MEDIUM — correctness** — `crates/workboard-application/src/legacy_import.rs:1307`
+- [x] **P7-005 — MEDIUM — correctness** — `crates/workboard-application/src/legacy_import.rs:1307`
   When an imported checkout already has a different current Workboard path, the legacy current path is
   discarded and provenance records a checkout ID as a checkout-path ID. Insert the legacy path as a closed
   historical interval, preserve the existing current path, and map provenance to the new path-row ID.
+  Resolved by closing the imported interval at import time when another path is current and recording the
+  generated `CheckoutPathId`; the focused fixture proves both paths and provenance survive.
 
 - [ ] **P7-006 — MEDIUM — correctness** — `crates/workboard-application/src/concertable_import.rs:978`
   Completion detection uses substring matching, so imperative or completion-noun phase headings become Done.

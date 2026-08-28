@@ -683,7 +683,7 @@ impl WorkboardApplication {
                     }),
                 )?;
             }
-            import_checkout_paths(&source, transaction, import_id, &checkout_map)?;
+            import_checkout_paths(source, transaction, import_id, &checkout_map, &imported_at)?;
             for candidate in &selected {
                 let source_candidate = candidate.source;
                 let controls = candidate.controls;
@@ -1408,6 +1408,7 @@ fn import_checkout_paths(
     transaction: &Transaction<'_>,
     import_id: ImportBatchId,
     checkout_map: &HashMap<String, CheckoutId>,
+    imported_at: &str,
 ) -> Result<(), AppError> {
     let mut statement = source.prepare(
         "SELECT id, worktree_id, path, started_at, ended_at, last_verified_at
@@ -1445,7 +1446,25 @@ fn import_checkout_paths(
                 .map(|(id, _)| id.clone())
                 .unwrap_or_default()
         } else if ended_at.is_none() && current.is_some() {
-            checkout_id.to_string()
+            if imported_at <= started_at.as_str() {
+                return Err(AppError::Domain(
+                    "legacy checkout path starts after the import timestamp".to_owned(),
+                ));
+            }
+            let path_id = CheckoutPathId::generate();
+            transaction.execute(
+                "INSERT INTO checkout_paths (
+                     id, checkout_id, path, observed_from, observed_until
+                 ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    path_id.to_string(),
+                    checkout_id.to_string(),
+                    path,
+                    started_at,
+                    imported_at,
+                ],
+            )?;
+            path_id.to_string()
         } else {
             let path_id = CheckoutPathId::generate();
             transaction.execute(
@@ -2251,7 +2270,7 @@ mod tests {
     use sha2::{Digest, Sha256};
     use tempfile::TempDir;
     use time::OffsetDateTime;
-    use workboard_core::{FeatureId, ImportBatchId, Slug, WorkItemId};
+    use workboard_core::{CheckoutId, CheckoutPathId, FeatureId, ImportBatchId, Slug, WorkItemId};
 
     use super::{
         hash_bytes, legacy_session_candidates, legacy_tables, preview_context_catalogue,
@@ -2634,6 +2653,114 @@ mod tests {
                 .imported_session_candidates(workspace.workspace.id)
                 .expect("list candidates")
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn import_preserves_a_conflicting_legacy_checkout_path_as_history() {
+        let directory = TempDir::new().expect("temporary directory");
+        let source_repository = create_repository(directory.path(), "source");
+        let legacy_repository_path = directory.path().join("historical-source");
+        let common_directory = source_repository
+            .join(".git")
+            .canonicalize()
+            .expect("canonical source Git directory");
+        let legacy = directory.path().join("legacy.sqlite");
+        create_legacy_database(&legacy, &legacy_repository_path, &common_directory);
+        let backup = directory.path().join("backup/catalogue.sqlite");
+        let mut preview = snapshot_context_catalogue(&legacy, &backup).expect("snapshot catalogue");
+        preview.session_candidates[0].selected = true;
+        let mut application = WorkboardApplication::open(directory.path().join("workboard.sqlite"))
+            .expect("open Workboard");
+        let workspace = application
+            .initialise_workspace(InitialiseWorkspace {
+                slug: Slug::new("demo").expect("workspace slug"),
+                title: "Demo".to_owned(),
+                planning_store_path: directory.path().join("planning-store"),
+            })
+            .expect("initialise workspace");
+        let repository = application
+            .register_repository(RegisterRepository {
+                workspace_id: workspace.workspace.id,
+                slug: Slug::new("source").expect("repository slug"),
+                title: "Source".to_owned(),
+                path: source_repository.clone(),
+            })
+            .expect("register repository");
+        let checkout_id = CheckoutId::generate();
+        let current_path_id = CheckoutPathId::generate();
+        application
+            .store
+            .write(|transaction| {
+                transaction.execute(
+                    "INSERT INTO checkouts (
+                         id, repository_id, git_worktree_identity, branch, head,
+                         availability, created_at
+                     ) VALUES (?1, ?2, ?3, 'main', 'abc123', 'available', '200')",
+                    params![
+                        checkout_id.to_string(),
+                        repository.id.to_string(),
+                        text_path(&common_directory),
+                    ],
+                )?;
+                transaction.execute(
+                    "INSERT INTO checkout_paths (
+                         id, checkout_id, path, observed_from, observed_until
+                     ) VALUES (?1, ?2, ?3, '200', NULL)",
+                    params![
+                        current_path_id.to_string(),
+                        checkout_id.to_string(),
+                        text_path(&source_repository),
+                    ],
+                )?;
+                Ok(())
+            })
+            .expect("seed current checkout path");
+
+        let outcome = application
+            .apply_context_catalogue_import(workspace.workspace.id, repository.id, &preview)
+            .expect("import legacy checkout history");
+
+        let (paths, destination_id) = application
+            .store
+            .read(|connection| {
+                let mut statement = connection.prepare(
+                    "SELECT id, path, observed_until FROM checkout_paths
+                     WHERE checkout_id = ?1 ORDER BY observed_from",
+                )?;
+                let paths = statement
+                    .query_map([checkout_id.to_string()], |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                        ))
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                let destination_id = connection.query_row(
+                    "SELECT destination_id FROM legacy_import_records
+                     WHERE import_id = ?1 AND source_table = 'worktree_path_intervals'
+                       AND source_key = '1'",
+                    [outcome.import_id.to_string()],
+                    |row| row.get::<_, String>(0),
+                )?;
+                Ok((paths, destination_id))
+            })
+            .expect("read checkout history");
+        let historical = paths
+            .iter()
+            .find(|(_, path, _)| path == &text_path(&legacy_repository_path))
+            .expect("historical legacy path");
+
+        assert_eq!(paths.len(), 2);
+        assert!(historical.2.is_some());
+        assert_eq!(destination_id, historical.0);
+        assert!(
+            paths
+                .iter()
+                .any(|(id, path, until)| id == &current_path_id.to_string()
+                    && path == &text_path(&source_repository)
+                    && until.is_none())
         );
     }
 
