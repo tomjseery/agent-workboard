@@ -78,3 +78,8 @@ The workspace requires Rust 1.97.1.
 
 This repository has independent Git history. Selectively salvaged code records its source commit and file
 hashes under `docs/provenance`.
+
+## Roadmap
+
+The [product roadmap](plans/agent-workboard/AGENT_WORKBOARD_ROADMAP.md) and
+[v0 implementation plan](plans/agent-workboard/AGENT_WORKBOARD_V0_PLAN.md) are owned by this repository.
