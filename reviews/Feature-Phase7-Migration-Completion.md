@@ -5,8 +5,8 @@
 > irreversible or ambiguous finding: record its durable disposition, take the safe path, and keep going.
 
 **Review status:** `complete`
-**Reviewed up to commit:** `c60e1cdf667e6663ff4c7710e888bee543fe9d73`  `(2026-08-28)`
-**Security-reviewed up to commit:** `c60e1cdf667e6663ff4c7710e888bee543fe9d73`  `(2026-08-28)`
+**Reviewed up to commit:** `996f4e8870ddc3edb37c94d59ffbe6be578603b8`  `(2026-08-28)`
+**Security-reviewed up to commit:** `996f4e8870ddc3edb37c94d59ffbe6be578603b8`  `(2026-08-28)`
 **Judgment:** `changes-requested`
 
 ## Review pass — 2026-08-28 — full
@@ -186,3 +186,33 @@
   closed with explicit repair instructions when original direct provenance is no longer recoverable.
   Resolved by retaining the issued schema-15 data repair, adding versioned attestation and audit migrations,
   and requiring an immutable explicit repair before any already-stamped direct owner can be corrected.
+
+## Review pass — 2026-08-28 — incremental
+
+**Candidate base:** `c60e1cdf667e6663ff4c7710e888bee543fe9d73`
+**Candidate head:** `996f4e8870ddc3edb37c94d59ffbe6be578603b8`
+**Candidate branch:** `Feature/Phase7-Migration-Completion`
+**Candidate scope:** `all`
+**Candidate path-set:** `sha256:335501e5eaca737f34a0cb43006d8cf5027a0d61ee71065c04c0aafd85397c3c` `(3 paths)`
+**Candidate bundle:** `C:\Users\TommySeery\AppData\Local\Temp\agent-workboard-review-58083270f62c47ada6d32ff2fe682997`
+**Candidate bundle identity:** `sha256:fd1de4b9aae044f9677a791c759c5fc6463d896eaa84af5df90672d24bb8e288`
+**Work-order path:** `reviews/Feature-Phase7-Migration-Completion.md`
+**Work-order mode:** `append`
+**Pass judgment:** `changes-requested`
+
+### Findings
+
+- [x] **P7-015 — HIGH — correctness** — `crates/workboard-application/src/storage.rs:1101`
+  Trusted schema-14 direct ownership is held only in memory across separately committed migrations 15–18.
+  Interruption after 15 loses that capture, so retry demands manual repair for ownership already verified on
+  the first attempt. Commit capture durably with migration 15 or apply the 15–18 upgrade atomically so every
+  retry produces the same owner and attestation.
+  Resolved by applying migrations 15–18 in one transaction for schema-14 entrants; the retry fixture proves
+  failure returns to schema 14 and later records the same `captured_direct` owner without manual repair.
+
+- [x] **P7-016 — HIGH — security/correctness** — `crates/workboard-application/src/storage.rs:1022`
+  An explicit-repair attestation can reference a repository in another workspace or a planning store, then
+  becomes immutable before audit rejects it, permanently blocking correction. Reject invalid attestations
+  at insertion while leaving the repair slot available.
+  Resolved by validating the repository against the batch workspace and non-planning role before insert;
+  the fixture rejects an invalid immutable repair and then accepts a valid one.
