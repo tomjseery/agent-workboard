@@ -2,6 +2,7 @@
 
 pub mod caller;
 pub mod checkout;
+pub mod concertable_import;
 mod error;
 pub mod git;
 pub mod hooks;
