@@ -4,10 +4,10 @@
 > findings directly and report what changed. Tick each `[x]` as you land it. Pause only for a genuinely
 > irreversible or ambiguous finding: record its durable disposition, take the safe path, and keep going.
 
-**Review status:** `complete`
+**Review status:** `in-progress`
 **Reviewed up to commit:** `75298f3a57263cd613a42d4aba5b122ada0c07b5`  `(2026-08-28)`
 **Security-reviewed up to commit:** `75298f3a57263cd613a42d4aba5b122ada0c07b5`  `(2026-08-28)`
-**Judgment:** `changes-requested`
+**Judgment:** `pending`
 
 ## Review pass — 2026-08-28 — full
 
@@ -490,3 +490,41 @@ No findings.
   Resolved by immutable source/synthetic evidence, preview-time synthetic attestations, explicit repair
   attestations for legacy imports, exact source cardinality validation, and replay counts derived from the
   evidence table. Missing and duplicate mappings fail finalization while normal synthetic import succeeds.
+
+## Review pass — 2026-08-28 — incremental
+
+**Candidate base:** `75298f3a57263cd613a42d4aba5b122ada0c07b5`
+**Candidate head:** `cac358f0e1201222dd94d1454effde531ed297f9`
+**Candidate branch:** `Feature/Phase7-Migration-Completion`
+**Candidate scope:** `all`
+**Candidate path-set:** `sha256:ee1d4e28380659a67492628d9d3728cfc1c21bcb266f3d6de81dbe3f80572119` `(4 paths)`
+**Candidate bundle:** `C:\Users\TommySeery\AppData\Local\Temp\agent-workboard-review-c77cd782844e4e97aefac6e38c7802ac`
+**Candidate bundle identity:** `sha256:f09ff04deb7f6e06e15e0a202450c05843a96ade11626d8ac57966b00ae67e3f`
+**Work-order path:** `reviews/Feature-Phase7-Migration-Completion.md`
+**Work-order mode:** `append`
+**Pass judgment:** `pending`
+
+### Findings
+
+- [x] **P7-032 — MEDIUM — integrity** — `crates/workboard-application/src/storage.rs:733`
+  A preview-time synthetic attestation can be inserted before a source mapping, after which source evidence
+  and the contradictory immutable attestation can both survive finalization and replay. Add reciprocal source
+  guards and a forward-only validation that requires source evidence to have no synthetic attestation and
+  synthetic evidence to retain exactly one valid attestation.
+  Resolved by schema 29's reciprocal source/attestation triggers and provenance-consistency view, which is
+  enforced during finalization, upgrade, and replay. Focused regressions reject both late source forms and
+  prove a missing finalized synthetic attestation stops schema 29 until explicitly repaired.
+
+- [x] **P7-033 — MEDIUM — test** — `crates/workboard-application/src/concertable_import.rs:1719`
+  Schema 28 lacks a direct canonical schema-26 upgrade fixture containing source or revision ambiguity.
+  Prove the migration stops at schema 27 without a schema-28 stamp or partial evidence, preserves every row,
+  then succeeds with exact evidence and unchanged replay after the ambiguity is repaired.
+  Resolved by a canonical schema-26 fixture with duplicate source cardinality. It proves schema 27 remains
+  stamped, schema 28 and partial evidence remain absent, all legacy rows survive, and exact evidence plus the
+  original replay result are restored after repair.
+
+- [x] **P7-034 — MEDIUM — test** — `crates/workboard-application/src/storage.rs:723`
+  The new evidence and attestation update/delete guards have no direct regression assertions. Prove all four
+  mutations are rejected, the rows remain byte-for-byte unchanged, and replay remains equal afterward.
+  Resolved by direct update/delete assertions for both durable evidence tables, byte-for-byte row comparison,
+  and the unchanged idempotent replay assertion in the same test.

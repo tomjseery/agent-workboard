@@ -12,7 +12,7 @@ use workboard_core::{ConversationId, LaunchLeaseId};
 
 use crate::AppError;
 
-const CURRENT_SCHEMA_VERSION: i64 = 28;
+const CURRENT_SCHEMA_VERSION: i64 = 29;
 const FOUNDATION_SCHEMA_CHECKSUM: &str = "agent-workboard-foundation-v1";
 const LAUNCH_LEASE_SCHEMA_CHECKSUM: &str = "agent-workboard-launch-leases-v1";
 const WORKBOARD_DOMAIN_SCHEMA_CHECKSUM: &str = "agent-workboard-domain-v1";
@@ -967,6 +967,106 @@ const IMPORT_DOCUMENT_EVIDENCE_FINALIZATION_SQL: &str = "INSERT INTO import_docu
  )
  OR EXISTS (
      SELECT 1 FROM concertable_import_durable_evidence_failures failure
+      WHERE failure.import_id = NEW.import_id
+ )
+ BEGIN
+     SELECT RAISE(ABORT, 'import document membership finalization is invalid');
+ END;";
+const IMPORT_DOCUMENT_PROVENANCE_CONSISTENCY_SCHEMA_CHECKSUM: &str =
+    "agent-workboard-import-document-provenance-consistency-v1";
+const IMPORT_DOCUMENT_PROVENANCE_CONSISTENCY_SQL: &str =
+    "CREATE VIEW concertable_import_provenance_consistency_failures AS
+ SELECT batch.id AS import_id
+   FROM import_batches batch
+  WHERE batch.kind = 'concertable_plans'
+    AND EXISTS (
+        SELECT 1
+          FROM import_document_evidence evidence
+         WHERE evidence.import_id = batch.id
+           AND (
+               (
+                   evidence.source_provenance = 'source'
+                   AND EXISTS (
+                       SELECT 1 FROM import_document_synthetic_attestations attestation
+                        WHERE attestation.import_id = evidence.import_id
+                          AND attestation.document_id = evidence.document_id
+                   )
+               )
+               OR (
+                   evidence.source_provenance = 'synthetic'
+                   AND (
+                       SELECT COUNT(*) FROM import_document_synthetic_attestations attestation
+                        WHERE attestation.import_id = evidence.import_id
+                          AND attestation.document_id = evidence.document_id
+                   ) <> 1
+               )
+           )
+    );
+ CREATE TRIGGER import_source_destinations_no_synthetic_attestation_insert
+ BEFORE INSERT ON import_source_destinations
+ WHEN EXISTS (
+     SELECT 1 FROM import_document_synthetic_attestations attestation
+      WHERE attestation.import_id = NEW.import_id
+        AND attestation.document_id = NEW.document_id
+ )
+ BEGIN
+     SELECT RAISE(ABORT, 'synthetic import documents cannot have source destinations');
+ END;
+ CREATE TRIGGER import_source_destinations_no_synthetic_attestation_update
+ BEFORE UPDATE ON import_source_destinations
+ WHEN EXISTS (
+     SELECT 1 FROM import_document_synthetic_attestations attestation
+      WHERE attestation.import_id = NEW.import_id
+        AND attestation.document_id = NEW.document_id
+ )
+ BEGIN
+     SELECT RAISE(ABORT, 'synthetic import documents cannot have source destinations');
+ END;
+ CREATE TRIGGER import_document_evidence_source_attestation_valid
+ BEFORE INSERT ON import_document_evidence
+ WHEN NEW.source_provenance = 'source'
+      AND EXISTS (
+          SELECT 1 FROM import_document_synthetic_attestations attestation
+           WHERE attestation.import_id = NEW.import_id
+             AND attestation.document_id = NEW.document_id
+      )
+ BEGIN
+     SELECT RAISE(ABORT, 'synthetic import documents cannot have source evidence');
+ END;
+ CREATE TRIGGER import_document_synthetic_attestations_no_source_evidence
+ BEFORE INSERT ON import_document_synthetic_attestations
+ WHEN EXISTS (
+     SELECT 1 FROM import_document_evidence evidence
+      WHERE evidence.import_id = NEW.import_id
+        AND evidence.document_id = NEW.document_id
+        AND evidence.source_provenance = 'source'
+ )
+ BEGIN
+     SELECT RAISE(ABORT, 'source import documents cannot have synthetic attestations');
+ END;
+ DROP TRIGGER import_document_membership_finalizations_valid;
+ CREATE TRIGGER import_document_membership_finalizations_valid
+ BEFORE INSERT ON import_document_membership_finalizations
+ WHEN NOT EXISTS (
+     SELECT 1 FROM import_batches batch
+      WHERE batch.id = NEW.import_id
+        AND batch.kind = 'concertable_plans'
+        AND batch.imported_at = NEW.finalized_at
+ )
+ OR EXISTS (
+     SELECT 1 FROM concertable_import_membership_evidence_failures failure
+      WHERE failure.import_id = NEW.import_id
+ )
+ OR EXISTS (
+     SELECT 1 FROM concertable_import_cohort_evidence_failures failure
+      WHERE failure.import_id = NEW.import_id
+ )
+ OR EXISTS (
+     SELECT 1 FROM concertable_import_durable_evidence_failures failure
+      WHERE failure.import_id = NEW.import_id
+ )
+ OR EXISTS (
+     SELECT 1 FROM concertable_import_provenance_consistency_failures failure
       WHERE failure.import_id = NEW.import_id
  )
  BEGIN
@@ -2044,6 +2144,13 @@ fn migrate(connection: &Connection) -> Result<(), AppError> {
         IMPORT_DOCUMENT_EVIDENCE_FINALIZATION_SQL,
         validate_finalized_import_document_evidence,
     )?;
+    apply_validated_migration(
+        connection,
+        29,
+        IMPORT_DOCUMENT_PROVENANCE_CONSISTENCY_SCHEMA_CHECKSUM,
+        IMPORT_DOCUMENT_PROVENANCE_CONSISTENCY_SQL,
+        validate_finalized_import_document_provenance,
+    )?;
     Ok(())
 }
 
@@ -2799,6 +2906,28 @@ fn validate_finalized_import_document_evidence(
     )))
 }
 
+fn validate_finalized_import_document_provenance(
+    transaction: &Transaction<'_>,
+) -> Result<(), AppError> {
+    let invalid = transaction
+        .prepare(
+            "SELECT finalization.import_id
+               FROM import_document_membership_finalizations finalization
+               JOIN concertable_import_provenance_consistency_failures failure
+                 ON failure.import_id = finalization.import_id
+              ORDER BY finalization.import_id",
+        )?
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    if invalid.is_empty() {
+        return Ok(());
+    }
+    Err(AppError::Domain(format!(
+        "schema migration 29 cannot validate Concertable import provenance consistency for {}; remove contradictory source evidence or restore the verified synthetic attestation, then retry",
+        invalid.join(", ")
+    )))
+}
+
 fn create_import_batch_repository_immutable_trigger(
     transaction: &Transaction<'_>,
 ) -> Result<(), AppError> {
@@ -2845,6 +2974,11 @@ mod tests {
                 "DROP TRIGGER IF EXISTS import_work_item_repositories_finalized_insert;
                  DROP TRIGGER IF EXISTS import_work_item_repositories_finalized_update;
                  DROP TRIGGER IF EXISTS import_work_item_repositories_finalized_delete;
+                 DROP TRIGGER IF EXISTS import_source_destinations_no_synthetic_attestation_insert;
+                 DROP TRIGGER IF EXISTS import_source_destinations_no_synthetic_attestation_update;
+                 DROP TRIGGER IF EXISTS import_document_evidence_source_attestation_valid;
+                 DROP TRIGGER IF EXISTS import_document_synthetic_attestations_no_source_evidence;
+                 DROP VIEW IF EXISTS concertable_import_provenance_consistency_failures;
                  DROP VIEW IF EXISTS concertable_import_durable_evidence_failures;
                  DROP TRIGGER IF EXISTS import_document_evidence_valid;
                  DROP TRIGGER IF EXISTS import_document_evidence_no_update;
@@ -3674,7 +3808,7 @@ mod tests {
         assert_eq!(preserved_attestation, valid_attestation);
         assert_eq!(legacy_authority, "immutable_evidence");
         let health = store.health().expect("storage health");
-        assert_eq!(health.schema_version, 28);
+        assert_eq!(health.schema_version, 29);
         assert!(health.is_healthy());
         let audited_attestations: Vec<(String, String, String, String)> = store
             .read(|connection| {
@@ -3719,7 +3853,7 @@ mod tests {
             .expect("read upgraded schema 20 attestations");
         assert_eq!(upgraded_attestations, audited_attestations);
         let health = store.health().expect("upgraded storage health");
-        assert_eq!(health.schema_version, 28);
+        assert_eq!(health.schema_version, 29);
         assert!(health.is_healthy());
         drop(store);
 
