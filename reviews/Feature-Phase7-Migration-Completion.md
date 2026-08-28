@@ -5,8 +5,8 @@
 > irreversible or ambiguous finding: record its durable disposition, take the safe path, and keep going.
 
 **Review status:** `complete`
-**Reviewed up to commit:** `68c7a63e2110067ad7a1a8a4401f6485909b66af`  `(2026-08-28)`
-**Security-reviewed up to commit:** `68c7a63e2110067ad7a1a8a4401f6485909b66af`  `(2026-08-28)`
+**Reviewed up to commit:** `a43df92ba0e9929cf002d9782123c6c61fe57258`  `(2026-08-28)`
+**Security-reviewed up to commit:** `a43df92ba0e9929cf002d9782123c6c61fe57258`  `(2026-08-28)`
 **Judgment:** `changes-requested`
 
 ## Review pass — 2026-08-28 — full
@@ -240,3 +240,28 @@
   and complete its upgrade.
   Resolved by restoring the issued schema-17 SQL and applying a forward-only compatibility repair before the
   audit; the schema-17 fixture proves invalid repairs are removed, valid repairs survive, and retry completes.
+
+## Review pass — 2026-08-28 — incremental
+
+**Candidate base:** `68c7a63e2110067ad7a1a8a4401f6485909b66af`
+**Candidate head:** `a43df92ba0e9929cf002d9782123c6c61fe57258`
+**Candidate branch:** `Feature/Phase7-Migration-Completion`
+**Candidate scope:** `all`
+**Candidate path-set:** `sha256:335501e5eaca737f34a0cb43006d8cf5027a0d61ee71065c04c0aafd85397c3c` `(3 paths)`
+**Candidate bundle:** `C:\Users\TOMMYS~1\AppData\Local\Temp\agent-workboard-review-b0d43205b3ab43aebaecd389bcf3f712`
+**Candidate bundle identity:** `sha256:f8cd4814c166f498c9e67b03a058f67737573fe2577972f51db989f355f93068`
+**Work-order path:** `reviews/Feature-Phase7-Migration-Completion.md`
+**Work-order mode:** `append`
+**Pass judgment:** `changes-requested`
+
+### Findings
+
+- [x] **P7-018 — HIGH — security/correctness** — `crates/workboard-application/src/storage.rs:117`
+  Migration 19 preserves structurally valid schema-17 attestations that audit 18 cannot consume. A direct
+  batch with a non-`explicit_repair` authority remains immutable and occupies the repair primary key, while
+  any pre-audit legacy-batch attestation conflicts with the evidence row the audit must create. Add a new
+  forward-only pre-audit compatibility migration that removes every attestation unusable for its batch type,
+  preserves consumable direct repairs and completed schema-18 evidence, and restores all three guards.
+  Resolved by adding a new pre-audit compatibility migration that classifies attestations against the issued
+  audit contract, removes only unusable pre-audit rows, preserves completed evidence, and reinstalls insert,
+  update, and delete guards; the expanded schema-17 fixture proves each path and a healthy retry.

@@ -12,7 +12,7 @@ use workboard_core::{ConversationId, LaunchLeaseId};
 
 use crate::AppError;
 
-const CURRENT_SCHEMA_VERSION: i64 = 20;
+const CURRENT_SCHEMA_VERSION: i64 = 22;
 const FOUNDATION_SCHEMA_CHECKSUM: &str = "agent-workboard-foundation-v1";
 const LAUNCH_LEASE_SCHEMA_CHECKSUM: &str = "agent-workboard-launch-leases-v1";
 const WORKBOARD_DOMAIN_SCHEMA_CHECKSUM: &str = "agent-workboard-domain-v1";
@@ -39,6 +39,10 @@ const IMPORT_BATCH_ATTESTATION_VALIDATION_SCHEMA_CHECKSUM: &str =
     "agent-workboard-import-batch-attestation-validation-v1";
 const IMPORT_BATCH_AUDIT_CHECKPOINT_SCHEMA_CHECKSUM: &str =
     "agent-workboard-import-batch-audit-checkpoint-v1";
+const IMPORT_BATCH_PRE_AUDIT_ATTESTATION_REPAIR_SCHEMA_CHECKSUM: &str =
+    "agent-workboard-import-batch-pre-audit-attestation-repair-v1";
+const IMPORT_BATCH_FINAL_AUDIT_CHECKPOINT_SCHEMA_CHECKSUM: &str =
+    "agent-workboard-import-batch-final-audit-checkpoint-v1";
 const IMPORT_BATCH_REPOSITORY_REPAIR_SQL: &str = "UPDATE import_batches
     SET repository_id = (
         SELECT MIN(record.destination_id)
@@ -148,6 +152,10 @@ const IMPORT_BATCH_ATTESTATION_VALIDATION_SQL: &str =
  BEGIN
      SELECT RAISE(ABORT, 'import batch repository attestation cannot be deleted');
  END;";
+const IMPORT_BATCH_PRE_AUDIT_ATTESTATION_REPAIR_SQL: &str =
+    "DROP TRIGGER IF EXISTS import_batch_repository_attestations_valid;
+ DROP TRIGGER import_batch_repository_attestations_no_update;
+ DROP TRIGGER import_batch_repository_attestations_no_delete;";
 
 pub struct SqliteStore {
     path: PathBuf,
@@ -1103,6 +1111,13 @@ fn apply_import_repository_migrations(
             IMPORT_BATCH_ATTESTATION_VALIDATION_SCHEMA_CHECKSUM,
             IMPORT_BATCH_ATTESTATION_VALIDATION_SQL,
         )?;
+        apply_validated_migration(
+            connection,
+            21,
+            IMPORT_BATCH_PRE_AUDIT_ATTESTATION_REPAIR_SCHEMA_CHECKSUM,
+            IMPORT_BATCH_PRE_AUDIT_ATTESTATION_REPAIR_SQL,
+            repair_pre_audit_attestations,
+        )?;
     }
     apply_validated_migration(
         connection,
@@ -1121,6 +1136,19 @@ fn apply_import_repository_migrations(
         connection,
         20,
         IMPORT_BATCH_AUDIT_CHECKPOINT_SCHEMA_CHECKSUM,
+        "",
+    )?;
+    apply_validated_migration(
+        connection,
+        21,
+        IMPORT_BATCH_PRE_AUDIT_ATTESTATION_REPAIR_SCHEMA_CHECKSUM,
+        IMPORT_BATCH_PRE_AUDIT_ATTESTATION_REPAIR_SQL,
+        repair_pre_audit_attestations,
+    )?;
+    apply_migration(
+        connection,
+        22,
+        IMPORT_BATCH_FINAL_AUDIT_CHECKPOINT_SCHEMA_CHECKSUM,
         "",
     )
 }
@@ -1172,6 +1200,20 @@ fn apply_import_repository_migrations_atomically(
         &transaction,
         20,
         IMPORT_BATCH_AUDIT_CHECKPOINT_SCHEMA_CHECKSUM,
+        "",
+        |_| Ok(()),
+    )?;
+    apply_migration_step(
+        &transaction,
+        21,
+        IMPORT_BATCH_PRE_AUDIT_ATTESTATION_REPAIR_SCHEMA_CHECKSUM,
+        IMPORT_BATCH_PRE_AUDIT_ATTESTATION_REPAIR_SQL,
+        repair_pre_audit_attestations,
+    )?;
+    apply_migration_step(
+        &transaction,
+        22,
+        IMPORT_BATCH_FINAL_AUDIT_CHECKPOINT_SCHEMA_CHECKSUM,
         "",
         |_| Ok(()),
     )?;
@@ -1250,6 +1292,70 @@ fn apply_validated_migration(
             transaction.commit()?;
         }
     }
+    Ok(())
+}
+
+fn repair_pre_audit_attestations(transaction: &Transaction<'_>) -> Result<(), AppError> {
+    if !migration_exists(transaction, 18)? {
+        let migration_timestamp = schema_migration_timestamp(transaction, 14)?;
+        let attestations = transaction
+            .prepare(
+                "SELECT attestation.import_id, attestation.authority, batch.imported_at,
+                        EXISTS (
+                            SELECT 1 FROM repositories repository
+                             WHERE repository.id = attestation.repository_id
+                               AND repository.workspace_id = batch.workspace_id
+                               AND repository.is_planning_store = 0
+                        )
+                   FROM import_batch_repository_attestations attestation
+                   JOIN import_batches batch ON batch.id = attestation.import_id
+                  ORDER BY attestation.import_id",
+            )?
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)? != 0,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        for (import_id, authority, imported_at, repository_is_valid) in attestations {
+            let is_direct = import_timestamp(&import_id, &imported_at)? >= migration_timestamp;
+            if !is_direct || authority != "explicit_repair" || !repository_is_valid {
+                transaction.execute(
+                    "DELETE FROM import_batch_repository_attestations WHERE import_id = ?1",
+                    [import_id],
+                )?;
+            }
+        }
+    }
+    transaction.execute_batch(
+        "CREATE TRIGGER import_batch_repository_attestations_valid
+         BEFORE INSERT ON import_batch_repository_attestations
+         WHEN NOT EXISTS (
+             SELECT 1
+               FROM import_batches batch
+               JOIN repositories repository
+                 ON repository.id = NEW.repository_id
+                AND repository.workspace_id = batch.workspace_id
+                AND repository.is_planning_store = 0
+              WHERE batch.id = NEW.import_id
+         )
+         BEGIN
+             SELECT RAISE(ABORT, 'import batch repository attestation is invalid');
+         END;
+         CREATE TRIGGER import_batch_repository_attestations_no_update
+         BEFORE UPDATE ON import_batch_repository_attestations
+         BEGIN
+             SELECT RAISE(ABORT, 'import batch repository attestation is immutable');
+         END;
+         CREATE TRIGGER import_batch_repository_attestations_no_delete
+         BEFORE DELETE ON import_batch_repository_attestations
+         BEGIN
+             SELECT RAISE(ABORT, 'import batch repository attestation cannot be deleted');
+         END;",
+    )?;
     Ok(())
 }
 
@@ -2006,7 +2112,7 @@ mod tests {
         let version: i64 = connection
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("schema version");
-        assert_eq!(version, 19);
+        assert_eq!(version, 21);
         let invalid_attestation = connection.execute(
             "INSERT INTO import_batch_repository_attestations (
                  import_id, repository_id, authority, confirmed_at
@@ -2046,7 +2152,7 @@ mod tests {
     }
 
     #[test]
-    fn schema_17_invalid_attestation_can_be_repaired() {
+    fn schema_17_unusable_attestations_can_be_repaired() {
         let directory = TempDir::new().expect("temporary directory");
         let path = directory.path().join("workboard.sqlite");
         let mut store = SqliteStore::open(&path).expect("open store");
@@ -2091,6 +2197,34 @@ mod tests {
             )
             .expect("seed direct batch with valid attestation");
         connection
+            .execute(
+                "INSERT INTO import_batches (
+                     id, workspace_id, repository_id, kind, source_path, source_head,
+                     preview_hash, planning_commit, imported_at
+                 ) VALUES (
+                     'unusable-authority-batch', 'workspace', 'code-repository',
+                     'concertable_plans', 'C:/unusable-authority', 'source-head',
+                     'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+                     'planning-commit', ?1
+                 )",
+                [&imported_at],
+            )
+            .expect("seed direct batch with unusable attestation authority");
+        connection
+            .execute(
+                "INSERT INTO import_batches (
+                     id, workspace_id, repository_id, kind, source_path, source_head,
+                     preview_hash, planning_commit, imported_at
+                 ) VALUES (
+                     'legacy-attestation-batch', 'workspace', 'code-repository',
+                     'concertable_plans', 'C:/code', 'source-head',
+                     'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+                     'planning-commit', '0'
+                 )",
+                [],
+            )
+            .expect("seed legacy batch with pre-audit attestation");
+        connection
             .execute_batch(
                 "INSERT INTO import_batch_repository_attestations (
                      import_id, repository_id, authority, confirmed_at
@@ -2103,6 +2237,18 @@ mod tests {
                  ) VALUES (
                      'valid-attestation-batch', 'code-repository', 'explicit_repair',
                      '2026-08-28T11:00:00Z'
+                 );
+                 INSERT INTO import_batch_repository_attestations (
+                     import_id, repository_id, authority, confirmed_at
+                 ) VALUES (
+                     'unusable-authority-batch', 'code-repository', 'captured_direct',
+                     '2026-08-28T11:00:00Z'
+                 );
+                 INSERT INTO import_batch_repository_attestations (
+                     import_id, repository_id, authority, confirmed_at
+                 ) VALUES (
+                     'legacy-attestation-batch', 'code-repository', 'explicit_repair',
+                     '2026-08-28T11:00:00Z'
                  );",
             )
             .expect("seed prior schema 17 attestations");
@@ -2113,31 +2259,63 @@ mod tests {
             Err(error) => error,
         };
         assert!(error.to_string().contains("invalid-attestation-batch"));
+        assert!(error.to_string().contains("unusable-authority-batch"));
         assert!(error.to_string().contains("explicit_repair"));
 
         let connection = Connection::open(&path).expect("open repair database");
         let version: i64 = connection
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("schema version");
-        let invalid_count: i64 = connection
+        let discarded_count: i64 = connection
             .query_row(
                 "SELECT COUNT(*) FROM import_batch_repository_attestations
-                  WHERE import_id = 'invalid-attestation-batch'",
+                  WHERE import_id IN (
+                      'invalid-attestation-batch',
+                      'unusable-authority-batch',
+                      'legacy-attestation-batch'
+                  )",
                 [],
                 |row| row.get(0),
             )
-            .expect("count discarded invalid attestation");
-        let valid_repository: String = connection
+            .expect("count discarded unusable attestations");
+        let valid_attestation: (String, String, String) = connection
             .query_row(
-                "SELECT repository_id FROM import_batch_repository_attestations
+                "SELECT repository_id, authority, confirmed_at
+                   FROM import_batch_repository_attestations
                   WHERE import_id = 'valid-attestation-batch'",
                 [],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .expect("read preserved valid attestation");
-        assert_eq!(version, 19);
-        assert_eq!(invalid_count, 0);
-        assert_eq!(valid_repository, "code-repository");
+        assert_eq!(version, 21);
+        assert_eq!(discarded_count, 0);
+        assert_eq!(
+            valid_attestation,
+            (
+                "code-repository".to_owned(),
+                "explicit_repair".to_owned(),
+                "2026-08-28T11:00:00Z".to_owned()
+            )
+        );
+        assert!(
+            connection
+                .execute(
+                    "UPDATE import_batch_repository_attestations
+                        SET confirmed_at = '2026-08-28T12:00:00Z'
+                      WHERE import_id = 'valid-attestation-batch'",
+                    [],
+                )
+                .is_err()
+        );
+        assert!(
+            connection
+                .execute(
+                    "DELETE FROM import_batch_repository_attestations
+                      WHERE import_id = 'valid-attestation-batch'",
+                    [],
+                )
+                .is_err()
+        );
         let invalid_attestation = connection.execute(
             "INSERT INTO import_batch_repository_attestations (
                  import_id, repository_id, authority, confirmed_at
@@ -2159,23 +2337,60 @@ mod tests {
                 [],
             )
             .expect("replace discarded attestation with valid repair");
+        connection
+            .execute(
+                "INSERT INTO import_batch_repository_attestations (
+                     import_id, repository_id, authority, confirmed_at
+                 ) VALUES (
+                     'unusable-authority-batch', 'code-repository', 'explicit_repair',
+                     '2026-08-28T13:00:00Z'
+                 )",
+                [],
+            )
+            .expect("replace unusable attestation authority with valid repair");
         drop(connection);
 
         let store = SqliteStore::open(&path).expect("retry schema 17 upgrade");
-        let repaired_batches: i64 = store
+        let (repaired_batches, preserved_attestation, legacy_authority): (
+            i64,
+            (String, String, String),
+            String,
+        ) = store
             .read(|connection| {
-                Ok(connection.query_row(
+                let repaired_batches = connection.query_row(
                     "SELECT COUNT(*) FROM import_batches
-                      WHERE id IN ('invalid-attestation-batch', 'valid-attestation-batch')
-                        AND repository_id = 'code-repository'",
+                      WHERE id IN (
+                          'invalid-attestation-batch',
+                          'valid-attestation-batch',
+                          'unusable-authority-batch',
+                          'legacy-attestation-batch'
+                      ) AND repository_id = 'code-repository'",
                     [],
                     |row| row.get(0),
-                )?)
+                )?;
+                let preserved_attestation = connection.query_row(
+                    "SELECT repository_id, authority, confirmed_at
+                       FROM import_batch_repository_attestations
+                      WHERE import_id = 'valid-attestation-batch'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )?;
+                let legacy_authority = connection.query_row(
+                    "SELECT authority FROM import_batch_repository_attestations
+                      WHERE import_id = 'legacy-attestation-batch'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                Ok((repaired_batches, preserved_attestation, legacy_authority))
             })
             .expect("read repaired batches");
 
-        assert_eq!(repaired_batches, 2);
-        assert!(store.health().expect("storage health").is_healthy());
+        assert_eq!(repaired_batches, 4);
+        assert_eq!(preserved_attestation, valid_attestation);
+        assert_eq!(legacy_authority, "immutable_evidence");
+        let health = store.health().expect("storage health");
+        assert_eq!(health.schema_version, 22);
+        assert!(health.is_healthy());
     }
 
     #[test]
