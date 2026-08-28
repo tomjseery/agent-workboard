@@ -38,6 +38,8 @@ expanded. Schemas 27 and 28 persist exact revision and source provenance per mem
 attestation for legacy synthetic Epics, and reject revision or source cardinality ambiguity. Schema 29 makes
 source and synthetic provenance mutually exclusive and revalidates the attestation bijection on replay.
 Schema 30 closes SQLite replacement semantics at the immutable evidence primary keys.
+The Codex hook generator now emits guarded PowerShell commands through the call operator, so executable paths
+containing spaces parse correctly and missing development executables do not fail native lifecycle hooks.
 
 ## Next Steps
 
@@ -80,19 +82,20 @@ and generic planning/session-recovery machinery.
 - All thirty-seven findings from the full and incremental review passes have been resolved in the local
   candidate.
 - Real Concertable dogfood found and repaired replay undercounting and same-commit overcounting.
+- Native Codex integration no longer generates invalid PowerShell hook commands.
 
 ## Verification
 
 - `cargo fmt --all --check`
 - `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- `cargo test -p workboard-application --lib` — 82 tests passed on 2026-08-28
+- `cargo test -p workboard-application --lib` — 83 tests passed on 2026-08-28
 - `cargo test --workspace` — 140 tests passed on 2026-08-28
 
 ## Reviews
 
-The full review of `f5eae79..89c6cc1` and all incremental reviews through `7a083fd` are complete. The
+The full review of `f5eae79..89c6cc1` and all incremental reviews through `8300b20` are complete. The
 canonical work order is `reviews/Feature-Phase7-Migration-Completion.md`; all thirty-seven findings are
-resolved, and the latest remediation requires a clean incremental pass.
+resolved, and the latest incremental pass is approved and clean.
 
 ## Decisions, discoveries, blockers, and deviations
 
