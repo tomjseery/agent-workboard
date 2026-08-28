@@ -17,9 +17,10 @@ use crate::hooks::{
 };
 use crate::integration_service::record_hook_observation;
 use crate::native_launch::{
-    ManagedLaunchExecutor, ManagedLaunchPreview, PreparedManagedLaunch, ResumeContext,
-    prepare_managed_launch, validate_native_source,
+    ManagedLaunchExecutor, ManagedLaunchPreview, PrepareManagedLaunch, PreparedManagedLaunch,
+    ResumeContext, prepare_managed_launch, validate_native_source,
 };
+use crate::planning_workflow::activate_planning_for_binding;
 use crate::storage::SqliteStore;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,6 +38,7 @@ pub struct BeginManagedSessionLaunch {
     pub created_at: OffsetDateTime,
     pub expires_at: OffsetDateTime,
     pub resume_context: Option<ResumeContext>,
+    pub initial_prompt: Option<String>,
 }
 
 pub struct PreparedSessionLaunch {
@@ -151,24 +153,29 @@ impl<'a> SessionLaunchService<'a> {
             return Err(AppError::DuplicateConfirmed);
         }
         let token = Uuid::new_v4().to_string();
-        let prepared = prepare_managed_launch(
-            request.tool,
-            request.mode.clone(),
-            &request.working_directory,
-            &request.title,
-            &request.terminal_executable,
-            &request.native_executable,
-            token.clone(),
-        )?;
+        let workflow_token = Uuid::new_v4().to_string();
+        let prepared = prepare_managed_launch(PrepareManagedLaunch {
+            tool: request.tool,
+            mode: request.mode.clone(),
+            working_directory: request.working_directory.clone(),
+            title: request.title.clone(),
+            terminal: request.terminal_executable.clone(),
+            native: request.native_executable.clone(),
+            launch_token: token.clone(),
+            workflow_token: Some(workflow_token.clone()),
+            initial_prompt: request.initial_prompt.clone(),
+        })?;
         let intent_id = workboard_core::LaunchIntentId::generate();
-        let token_hash = token_hash(&token);
+        let launch_token_hash = token_hash(&token);
+        let workflow_token_hash = token_hash(&workflow_token);
         self.store.write(|transaction| {
             insert_launch_intent(
                 transaction,
                 intent_id,
                 &request,
                 expected_native_id.as_deref(),
-                &token_hash,
+                &launch_token_hash,
+                &workflow_token_hash,
             )
         })?;
         Ok(PreparedSessionLaunch {
@@ -681,6 +688,7 @@ fn bind_transaction(
     )?;
     let restore_membership_id =
         ensure_restore_membership(transaction, session_id, owner, observed_at)?;
+    activate_planning_for_binding(transaction, owner, role, observed_at)?;
     insert_live_observation(
         transaction,
         LiveObservationInput {
@@ -768,15 +776,17 @@ fn insert_launch_intent(
     request: &BeginManagedSessionLaunch,
     expected_native_id: Option<&str>,
     token_hash: &str,
+    workflow_token_hash: &str,
 ) -> Result<(), AppError> {
     let (epic_id, feature_id, work_item_id) = owner_columns(request.owner);
     transaction.execute(
         "INSERT INTO launch_intents (
              id, epic_id, feature_id, work_item_id, checkout_id, provider,
              idempotency_key, token_hash, status, created_at, expires_at, role,
-             expected_native_id
+             expected_native_id, workflow_token_hash, workflow_token_expires_at
          ) VALUES (
-             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending', ?9, ?10, ?11, ?12
+             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending', ?9, ?10, ?11, ?12,
+             ?13, ?14
          )",
         params![
             intent_id.to_string(),
@@ -791,6 +801,8 @@ fn insert_launch_intent(
             timestamp(request.expires_at),
             role_name(request.role)?,
             expected_native_id,
+            workflow_token_hash,
+            timestamp(request.created_at + time::Duration::hours(12)),
         ],
     )?;
     Ok(())
@@ -1120,9 +1132,18 @@ fn path_text(path: &Path) -> Result<&str, AppError> {
 
 #[cfg(windows)]
 fn paths_equal(left: &Path, right: &Path) -> bool {
-    left.as_os_str()
-        .to_string_lossy()
-        .eq_ignore_ascii_case(&right.as_os_str().to_string_lossy())
+    windows_path_text(left).eq_ignore_ascii_case(&windows_path_text(right))
+}
+
+#[cfg(windows)]
+fn windows_path_text(path: &Path) -> String {
+    let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let value = resolved.as_os_str().to_string_lossy();
+    if let Some(value) = value.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{value}")
+    } else {
+        value.strip_prefix(r"\\?\").unwrap_or(&value).to_owned()
+    }
 }
 
 #[cfg(not(windows))]
@@ -1330,6 +1351,7 @@ mod tests {
             created_at: fixture.observed_at,
             expires_at: fixture.observed_at + time::Duration::minutes(2),
             resume_context: None,
+            initial_prompt: None,
         }
     }
 

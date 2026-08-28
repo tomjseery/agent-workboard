@@ -9,7 +9,9 @@ use tempfile::{Builder, NamedTempFile};
 use workboard_core::Tool;
 
 use crate::error::AppError;
-use crate::workflow_contract::{WORKFLOW_CONTRACT_VERSION, generated_skill};
+use crate::workflow_contract::{
+    WORKFLOW_CONTRACT_VERSION, generated_continue_roadmap_shim, generated_skill,
+};
 
 pub const INTEGRATION_OWNER: &str = "agent-workboard/native-integration-v1";
 const MAX_CONFIGURATION_BYTES: u64 = 1024 * 1024;
@@ -143,6 +145,9 @@ pub struct IntegrationPlan {
     workflow_contract_path: PathBuf,
     workflow_current: Option<Vec<u8>>,
     workflow_installed: Vec<u8>,
+    compatibility_path: PathBuf,
+    compatibility_current: Option<Vec<u8>>,
+    compatibility_installed: Vec<u8>,
     capability: IntegrationCapability,
 }
 
@@ -175,6 +180,16 @@ impl IntegrationPlan {
             .is_file()
             .then(|| read_bounded(&workflow_contract_path))
             .transpose()?;
+        let compatibility_path = request
+            .native_home
+            .join("skills")
+            .join("continue-roadmap")
+            .join("SKILL.md");
+        let compatibility_installed = generated_continue_roadmap_shim(&executable)?.into_bytes();
+        let compatibility_current = compatibility_path
+            .is_file()
+            .then(|| read_bounded(&compatibility_path))
+            .transpose()?;
         let current = read_json_configuration(&configuration_path);
         let mut capability = capability(request.tool, &request.native_home, current.as_ref());
         if workflow_current
@@ -187,6 +202,19 @@ impl IntegrationPlan {
                 format!(
                     "the workflow integration path is owned by another file: {}",
                     workflow_contract_path.display()
+                ),
+            );
+        }
+        if compatibility_current
+            .as_deref()
+            .is_some_and(|contents| !is_owned_workflow_contract(contents))
+        {
+            capability = unavailable_capability(
+                request.tool,
+                "workflow_contract_conflict",
+                format!(
+                    "the compatibility integration path is owned by another file: {}",
+                    compatibility_path.display()
                 ),
             );
         }
@@ -222,6 +250,9 @@ impl IntegrationPlan {
             workflow_contract_path,
             workflow_current,
             workflow_installed,
+            compatibility_path,
+            compatibility_current,
+            compatibility_installed,
             capability,
         })
     }
@@ -256,6 +287,9 @@ impl IntegrationPlan {
             workflow_path: &self.workflow_contract_path,
             current_workflow: self.workflow_current.as_deref(),
             proposed_workflow: self.workflow_value_for(operation),
+            compatibility_path: &self.compatibility_path,
+            current_compatibility: self.compatibility_current.as_deref(),
+            proposed_compatibility: self.compatibility_value_for(operation),
         });
         Ok(PreparedIntegrationPreview {
             preview: IntegrationPreview {
@@ -266,7 +300,9 @@ impl IntegrationPlan {
                 workflow_contract_contents,
                 confirmation_token: String::new(),
                 will_change: self.current_value != *value
-                    || self.workflow_current.as_deref() != self.workflow_value_for(operation),
+                    || self.workflow_current.as_deref() != self.workflow_value_for(operation)
+                    || self.compatibility_current.as_deref()
+                        != self.compatibility_value_for(operation),
             },
             confirmation_digest: configuration_digest,
         })
@@ -307,12 +343,14 @@ impl IntegrationPlan {
             match configuration_state {
                 IntegrationState::Installed
                     if self.workflow_current.as_deref()
-                        != Some(self.workflow_installed.as_slice()) =>
+                        != Some(self.workflow_installed.as_slice())
+                        || self.compatibility_current.as_deref()
+                            != Some(self.compatibility_installed.as_slice()) =>
                 {
                     IntegrationState::NeedsRepair
                 }
                 IntegrationState::Disabled | IntegrationState::NotInstalled
-                    if self.workflow_current.is_some() =>
+                    if self.workflow_current.is_some() || self.compatibility_current.is_some() =>
                 {
                     IntegrationState::NeedsRepair
                 }
@@ -451,53 +489,48 @@ impl IntegrationPlan {
         &self,
         operation: IntegrationOperation,
     ) -> Result<ConfigurationMutation, AppError> {
-        let target = self.workflow_value_for(operation);
-        if self.workflow_current.as_deref() == target {
-            return Ok(ConfigurationMutation {
-                changed: false,
-                backup_path: None,
-                workflow_backup_path: None,
-            });
-        }
-        match target {
-            Some(contents) => replace_owned_file(
-                &self.workflow_contract_path,
-                self.workflow_current.as_deref(),
-                contents,
-            ),
-            None if self
-                .workflow_current
-                .as_deref()
-                .is_some_and(is_owned_workflow_contract) =>
-            {
-                remove_owned_file(
-                    &self.workflow_contract_path,
-                    self.workflow_current
-                        .as_deref()
-                        .expect("owned workflow file"),
-                )
+        let workflow_target = self.workflow_value_for(operation);
+        let workflow = mutate_owned_file(
+            &self.workflow_contract_path,
+            self.workflow_current.as_deref(),
+            workflow_target,
+        )?;
+        let compatibility_target = self.compatibility_value_for(operation);
+        let compatibility = match mutate_owned_file(
+            &self.compatibility_path,
+            self.compatibility_current.as_deref(),
+            compatibility_target,
+        ) {
+            Ok(mutation) => mutation,
+            Err(error) => {
+                if workflow.changed {
+                    rollback_owned_file(
+                        &self.workflow_contract_path,
+                        self.workflow_current.as_deref(),
+                        workflow_target,
+                    )?;
+                }
+                return Err(error);
             }
-            None => Ok(ConfigurationMutation {
-                changed: false,
-                backup_path: None,
-                workflow_backup_path: None,
-            }),
-        }
+        };
+        Ok(ConfigurationMutation {
+            changed: workflow.changed || compatibility.changed,
+            backup_path: workflow.backup_path.or(compatibility.backup_path),
+            workflow_backup_path: None,
+        })
     }
 
     fn rollback_workflow(&self, operation: IntegrationOperation) -> Result<(), AppError> {
-        let target = self.workflow_value_for(operation);
-        match self.workflow_current.as_deref() {
-            Some(original) => {
-                replace_owned_file(&self.workflow_contract_path, target, original)?;
-            }
-            None => {
-                if let Some(target) = target {
-                    remove_owned_file(&self.workflow_contract_path, target)?;
-                }
-            }
-        }
-        Ok(())
+        rollback_owned_file(
+            &self.compatibility_path,
+            self.compatibility_current.as_deref(),
+            self.compatibility_value_for(operation),
+        )?;
+        rollback_owned_file(
+            &self.workflow_contract_path,
+            self.workflow_current.as_deref(),
+            self.workflow_value_for(operation),
+        )
     }
 
     pub fn confirmation_digest(&self, operation: IntegrationOperation) -> Result<String, AppError> {
@@ -515,6 +548,9 @@ impl IntegrationPlan {
             workflow_path: &self.workflow_contract_path,
             current_workflow: self.workflow_current.as_deref(),
             proposed_workflow: self.workflow_value_for(operation),
+            compatibility_path: &self.compatibility_path,
+            current_compatibility: self.compatibility_current.as_deref(),
+            proposed_compatibility: self.compatibility_value_for(operation),
         }))
     }
 
@@ -540,6 +576,18 @@ impl IntegrationPlan {
             }
         }
     }
+
+    fn compatibility_value_for(&self, operation: IntegrationOperation) -> Option<&[u8]> {
+        match operation {
+            IntegrationOperation::Install | IntegrationOperation::Repair => {
+                Some(&self.compatibility_installed)
+            }
+            IntegrationOperation::Disable | IntegrationOperation::Remove => None,
+            IntegrationOperation::Status | IntegrationOperation::Preview => {
+                Some(&self.compatibility_installed)
+            }
+        }
+    }
 }
 
 struct ConfigurationDigestInput<'a> {
@@ -551,6 +599,9 @@ struct ConfigurationDigestInput<'a> {
     workflow_path: &'a Path,
     current_workflow: Option<&'a [u8]>,
     proposed_workflow: Option<&'a [u8]>,
+    compatibility_path: &'a Path,
+    current_compatibility: Option<&'a [u8]>,
+    proposed_compatibility: Option<&'a [u8]>,
 }
 
 fn configuration_digest(input: ConfigurationDigestInput<'_>) -> String {
@@ -563,6 +614,9 @@ fn configuration_digest(input: ConfigurationDigestInput<'_>) -> String {
         workflow_path,
         current_workflow,
         proposed_workflow,
+        compatibility_path,
+        current_compatibility,
+        proposed_compatibility,
     } = input;
     let mut digest = Sha256::new();
     digest.update(b"agent-workboard/integration-confirmation/v1");
@@ -592,6 +646,16 @@ fn configuration_digest(input: ConfigurationDigestInput<'_>) -> String {
     }
     digest_field(&mut digest, workflow_path.to_string_lossy().as_bytes());
     for value in [current_workflow, proposed_workflow] {
+        match value {
+            Some(contents) => {
+                digest.update([1]);
+                digest_field(&mut digest, contents);
+            }
+            None => digest.update([0]),
+        }
+    }
+    digest_field(&mut digest, compatibility_path.to_string_lossy().as_bytes());
+    for value in [current_compatibility, proposed_compatibility] {
         match value {
             Some(contents) => {
                 digest.update([1]);
@@ -972,8 +1036,52 @@ fn is_owned_handler(value: &Value) -> bool {
 fn is_owned_workflow_contract(contents: &[u8]) -> bool {
     std::str::from_utf8(contents).is_ok_and(|contents| {
         contents.contains(&format!("owner: {INTEGRATION_OWNER}"))
-            && contents.contains("name: agent-workboard")
+            && (contents.contains("name: agent-workboard")
+                || contents.contains("name: continue-roadmap"))
     })
+}
+
+fn mutate_owned_file(
+    path: &Path,
+    current: Option<&[u8]>,
+    target: Option<&[u8]>,
+) -> Result<ConfigurationMutation, AppError> {
+    if current == target {
+        return Ok(ConfigurationMutation {
+            changed: false,
+            backup_path: None,
+            workflow_backup_path: None,
+        });
+    }
+    match target {
+        Some(contents) => replace_owned_file(path, current, contents),
+        None if current.is_some_and(is_owned_workflow_contract) => {
+            remove_owned_file(path, current.expect("owned workflow file"))
+        }
+        None => Ok(ConfigurationMutation {
+            changed: false,
+            backup_path: None,
+            workflow_backup_path: None,
+        }),
+    }
+}
+
+fn rollback_owned_file(
+    path: &Path,
+    original: Option<&[u8]>,
+    target: Option<&[u8]>,
+) -> Result<(), AppError> {
+    match original {
+        Some(contents) => {
+            replace_owned_file(path, target, contents)?;
+        }
+        None => {
+            if let Some(contents) = target {
+                remove_owned_file(path, contents)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn replace_owned_file(
@@ -1408,6 +1516,17 @@ mod tests {
                 .expect("read workflow skill")
                 .contains("feature_submit_proposal")
         );
+        let compatibility_path = fixture
+            .home
+            .join("skills")
+            .join("continue-roadmap")
+            .join("SKILL.md");
+        assert!(compatibility_path.is_file());
+        assert!(
+            fs::read_to_string(&compatibility_path)
+                .expect("read compatibility skill")
+                .contains("Do not plan in this unmanaged session")
+        );
 
         let second = fixture
             .plan(IntegrationOperation::Install)
@@ -1458,6 +1577,14 @@ mod tests {
                 .home
                 .join("skills")
                 .join("agent-workboard")
+                .join("SKILL.md")
+                .exists()
+        );
+        assert!(
+            !fixture
+                .home
+                .join("skills")
+                .join("continue-roadmap")
                 .join("SKILL.md")
                 .exists()
         );

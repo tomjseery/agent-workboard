@@ -10,26 +10,32 @@ use directories::{ProjectDirs, UserDirs};
 use serde::Serialize;
 use workboard_application::AppError;
 use workboard_application::caller::{CallerIdentityProvider, EnvironmentCallerIdentity};
+use workboard_application::checkout::PrepareFeatureCheckout;
 use workboard_application::hooks::{HookIngestionMutation, MAX_HOOK_INPUT_BYTES};
 use workboard_application::integration::{
     INTEGRATION_OWNER, IntegrationConfirmation, IntegrationOperation, IntegrationRequest,
-    IntegrationResponse,
+    IntegrationResponse, IntegrationState,
 };
 use workboard_application::legacy_import::preview_context_catalogue;
 use workboard_application::native_launch::SystemLaunchExecutor;
 use workboard_application::native_sources::RefreshNativeSources;
+use workboard_application::planning_workflow::FeatureProposal;
+use workboard_application::planning_workflow::{CreateFeaturePlanning, planner_bootstrap_prompt};
 use workboard_application::session_launch::BeginManagedSessionLaunch;
+use workboard_application::workflow_operations::{CheckpointWorkItem, RequestManagedSession};
 use workboard_application::workspace::{
     CreateEpic, InitialiseWorkspace, RegisterRepository, WorkboardApplication,
 };
 use workboard_core::{
-    Checkout, CheckoutAvailability, Feature, HierarchyOwner, ManagedLaunchMode, ManagedSessionRole,
-    NativeSession, Slug, Tool, WorkItem, WorkspaceId,
+    Checkout, CheckoutAvailability, Epic, Feature, HierarchyOwner, ManagedLaunchMode,
+    ManagedSessionRole, NativeSession, NextActionKind, Repository, Slug, Tool, WorkItem,
+    WorkItemId, WorkspaceId,
 };
 
 use crate::selector::{SelectionCandidate, SelectionResult};
 
 mod board;
+mod mcp;
 mod selector;
 
 #[derive(Debug, Parser)]
@@ -58,6 +64,8 @@ enum Command {
     Work(WorkArgs),
     Session(SessionArgs),
     Integration(IntegrationArgs),
+    Workflow(WorkflowArgs),
+    Mcp,
     Snapshot,
     Backup(DestinationArgs),
     Export(DestinationArgs),
@@ -111,6 +119,22 @@ enum EpicCommand {
         #[arg(long)]
         slug: Option<String>,
     },
+    Continue(Box<EpicContinueArgs>),
+}
+
+#[derive(Debug, Args)]
+struct EpicContinueArgs {
+    epic: Option<String>,
+    #[arg(long)]
+    repository: Option<String>,
+    #[arg(long, value_enum, default_value = "codex")]
+    tool: ToolArg,
+    #[arg(long)]
+    terminal: Option<PathBuf>,
+    #[arg(long)]
+    native: Option<PathBuf>,
+    #[arg(long)]
+    idempotency_key: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -121,7 +145,36 @@ struct FeatureArgs {
 
 #[derive(Debug, Subcommand)]
 enum FeatureCommand {
+    Create(Box<FeatureCreateArgs>),
     Open { feature: Option<String> },
+    Approve { feature: Option<String> },
+    Reject { feature: Option<String> },
+    Publish { feature: Option<String> },
+}
+
+#[derive(Debug, Args)]
+struct FeatureCreateArgs {
+    title: String,
+    #[arg(long)]
+    slug: Option<String>,
+    #[arg(long)]
+    epic: Option<String>,
+    #[arg(long)]
+    repository: Option<String>,
+    #[arg(long)]
+    worktree: Option<PathBuf>,
+    #[arg(long)]
+    branch: Option<String>,
+    #[arg(long)]
+    base: Option<String>,
+    #[arg(long, value_enum, default_value = "codex")]
+    tool: ToolArg,
+    #[arg(long)]
+    terminal: Option<PathBuf>,
+    #[arg(long)]
+    native: Option<PathBuf>,
+    #[arg(long)]
+    idempotency_key: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -186,6 +239,60 @@ enum SessionCommand {
 struct IntegrationArgs {
     #[command(subcommand)]
     command: IntegrationCommand,
+}
+
+#[derive(Debug, Args)]
+struct WorkflowArgs {
+    #[command(subcommand)]
+    command: WorkflowCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum WorkflowCommand {
+    ReadHierarchy(RequestFileArgs),
+    SubmitFeatureProposal(RequestFileArgs),
+    PublishFeature(RequestFileArgs),
+    CheckpointWorkItem(RequestFileArgs),
+    RequestSession(RequestFileArgs),
+}
+
+#[derive(Debug, Args)]
+struct RequestFileArgs {
+    #[arg(long)]
+    request: PathBuf,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FeatureProposalRequest {
+    feature_id: workboard_core::FeatureId,
+    idempotency_key: String,
+    proposal: FeatureProposal,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FeaturePublicationRequest {
+    feature_id: workboard_core::FeatureId,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkItemCheckpointRequest {
+    work_item_id: WorkItemId,
+    next_action: NextActionKind,
+    summary: String,
+    idempotency_key: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ManagedSessionRequest {
+    work_item_id: WorkItemId,
+    tool: Tool,
+    idempotency_key: String,
+    terminal: Option<PathBuf>,
+    native: Option<PathBuf>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -286,6 +393,22 @@ enum ImportCommand {
 
 pub fn run() {
     let cli = Cli::parse();
+    if matches!(cli.command, Some(Command::Mcp)) {
+        let result = (|| {
+            let current_directory = std::env::current_dir().map_err(AppError::GitIo)?;
+            let database = cli
+                .database
+                .as_ref()
+                .map(|path| absolute(&current_directory, path))
+                .map_or_else(default_database_path, Ok)?;
+            mcp::run(database)
+        })();
+        if let Err(error) = result {
+            eprintln!("{}: {error}", error.code());
+            std::process::exit(1);
+        }
+        return;
+    }
     if cli.command.is_none() && !cli.json && io::stdout().is_terminal() {
         if let Err(error) = run_interactive_board(&cli) {
             eprintln!("{}: {error}", error.code());
@@ -387,6 +510,12 @@ fn execute(cli: Cli) -> Result<String, AppError> {
                 format!("Registered {} ({})", repository.title, repository.id),
             )
         }
+        Some(Command::Epic(EpicArgs {
+            command: EpicCommand::Continue(arguments),
+        })) => {
+            let workspace_id = resolve_workspace(&application, cli.workspace)?;
+            execute_epic_continue(&mut application, workspace_id, *arguments, cli.json)
+        }
         Some(Command::Epic(EpicArgs { command })) => {
             let workspace_id = resolve_workspace(&application, cli.workspace)?;
             let (title, slug, body) = match command {
@@ -414,6 +543,7 @@ fn execute(cli: Cli) -> Result<String, AppError> {
                     let slug = parse_or_derive_slug(slug.as_deref(), &title)?;
                     (title, slug, body)
                 }
+                EpicCommand::Continue(_) => unreachable!(),
             };
             let epic = application.create_epic(CreateEpic {
                 workspace_id,
@@ -428,6 +558,18 @@ fn execute(cli: Cli) -> Result<String, AppError> {
             )
         }
         Some(Command::Feature(FeatureArgs {
+            command: FeatureCommand::Create(arguments),
+        })) => {
+            let workspace_id = resolve_workspace(&application, cli.workspace)?;
+            execute_feature_create(
+                &mut application,
+                &current_directory,
+                workspace_id,
+                *arguments,
+                cli.json,
+            )
+        }
+        Some(Command::Feature(FeatureArgs {
             command: FeatureCommand::Open { feature },
         })) => {
             let workspace_id = resolve_workspace(&application, cli.workspace)?;
@@ -437,6 +579,62 @@ fn execute(cli: Cli) -> Result<String, AppError> {
                 feature,
                 cli.json,
                 format!("{} ({}) — {:?}", feature.title, feature.id, feature.state),
+            )
+        }
+        Some(Command::Feature(FeatureArgs {
+            command: FeatureCommand::Reject { feature },
+        })) => {
+            let workspace_id = resolve_workspace(&application, cli.workspace)?;
+            let snapshot = application.snapshot(workspace_id)?;
+            let feature = select_feature(&snapshot, feature.as_deref(), cli.json)?.clone();
+            let outcome = application
+                .planning_workflows()
+                .reject_proposal(feature.id, time::OffsetDateTime::now_utc())?;
+            output(
+                &outcome,
+                cli.json,
+                format!("Rejected the proposal for {}", feature.title),
+            )
+        }
+        Some(Command::Feature(FeatureArgs {
+            command: FeatureCommand::Approve { feature },
+        })) => {
+            let workspace_id = resolve_workspace(&application, cli.workspace)?;
+            let snapshot = application.snapshot(workspace_id)?;
+            let feature = select_feature(&snapshot, feature.as_deref(), cli.json)?.clone();
+            let now = time::OffsetDateTime::now_utc();
+            application
+                .planning_workflows()
+                .approve_proposal(feature.id, now)?;
+            let outcome = application
+                .planning_workflows()
+                .publish_approved(feature.id, now)?;
+            let next = outcome.first_work_item_id.map_or_else(
+                || "No first Work item was selected.".to_owned(),
+                |id| format!("Start it with: workboard work start {id}"),
+            );
+            output(
+                &outcome,
+                cli.json,
+                format!(
+                    "Published {} in commit {}. {next}",
+                    feature.title, outcome.commit
+                ),
+            )
+        }
+        Some(Command::Feature(FeatureArgs {
+            command: FeatureCommand::Publish { feature },
+        })) => {
+            let workspace_id = resolve_workspace(&application, cli.workspace)?;
+            let snapshot = application.snapshot(workspace_id)?;
+            let feature = select_feature(&snapshot, feature.as_deref(), cli.json)?.clone();
+            let outcome = application
+                .planning_workflows()
+                .publish_approved(feature.id, time::OffsetDateTime::now_utc())?;
+            output(
+                &outcome,
+                cli.json,
+                format!("Published {} in commit {}", feature.title, outcome.commit),
             )
         }
         Some(Command::Work(WorkArgs {
@@ -495,6 +693,7 @@ fn execute(cli: Cli) -> Result<String, AppError> {
                 created_at: now,
                 expires_at: now + time::Duration::minutes(2),
                 resume_context: None,
+                initial_prompt: None,
             };
             let prepared = application.session_launch().begin(request)?;
             application
@@ -570,6 +769,7 @@ fn execute(cli: Cli) -> Result<String, AppError> {
                 created_at: now,
                 expires_at: now + time::Duration::minutes(2),
                 resume_context: Some(context),
+                initial_prompt: None,
             };
             let prepared = application.session_launch().begin(request)?;
             application
@@ -605,6 +805,93 @@ fn execute(cli: Cli) -> Result<String, AppError> {
                 cli.json,
                 format!("Adopted session into {}", work_item.title),
             )
+        }
+        Some(Command::Workflow(WorkflowArgs { command })) => {
+            let workflow_token = workflow_token()?;
+            let now = time::OffsetDateTime::now_utc();
+            match command {
+                WorkflowCommand::ReadHierarchy(arguments) => {
+                    let _: serde_json::Value =
+                        read_request(&absolute(&current_directory, &arguments.request))?;
+                    let hierarchy = application.assigned_hierarchy(&workflow_token, now)?;
+                    output(
+                        &hierarchy,
+                        cli.json,
+                        serde_json::to_string_pretty(&hierarchy)?,
+                    )
+                }
+                WorkflowCommand::SubmitFeatureProposal(arguments) => {
+                    let request: FeatureProposalRequest =
+                        read_request(&absolute(&current_directory, &arguments.request))?;
+                    let outcome = application.planning_workflows().submit_proposal(
+                        request.feature_id,
+                        &workflow_token,
+                        request.proposal,
+                        &request.idempotency_key,
+                        now,
+                    )?;
+                    output(
+                        &outcome,
+                        cli.json,
+                        format!(
+                            "Submitted Feature proposal with {} Work items",
+                            outcome.work_item_count
+                        ),
+                    )
+                }
+                WorkflowCommand::PublishFeature(arguments) => {
+                    let request: FeaturePublicationRequest =
+                        read_request(&absolute(&current_directory, &arguments.request))?;
+                    let principal = application
+                        .workflow_operations()
+                        .authenticate(&workflow_token, now)?;
+                    if principal.owner != HierarchyOwner::Feature(request.feature_id) {
+                        return Err(AppError::WorkflowOperationUnauthorized);
+                    }
+                    let outcome = application
+                        .planning_workflows()
+                        .publish_approved(request.feature_id, now)?;
+                    output(
+                        &outcome,
+                        cli.json,
+                        format!("Published Feature in commit {}", outcome.commit),
+                    )
+                }
+                WorkflowCommand::CheckpointWorkItem(arguments) => {
+                    let request: WorkItemCheckpointRequest =
+                        read_request(&absolute(&current_directory, &arguments.request))?;
+                    let outcome = application.workflow_operations().checkpoint(
+                        &workflow_token,
+                        CheckpointWorkItem {
+                            work_item_id: request.work_item_id,
+                            next_action: request.next_action,
+                            summary: request.summary,
+                            idempotency_key: request.idempotency_key,
+                            recorded_at: now,
+                        },
+                    )?;
+                    output(
+                        &outcome,
+                        cli.json,
+                        format!("Checkpointed Work item {}", outcome.work_item_id),
+                    )
+                }
+                WorkflowCommand::RequestSession(arguments) => {
+                    let request: ManagedSessionRequest =
+                        read_request(&absolute(&current_directory, &arguments.request))?;
+                    let outcome = execute_managed_session_request(
+                        &mut application,
+                        &workflow_token,
+                        request,
+                        now,
+                    )?;
+                    output(
+                        &outcome,
+                        cli.json,
+                        "Managed session request completed".to_owned(),
+                    )
+                }
+            }
         }
         Some(Command::Integration(IntegrationArgs {
             command: IntegrationCommand::IngestHook { tool, owner, quiet },
@@ -722,6 +1009,7 @@ fn execute(cli: Cli) -> Result<String, AppError> {
             }
         }
         Some(Command::Import(_)) => unreachable!(),
+        Some(Command::Mcp) => unreachable!(),
     }
 }
 
@@ -750,6 +1038,250 @@ fn resolve_workspace(
     requested: Option<WorkspaceId>,
 ) -> Result<WorkspaceId, AppError> {
     requested.map_or_else(|| application.sole_workspace_id(), Ok)
+}
+
+fn execute_epic_continue(
+    application: &mut WorkboardApplication,
+    workspace_id: WorkspaceId,
+    arguments: EpicContinueArgs,
+    json: bool,
+) -> Result<String, AppError> {
+    let snapshot = application.snapshot(workspace_id)?;
+    let epic = select_epic(&snapshot, arguments.epic.as_deref(), json)?.clone();
+    let repository = select_repository(&snapshot, arguments.repository.as_deref(), json)?.clone();
+    let tool = Tool::from(arguments.tool);
+    let now = time::OffsetDateTime::now_utc();
+    ensure_integration(application, tool, now)?;
+    let checkout = application.ensure_repository_checkout(repository.id, now)?;
+    let prompt = format!(
+        "Use the installed Agent Workboard workflow to continue Epic {} ({}). Read the assigned hierarchy, collaborate with the user to choose the next Feature, and hand implementation planning to workboard feature create. Do not publish or edit planning documents directly from this Epic navigation session.",
+        epic.title, epic.id
+    );
+    let prepared = application
+        .session_launch()
+        .begin(BeginManagedSessionLaunch {
+            owner: HierarchyOwner::Epic(epic.id),
+            role: ManagedSessionRole::EpicNavigation,
+            tool,
+            mode: ManagedLaunchMode::New,
+            checkout_id: checkout.checkout_id,
+            working_directory: checkout.path,
+            title: epic.title.clone(),
+            terminal_executable: arguments
+                .terminal
+                .unwrap_or_else(default_terminal_executable),
+            native_executable: arguments
+                .native
+                .unwrap_or_else(|| default_native_executable(tool)),
+            idempotency_key: arguments
+                .idempotency_key
+                .unwrap_or_else(new_idempotency_key),
+            created_at: now,
+            expires_at: now + time::Duration::minutes(2),
+            resume_context: None,
+            initial_prompt: Some(prompt),
+        })?;
+    application
+        .session_launch()
+        .execute(&prepared, &SystemLaunchExecutor)?;
+    let binding = await_binding(application, prepared.intent_id)?;
+    output(
+        &binding,
+        json,
+        format!(
+            "Launched and bound {} Epic navigator for {}",
+            tool_title(tool),
+            epic.title
+        ),
+    )
+}
+
+fn execute_feature_create(
+    application: &mut WorkboardApplication,
+    current_directory: &Path,
+    workspace_id: WorkspaceId,
+    arguments: FeatureCreateArgs,
+    json: bool,
+) -> Result<String, AppError> {
+    let snapshot = application.snapshot(workspace_id)?;
+    let epic = select_epic(&snapshot, arguments.epic.as_deref(), json)?.clone();
+    let repository = select_repository(&snapshot, arguments.repository.as_deref(), json)?.clone();
+    let tool = Tool::from(arguments.tool);
+    let workboard_executable = std::env::current_exe().map_err(AppError::GitIo)?;
+    let status = application.integrations().execute(
+        IntegrationRequest {
+            tool,
+            native_home: default_integration_home(tool)?,
+            workboard_executable,
+            operation: IntegrationOperation::Status,
+            preview_operation: None,
+            confirmation: None,
+        },
+        time::OffsetDateTime::now_utc(),
+    )?;
+    if !matches!(
+        status,
+        IntegrationResponse::Status { status }
+            if status.state == IntegrationState::Installed && status.enabled_in_workboard
+    ) {
+        return Err(AppError::External {
+            code: "integration_required".to_owned(),
+            message: format!(
+                "{} integration must be installed and healthy before managed planning",
+                tool_title(tool)
+            ),
+        });
+    }
+
+    let slug = parse_or_derive_slug(arguments.slug.as_deref(), &arguments.title)?;
+    let idempotency_key = arguments
+        .idempotency_key
+        .unwrap_or_else(new_idempotency_key);
+    let now = time::OffsetDateTime::now_utc();
+    let draft = application
+        .planning_workflows()
+        .create_feature(CreateFeaturePlanning {
+            epic_id: epic.id,
+            repository_id: repository.id,
+            slug: slug.clone(),
+            title: arguments.title,
+            idempotency_key: format!("{idempotency_key}:feature"),
+            created_at: now,
+        })?;
+    let repository_path = repository
+        .paths
+        .iter()
+        .find(|path| path.superseded_at.is_none())
+        .map(|path| path.path.clone())
+        .ok_or(AppError::ResumeRepositoryMismatch)?;
+    let worktree = arguments
+        .worktree
+        .map(|path| absolute(current_directory, &path))
+        .unwrap_or_else(|| default_feature_worktree(&repository_path, &slug));
+    let parent = worktree
+        .parent()
+        .ok_or_else(|| AppError::WorktreePathNotAbsolute(worktree.clone()))?;
+    fs::create_dir_all(parent).map_err(AppError::GitIo)?;
+    let branch = arguments
+        .branch
+        .unwrap_or_else(|| format!("feature/{slug}"));
+    let base = arguments.base.unwrap_or_else(|| {
+        repository
+            .default_branch
+            .clone()
+            .unwrap_or_else(|| "main".to_owned())
+    });
+    let checkout = application
+        .checkout_service()
+        .prepare_feature(PrepareFeatureCheckout {
+            feature_id: draft.feature_id,
+            repository_id: repository.id,
+            target: worktree,
+            branch,
+            create_branch: true,
+            start_point: base,
+            idempotency_key: format!("{idempotency_key}:checkout"),
+            observed_at: now,
+        })?;
+    let draft = application.planning_workflows().mark_launch_pending(
+        draft.feature_id,
+        checkout.checkout_id,
+        now,
+    )?;
+    let prepared = application
+        .session_launch()
+        .begin(BeginManagedSessionLaunch {
+            owner: HierarchyOwner::Feature(draft.feature_id),
+            role: ManagedSessionRole::FeaturePlanning,
+            tool,
+            mode: ManagedLaunchMode::New,
+            checkout_id: checkout.checkout_id,
+            working_directory: checkout.path,
+            title: draft.title.clone(),
+            terminal_executable: arguments
+                .terminal
+                .unwrap_or_else(default_terminal_executable),
+            native_executable: arguments
+                .native
+                .unwrap_or_else(|| default_native_executable(tool)),
+            idempotency_key: format!("{idempotency_key}:launch"),
+            created_at: now,
+            expires_at: now + time::Duration::minutes(2),
+            resume_context: None,
+            initial_prompt: Some(planner_bootstrap_prompt(&draft)),
+        })?;
+    application
+        .session_launch()
+        .execute(&prepared, &SystemLaunchExecutor)?;
+    let binding = await_binding(application, prepared.intent_id)?;
+    output(
+        &binding,
+        json,
+        format!(
+            "Launched and bound {} planner for {} ({})",
+            tool_title(tool),
+            draft.title,
+            draft.feature_id
+        ),
+    )
+}
+
+fn default_feature_worktree(repository: &Path, feature: &Slug) -> PathBuf {
+    let name = repository
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("repository");
+    repository
+        .parent()
+        .unwrap_or(repository)
+        .join(format!("{name}.worktrees"))
+        .join(feature.as_str())
+}
+
+fn select_epic<'a>(
+    snapshot: &'a workboard_core::WorkspaceSnapshot,
+    query: Option<&str>,
+    structured: bool,
+) -> Result<&'a Epic, AppError> {
+    let candidates = snapshot.epics.iter().map(|epic| SelectionCandidate {
+        id: epic.id.to_string(),
+        key: Some(epic.slug.to_string()),
+        label: epic.title.clone(),
+        metadata: "Epic".to_owned(),
+    });
+    let candidate = select_candidate("Epic", query, candidates.collect(), structured)?;
+    snapshot
+        .epics
+        .iter()
+        .find(|epic| epic.id.to_string() == candidate.id)
+        .ok_or_else(|| AppError::Domain("selected Epic is unavailable".to_owned()))
+}
+
+fn select_repository<'a>(
+    snapshot: &'a workboard_core::WorkspaceSnapshot,
+    query: Option<&str>,
+    structured: bool,
+) -> Result<&'a Repository, AppError> {
+    let candidates = snapshot
+        .repositories
+        .iter()
+        .filter(|repository| repository.id != snapshot.workspace.planning_store_repository_id)
+        .map(|repository| SelectionCandidate {
+            id: repository.id.to_string(),
+            key: Some(repository.slug.to_string()),
+            label: repository.title.clone(),
+            metadata: repository
+                .default_branch
+                .clone()
+                .unwrap_or_else(|| "detached".to_owned()),
+        })
+        .collect();
+    let candidate = select_candidate("repository", query, candidates, structured)?;
+    snapshot
+        .repositories
+        .iter()
+        .find(|repository| repository.id.to_string() == candidate.id)
+        .ok_or(AppError::ResumeRepositoryMismatch)
 }
 
 fn select_feature<'a>(
@@ -1054,6 +1586,133 @@ fn await_binding(
             });
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
+fn workflow_token() -> Result<String, AppError> {
+    std::env::var(workboard_core::WORKBOARD_WORKFLOW_TOKEN_ENV)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or(AppError::WorkflowOperationUnauthorized)
+}
+
+fn read_request<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, AppError> {
+    const MAX_REQUEST_BYTES: u64 = 2 * 1024 * 1024;
+    let metadata = fs::metadata(path).map_err(|source| AppError::PlanningStoreIo {
+        operation: "reading workflow request metadata",
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if metadata.len() > MAX_REQUEST_BYTES {
+        return Err(AppError::PlanningDocumentInvalid(
+            "workflow request exceeds 2 MiB".to_owned(),
+        ));
+    }
+    let bytes = fs::read(path).map_err(|source| AppError::PlanningStoreIo {
+        operation: "reading workflow request",
+        path: path.to_path_buf(),
+        source,
+    })?;
+    serde_json::from_slice(&bytes).map_err(Into::into)
+}
+
+fn execute_managed_session_request(
+    application: &mut WorkboardApplication,
+    workflow_token: &str,
+    request: ManagedSessionRequest,
+    now: time::OffsetDateTime,
+) -> Result<serde_json::Value, AppError> {
+    ensure_integration(application, request.tool, now)?;
+    let idempotency_key = request.idempotency_key.clone();
+    let terminal = request.terminal.unwrap_or_else(default_terminal_executable);
+    let native = request
+        .native
+        .unwrap_or_else(|| default_native_executable(request.tool));
+    let requested = application.workflow_operations().request_session(
+        workflow_token,
+        RequestManagedSession {
+            work_item_id: request.work_item_id,
+            tool: request.tool,
+            idempotency_key,
+            requested_at: now,
+        },
+    )?;
+    if requested.status == "bound" {
+        return serde_json::to_value(&requested).map_err(Into::into);
+    }
+    if requested.status != "pending" {
+        return Err(AppError::External {
+            code: "session_request_in_progress".to_owned(),
+            message: format!(
+                "managed session request {} is {}",
+                requested.request_id, requested.status
+            ),
+        });
+    }
+    let prepared = application
+        .session_launch()
+        .begin(BeginManagedSessionLaunch {
+            owner: HierarchyOwner::WorkItem(requested.work_item_id),
+            role: ManagedSessionRole::WorkItemExecution,
+            tool: requested.tool,
+            mode: ManagedLaunchMode::New,
+            checkout_id: requested.checkout_id,
+            working_directory: requested.working_directory.clone(),
+            title: requested.title.clone(),
+            terminal_executable: terminal,
+            native_executable: native,
+            idempotency_key: format!("{}:launch", requested.request_id),
+            created_at: now,
+            expires_at: now + time::Duration::minutes(2),
+            resume_context: None,
+            initial_prompt: None,
+        })?;
+    application
+        .session_launch()
+        .execute(&prepared, &SystemLaunchExecutor)?;
+    application
+        .workflow_operations()
+        .record_session_launch(requested.request_id, prepared.intent_id)?;
+    let binding = await_binding(application, prepared.intent_id)?;
+    application
+        .workflow_operations()
+        .record_session_binding(requested.request_id)?;
+    Ok(serde_json::json!({
+        "request": requested,
+        "binding": binding,
+    }))
+}
+
+fn ensure_integration(
+    application: &mut WorkboardApplication,
+    tool: Tool,
+    now: time::OffsetDateTime,
+) -> Result<(), AppError> {
+    let response = application.integrations().execute(
+        IntegrationRequest {
+            tool,
+            native_home: default_integration_home(tool)?,
+            workboard_executable: std::env::current_exe().map_err(AppError::GitIo)?,
+            operation: IntegrationOperation::Status,
+            preview_operation: None,
+            confirmation: None,
+        },
+        now,
+    )?;
+    if matches!(
+        response,
+        IntegrationResponse::Status { status }
+            if status.state == IntegrationState::Installed && status.enabled_in_workboard
+    ) {
+        Ok(())
+    } else {
+        Err(AppError::External {
+            code: "integration_required".to_owned(),
+            message: format!(
+                "{} integration must be installed and healthy before managed launch",
+                tool_title(tool)
+            ),
+        })
     }
 }
 

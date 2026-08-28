@@ -11,13 +11,16 @@ use workboard_core::{ConversationId, LaunchLeaseId};
 
 use crate::AppError;
 
-const CURRENT_SCHEMA_VERSION: i64 = 6;
+const CURRENT_SCHEMA_VERSION: i64 = 9;
 const FOUNDATION_SCHEMA_CHECKSUM: &str = "agent-workboard-foundation-v1";
 const LAUNCH_LEASE_SCHEMA_CHECKSUM: &str = "agent-workboard-launch-leases-v1";
 const WORKBOARD_DOMAIN_SCHEMA_CHECKSUM: &str = "agent-workboard-domain-v1";
 const MANAGED_BINDING_SCHEMA_CHECKSUM: &str = "agent-workboard-managed-binding-v1";
 const NATIVE_SOURCE_SCHEMA_CHECKSUM: &str = "agent-workboard-native-source-v1";
 const INTEGRATION_STATE_SCHEMA_CHECKSUM: &str = "agent-workboard-integration-state-v1";
+const FEATURE_PLANNING_SCHEMA_CHECKSUM: &str = "agent-workboard-feature-planning-v1";
+const WORKFLOW_CREDENTIAL_SCHEMA_CHECKSUM: &str = "agent-workboard-workflow-credential-v1";
+const SESSION_REQUEST_SCHEMA_CHECKSUM: &str = "agent-workboard-session-request-v1";
 
 pub struct SqliteStore {
     path: PathBuf,
@@ -717,6 +720,67 @@ fn migrate(connection: &Connection) -> Result<(), AppError> {
              expires_at TEXT NOT NULL,
              consumed_at TEXT,
              CHECK (expires_at > created_at)
+         );",
+    )?;
+    apply_migration(
+        connection,
+        7,
+        FEATURE_PLANNING_SCHEMA_CHECKSUM,
+        "ALTER TABLE workflow_events ADD COLUMN idempotency_key TEXT;
+         CREATE UNIQUE INDEX workflow_events_idempotency
+             ON workflow_events (idempotency_key) WHERE idempotency_key IS NOT NULL;
+         CREATE TABLE feature_planning_contexts (
+             feature_id TEXT PRIMARY KEY REFERENCES features(id) ON DELETE RESTRICT,
+             workflow_run_id TEXT NOT NULL UNIQUE REFERENCES workflow_runs(id) ON DELETE RESTRICT,
+             idempotency_key TEXT NOT NULL UNIQUE CHECK (idempotency_key <> ''),
+             repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE RESTRICT,
+             epic_content_hash TEXT NOT NULL CHECK (length(epic_content_hash) = 64),
+             repository_head TEXT NOT NULL CHECK (repository_head <> ''),
+             created_at TEXT NOT NULL
+         );
+         CREATE TABLE feature_planning_proposals (
+             feature_id TEXT PRIMARY KEY REFERENCES features(id) ON DELETE RESTRICT,
+             workflow_run_id TEXT NOT NULL UNIQUE REFERENCES workflow_runs(id) ON DELETE RESTRICT,
+             idempotency_key TEXT NOT NULL UNIQUE CHECK (idempotency_key <> ''),
+             proposal_json TEXT NOT NULL CHECK (proposal_json <> ''),
+             status TEXT NOT NULL CHECK (
+                 status IN ('awaiting_approval', 'rejected', 'publishing', 'published')
+             ),
+             submitted_at TEXT NOT NULL,
+             approved_at TEXT,
+             published_commit TEXT
+         );
+         CREATE TABLE work_item_checkpoints (
+             id TEXT PRIMARY KEY,
+             work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE RESTRICT,
+             session_id TEXT NOT NULL REFERENCES native_sessions(id) ON DELETE RESTRICT,
+             idempotency_key TEXT NOT NULL UNIQUE CHECK (idempotency_key <> ''),
+             next_action_kind TEXT NOT NULL,
+             summary TEXT NOT NULL CHECK (summary <> ''),
+             recorded_at TEXT NOT NULL
+         );",
+    )?;
+    apply_migration(
+        connection,
+        8,
+        WORKFLOW_CREDENTIAL_SCHEMA_CHECKSUM,
+        "ALTER TABLE launch_intents ADD COLUMN workflow_token_hash TEXT;
+         ALTER TABLE launch_intents ADD COLUMN workflow_token_expires_at TEXT;",
+    )?;
+    apply_migration(
+        connection,
+        9,
+        SESSION_REQUEST_SCHEMA_CHECKSUM,
+        "CREATE TABLE managed_session_requests (
+             id TEXT PRIMARY KEY,
+             requesting_session_id TEXT NOT NULL REFERENCES native_sessions(id) ON DELETE RESTRICT,
+             work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE RESTRICT,
+             provider TEXT NOT NULL CHECK (provider IN ('claude', 'codex')),
+             idempotency_key TEXT NOT NULL UNIQUE CHECK (idempotency_key <> ''),
+             status TEXT NOT NULL CHECK (status IN ('pending', 'launched', 'bound', 'failed')),
+             requested_at TEXT NOT NULL,
+             launch_intent_id TEXT UNIQUE REFERENCES launch_intents(id) ON DELETE RESTRICT,
+             failure TEXT
          );",
     )?;
     Ok(())

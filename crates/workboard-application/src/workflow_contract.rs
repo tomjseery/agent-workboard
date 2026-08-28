@@ -46,11 +46,21 @@ pub(crate) fn generated_skill(workboard: &Path) -> Result<String, AppError> {
     ))
 }
 
+pub(crate) fn generated_continue_roadmap_shim(workboard: &Path) -> Result<String, AppError> {
+    let executable = workboard
+        .to_str()
+        .filter(|value| !value.chars().any(char::is_control))
+        .ok_or_else(|| AppError::Domain("workflow executable path is invalid".to_owned()))?;
+    Ok(format!(
+        "---\nname: continue-roadmap\ndescription: Hand legacy roadmap continuation off to Agent Workboard managed Feature planning.\nmetadata:\n  owner: {INTEGRATION_OWNER}\n  version: {WORKFLOW_CONTRACT_VERSION}\n---\n\n# Continue roadmap compatibility\n\nDo not plan in this unmanaged session. Tell the user that roadmap continuation now runs through Agent Workboard, then invoke `{executable} feature create <request> --epic <epic> --tool <claude|codex>` with the selected Epic and provider. Stop after the managed native planner is confirmed bound in its Feature worktree.\n"
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
 
-    use super::{WORKFLOW_CONTRACT_VERSION, generated_skill};
+    use super::{WORKFLOW_CONTRACT_VERSION, generated_continue_roadmap_shim, generated_skill};
 
     #[test]
     fn generates_one_contract_for_both_native_skill_formats() {
@@ -62,5 +72,9 @@ mod tests {
         assert!(skill.contains("work_checkpoint"));
         assert!(skill.contains("session_request"));
         assert!(skill.contains("C:/Agent Workboard/workboard.exe"));
+        let shim = generated_continue_roadmap_shim(Path::new("C:/Agent Workboard/workboard.exe"))
+            .expect("generated compatibility shim");
+        assert!(shim.contains("name: continue-roadmap"));
+        assert!(shim.contains("Do not plan in this unmanaged session"));
     }
 }

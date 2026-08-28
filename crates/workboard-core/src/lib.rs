@@ -23,13 +23,15 @@ pub use hierarchy::{
 pub use identity::{
     AssociationEventId, AssociationIntervalId, CheckoutId, CheckoutPathId, ConversationId,
     DocumentId, DocumentReferenceId, EpicId, FeatureId, GitOperationIntentId, LaunchIntentId,
-    LaunchLeaseId, LiveObservationId, ManagedSessionId, OperationIntentId, RepositoryId,
-    RepositoryPathId, RestoreMembershipId, SessionBindingId, TerminalLayoutId, TerminalTabId,
-    WorkItemId, WorkflowEventId, WorkflowRunId, WorkspaceId, WorktreeId,
+    LaunchLeaseId, LiveObservationId, ManagedSessionId, ManagedSessionRequestId, OperationIntentId,
+    RepositoryId, RepositoryPathId, RestoreMembershipId, SessionBindingId, TerminalLayoutId,
+    TerminalTabId, WorkItemCheckpointId, WorkItemId, WorkflowEventId, WorkflowRunId, WorkspaceId,
+    WorktreeId,
 };
 pub use launch::{
     CommandSpec, LaunchSpecError, ManagedLaunchMode, ManagedLaunchRequest, ManagedLaunchSpec,
-    ResumeLaunchSpec, TerminalKind, WORKBOARD_LAUNCH_TOKEN_ENV, sanitise_terminal_title,
+    ResumeLaunchSpec, TerminalKind, WORKBOARD_LAUNCH_TOKEN_ENV, WORKBOARD_WORKFLOW_TOKEN_ENV,
+    sanitise_terminal_title,
 };
 pub use live::{
     ConversationLifecycle, LiveEvidenceSource, LiveStatus, ProcessIdentity, ProcessIdentityError,
