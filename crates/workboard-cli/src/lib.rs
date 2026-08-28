@@ -10,7 +10,7 @@ use directories::{ProjectDirs, UserDirs};
 use serde::Serialize;
 use workboard_application::AppError;
 use workboard_application::caller::{CallerIdentityProvider, EnvironmentCallerIdentity};
-use workboard_application::checkout::PrepareFeatureCheckout;
+use workboard_application::checkout::{AdoptFeatureCheckout, PrepareFeatureCheckout};
 use workboard_application::concertable_import::{
     ConcertableImportPreview, preview_concertable_plans,
 };
@@ -175,10 +175,25 @@ struct FeatureArgs {
 #[derive(Debug, Subcommand)]
 enum FeatureCommand {
     Create(Box<FeatureCreateArgs>),
-    Open { feature: Option<String> },
-    Approve { feature: Option<String> },
-    Reject { feature: Option<String> },
-    Publish { feature: Option<String> },
+    Open {
+        feature: Option<String>,
+    },
+    UseCheckout {
+        feature: Option<String>,
+        #[arg(long)]
+        checkout: String,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    Approve {
+        feature: Option<String>,
+    },
+    Reject {
+        feature: Option<String>,
+    },
+    Publish {
+        feature: Option<String>,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -267,7 +282,9 @@ enum SessionCommand {
         #[arg(long, default_value = "removed by user")]
         reason: String,
     },
-    ImportedCandidates,
+    ImportedCandidates {
+        query: Option<String>,
+    },
     AdoptImported {
         session: String,
         work_item: Option<String>,
@@ -734,6 +751,33 @@ fn execute(cli: Cli) -> Result<String, AppError> {
             )
         }
         Some(Command::Feature(FeatureArgs {
+            command:
+                FeatureCommand::UseCheckout {
+                    feature,
+                    checkout,
+                    idempotency_key,
+                },
+        })) => {
+            let workspace_id = resolve_workspace(&application, cli.workspace)?;
+            let snapshot = application.snapshot(workspace_id)?;
+            let feature = select_feature(&snapshot, feature.as_deref(), cli.json)?;
+            let checkout = select_available_checkout(&snapshot, &checkout, cli.json)?;
+            let outcome =
+                application
+                    .checkout_service()
+                    .adopt_feature_checkout(AdoptFeatureCheckout {
+                        feature_id: feature.id,
+                        checkout_id: checkout.id,
+                        idempotency_key: idempotency_key.unwrap_or_else(new_idempotency_key),
+                        observed_at: time::OffsetDateTime::now_utc(),
+                    })?;
+            output(
+                &outcome,
+                cli.json,
+                format!("Assigned {} to {}", outcome.path.display(), feature.title),
+            )
+        }
+        Some(Command::Feature(FeatureArgs {
             command: FeatureCommand::Reject { feature },
         })) => {
             let workspace_id = resolve_workspace(&application, cli.workspace)?;
@@ -982,10 +1026,13 @@ fn execute(cli: Cli) -> Result<String, AppError> {
             )
         }
         Some(Command::Session(SessionArgs {
-            command: SessionCommand::ImportedCandidates,
+            command: SessionCommand::ImportedCandidates { query },
         })) => {
             let workspace_id = resolve_workspace(&application, cli.workspace)?;
-            let candidates = application.imported_session_candidates(workspace_id)?;
+            let mut candidates = application.imported_session_candidates(workspace_id)?;
+            if let Some(query) = query.as_deref() {
+                candidates.retain(|candidate| imported_candidate_matches(candidate, query));
+            }
             let human = if candidates.is_empty() {
                 "No imported session candidates".to_owned()
             } else {
@@ -997,10 +1044,7 @@ fn execute(cli: Cli) -> Result<String, AppError> {
                             candidate.session_id,
                             tool_title(candidate.tool),
                             candidate.status,
-                            candidate
-                                .legacy_workstream_title
-                                .as_deref()
-                                .unwrap_or("unassigned")
+                            imported_candidate_label(candidate)
                         )
                     })
                     .collect::<Vec<_>>()
@@ -1640,11 +1684,21 @@ fn select_imported_candidate<'a>(
         .map(|candidate| SelectionCandidate {
             id: candidate.session_id.to_string(),
             key: Some(candidate.native_id.clone()),
-            label: candidate
-                .legacy_workstream_title
-                .clone()
-                .unwrap_or_else(|| candidate.native_id.clone()),
-            metadata: format!("{} imported", tool_title(candidate.tool)),
+            label: imported_candidate_label(candidate),
+            metadata: [
+                Some(tool_title(candidate.tool).to_owned()),
+                candidate.legacy_workstream_title.clone(),
+                candidate
+                    .observed_cwd
+                    .as_deref()
+                    .map(|path| path.to_string_lossy().into_owned()),
+                candidate.first_prompt_preview.clone(),
+                candidate.last_prompt_preview.clone(),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" | "),
         })
         .collect();
     let selected = select_candidate("imported session", Some(query), options, structured)?;
@@ -1652,6 +1706,41 @@ fn select_imported_candidate<'a>(
         .iter()
         .find(|candidate| candidate.session_id.to_string() == selected.id)
         .ok_or(AppError::ConversationNotFound)
+}
+
+fn imported_candidate_label(candidate: &ImportedSessionCandidate) -> String {
+    let value = candidate
+        .native_title
+        .as_deref()
+        .or(candidate.legacy_workstream_title.as_deref())
+        .or(candidate.last_prompt_preview.as_deref())
+        .unwrap_or(&candidate.native_id);
+    let compact = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compact.chars().count() <= 120 {
+        compact
+    } else {
+        format!("{}…", compact.chars().take(119).collect::<String>())
+    }
+}
+
+fn imported_candidate_matches(candidate: &ImportedSessionCandidate, query: &str) -> bool {
+    let query = query.to_lowercase();
+    [
+        Some(candidate.session_id.to_string()),
+        Some(candidate.native_id.clone()),
+        candidate.native_title.clone(),
+        candidate.legacy_workstream_id.clone(),
+        candidate.legacy_workstream_title.clone(),
+        candidate.first_prompt_preview.clone(),
+        candidate.last_prompt_preview.clone(),
+        candidate
+            .observed_cwd
+            .as_deref()
+            .map(|path| path.to_string_lossy().into_owned()),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|value| value.to_lowercase().contains(&query))
 }
 
 fn select_feature<'a>(
@@ -1766,6 +1855,38 @@ fn select_checkout<'a>(
         .iter()
         .find(|checkout| checkout.id.to_string() == candidate.id)
         .ok_or(AppError::ResumeCheckoutRequired)
+}
+
+fn select_available_checkout<'a>(
+    snapshot: &'a workboard_core::WorkspaceSnapshot,
+    query: &str,
+    structured: bool,
+) -> Result<&'a Checkout, AppError> {
+    let candidates = snapshot
+        .checkouts
+        .iter()
+        .filter(|checkout| checkout.availability == CheckoutAvailability::Available)
+        .map(|checkout| {
+            let path = checkout
+                .paths
+                .iter()
+                .find(|path| path.observed_until.is_none())
+                .map(|path| path.path.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            SelectionCandidate {
+                id: checkout.id.to_string(),
+                key: checkout.branch.clone(),
+                label: path,
+                metadata: checkout.head.clone().unwrap_or_default(),
+            }
+        })
+        .collect();
+    let candidate = select_candidate("checkout", Some(query), candidates, structured)?;
+    snapshot
+        .checkouts
+        .iter()
+        .find(|checkout| checkout.id.to_string() == candidate.id)
+        .ok_or(AppError::ResumeCheckoutNotScanned)
 }
 
 fn select_candidate(

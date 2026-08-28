@@ -52,6 +52,16 @@ pub struct LegacySessionCandidatePreview {
     pub confidence: Option<String>,
     pub confirmed_legacy_association: bool,
     pub adopt_work_item_id: Option<WorkItemId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_prompt_preview: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_prompt_preview: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_activity_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_cwd: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -80,6 +90,11 @@ pub struct ImportedSessionCandidate {
     pub authority: Option<String>,
     pub confidence: Option<String>,
     pub status: String,
+    pub native_title: Option<String>,
+    pub first_prompt_preview: Option<String>,
+    pub last_prompt_preview: Option<String>,
+    pub last_activity_at: Option<String>,
+    pub observed_cwd: Option<PathBuf>,
 }
 
 pub fn snapshot_context_catalogue(
@@ -211,26 +226,83 @@ fn legacy_session_candidates(
     let has_context = tables
         .iter()
         .any(|table| table == "conversation_context_intervals");
-    let sql = if has_context {
-        "SELECT conversation.id, conversation.tool, conversation.native_id,
-                conversation.created_at, context.repository_id, context.worktree_id,
-                context.workstream_id, workstream.title, context.authority,
-                context.confidence, COALESCE(event.confirmed, 0)
-         FROM conversations conversation
-         LEFT JOIN conversation_context_intervals context ON context.id = (
-             SELECT candidate.id FROM conversation_context_intervals candidate
-             WHERE candidate.conversation_id = conversation.id
-             ORDER BY CAST(candidate.started_at AS INTEGER) DESC, candidate.id DESC LIMIT 1
-         )
-         LEFT JOIN workstreams workstream ON workstream.id = context.workstream_id
-         LEFT JOIN association_events event ON event.id = context.source_event_id
-         ORDER BY CAST(conversation.created_at AS INTEGER), conversation.id"
+    let has_workstreams = tables.iter().any(|table| table == "workstreams");
+    let has_association_events = tables.iter().any(|table| table == "association_events");
+    let has_summaries = tables.iter().any(|table| table == "conversation_summaries");
+    let has_cwd_observations = tables
+        .iter()
+        .any(|table| table == "conversation_cwd_observations");
+    let has_last_activity = table_has_column(connection, "conversations", "last_activity_at")?;
+    let context_columns = if has_context {
+        format!(
+            "context.repository_id, context.worktree_id, context.workstream_id, {},
+             context.authority, context.confidence, {}",
+            if has_workstreams {
+                "workstream.title"
+            } else {
+                "NULL"
+            },
+            if has_association_events {
+                "COALESCE(event.confirmed, 0)"
+            } else {
+                "0"
+            }
+        )
     } else {
-        "SELECT id, tool, native_id, created_at,
-                NULL, NULL, NULL, NULL, NULL, NULL, 0
-         FROM conversations ORDER BY CAST(created_at AS INTEGER), id"
+        "NULL, NULL, NULL, NULL, NULL, NULL, 0".to_owned()
     };
-    let mut statement = connection.prepare(sql)?;
+    let mut context_joins = String::new();
+    if has_context {
+        context_joins.push_str(
+            "LEFT JOIN conversation_context_intervals context ON context.id = (
+                 SELECT candidate.id FROM conversation_context_intervals candidate
+                 WHERE candidate.conversation_id = conversation.id
+                 ORDER BY CAST(candidate.started_at AS INTEGER) DESC, candidate.id DESC LIMIT 1
+             ) ",
+        );
+        if has_workstreams {
+            context_joins.push_str(
+                "LEFT JOIN workstreams workstream ON workstream.id = context.workstream_id ",
+            );
+        }
+        if has_association_events {
+            context_joins.push_str(
+                "LEFT JOIN association_events event ON event.id = context.source_event_id ",
+            );
+        }
+    }
+    let summary_columns = if has_summaries {
+        "summary.native_title, summary.first_prompt_preview, summary.last_prompt_preview"
+    } else {
+        "NULL, NULL, NULL"
+    };
+    let summary_join = if has_summaries {
+        "LEFT JOIN conversation_summaries summary ON summary.conversation_id = conversation.id"
+    } else {
+        ""
+    };
+    let last_activity = if has_last_activity {
+        "conversation.last_activity_at"
+    } else {
+        "NULL"
+    };
+    let observed_cwd = if has_cwd_observations {
+        "(SELECT cwd.path FROM conversation_cwd_observations cwd
+          WHERE cwd.conversation_id = conversation.id
+          ORDER BY cwd.observed_at IS NULL, cwd.observed_at DESC, cwd.path LIMIT 1)"
+    } else {
+        "NULL"
+    };
+    let sql = format!(
+        "SELECT conversation.id, conversation.tool, conversation.native_id,
+                conversation.created_at, {context_columns}, {summary_columns},
+                {last_activity}, {observed_cwd}
+         FROM conversations conversation
+         {context_joins}
+         {summary_join}
+         ORDER BY CAST(conversation.created_at AS INTEGER), conversation.id"
+    );
+    let mut statement = connection.prepare(&sql)?;
     let rows = statement
         .query_map([], |row| {
             let tool = parse_tool(&row.get::<_, String>(1)?).map_err(|error| {
@@ -259,6 +331,11 @@ fn legacy_session_candidates(
                 confidence: row.get(9)?,
                 confirmed_legacy_association: row.get::<_, i64>(10)? != 0,
                 adopt_work_item_id: None,
+                native_title: row.get(11)?,
+                first_prompt_preview: row.get(12)?,
+                last_prompt_preview: row.get(13)?,
+                last_activity_at: row.get(14)?,
+                observed_cwd: row.get::<_, Option<String>>(15)?.map(PathBuf::from),
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -286,6 +363,7 @@ impl WorkboardApplication {
         }
         let preview_hash = hash_bytes(&serde_json::to_vec(preview)?);
         if let Some(outcome) = self.existing_legacy_import(&preview_hash)? {
+            self.enrich_legacy_candidates(workspace_id, repository_id, outcome.import_id, preview)?;
             return Ok(outcome);
         }
         let target_common_directory = self.store.read(|connection| {
@@ -488,12 +566,22 @@ impl WorkboardApplication {
                 } else {
                     "unassigned"
                 };
+                let observed_cwd = candidate
+                    .observed_cwd
+                    .as_deref()
+                    .map(path_text)
+                    .transpose()?;
                 transaction.execute(
                     "INSERT INTO imported_session_candidates (
                          workspace_id, session_id, repository_id, checkout_id,
                          legacy_workstream_id, legacy_workstream_title, authority,
-                         confidence, status, imported_at
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                         confidence, status, imported_at, native_title,
+                         first_prompt_preview, last_prompt_preview, last_activity_at,
+                         observed_cwd
+                     ) VALUES (
+                         ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
+                         ?11, ?12, ?13, ?14, ?15
+                     )
                      ON CONFLICT(workspace_id, session_id) DO NOTHING",
                     params![
                         workspace_id.to_string(),
@@ -506,6 +594,11 @@ impl WorkboardApplication {
                         candidate.confidence,
                         status,
                         imported_at,
+                        candidate.native_title,
+                        candidate.first_prompt_preview,
+                        candidate.last_prompt_preview,
+                        candidate.last_activity_at,
+                        observed_cwd,
                     ],
                 )?;
                 if let Some(work_item_id) = candidate.adopt_work_item_id {
@@ -563,6 +656,7 @@ impl WorkboardApplication {
             Ok(())
         })?;
         source.execute_batch("COMMIT")?;
+        self.enrich_legacy_candidates(workspace_id, repository_id, import_id, preview)?;
         Ok(LegacyImportOutcome {
             import_id,
             preview_hash,
@@ -585,11 +679,14 @@ impl WorkboardApplication {
                 "SELECT candidate.session_id, candidate.repository_id, candidate.checkout_id,
                         session.provider, session.native_id, candidate.legacy_workstream_id,
                         candidate.legacy_workstream_title, candidate.authority,
-                        candidate.confidence, candidate.status
+                        candidate.confidence, candidate.status, candidate.native_title,
+                        candidate.first_prompt_preview, candidate.last_prompt_preview,
+                        candidate.last_activity_at, candidate.observed_cwd
                  FROM imported_session_candidates candidate
                  JOIN native_sessions session ON session.id = candidate.session_id
                  WHERE candidate.workspace_id = ?1
-                 ORDER BY candidate.status, session.provider, session.native_id",
+                 ORDER BY candidate.status, candidate.last_activity_at IS NULL,
+                          candidate.last_activity_at DESC, session.provider, session.native_id",
             )?;
             let rows = statement
                 .query_map([workspace_id.to_string()], |row| {
@@ -604,6 +701,11 @@ impl WorkboardApplication {
                         row.get::<_, Option<String>>(7)?,
                         row.get::<_, Option<String>>(8)?,
                         row.get::<_, String>(9)?,
+                        row.get::<_, Option<String>>(10)?,
+                        row.get::<_, Option<String>>(11)?,
+                        row.get::<_, Option<String>>(12)?,
+                        row.get::<_, Option<String>>(13)?,
+                        row.get::<_, Option<String>>(14)?,
                     ))
                 })?
                 .collect::<Result<Vec<_>, _>>()?;
@@ -620,6 +722,11 @@ impl WorkboardApplication {
                         authority,
                         confidence,
                         status,
+                        native_title,
+                        first_prompt_preview,
+                        last_prompt_preview,
+                        last_activity_at,
+                        observed_cwd,
                     )| {
                         Ok(ImportedSessionCandidate {
                             workspace_id,
@@ -633,6 +740,11 @@ impl WorkboardApplication {
                             authority,
                             confidence,
                             status,
+                            native_title,
+                            first_prompt_preview,
+                            last_prompt_preview,
+                            last_activity_at,
+                            observed_cwd: observed_cwd.map(PathBuf::from),
                         })
                     },
                 )
@@ -705,6 +817,136 @@ impl WorkboardApplication {
             return Err(AppError::ConversationNotFound);
         }
         Ok(())
+    }
+
+    fn enrich_legacy_candidates(
+        &mut self,
+        workspace_id: WorkspaceId,
+        repository_id: RepositoryId,
+        import_id: ImportBatchId,
+        preview: &LegacyImportPreview,
+    ) -> Result<(), AppError> {
+        let selected = preview
+            .session_candidates
+            .iter()
+            .filter(|candidate| candidate.selected)
+            .map(|candidate| candidate.source_conversation_id.as_str())
+            .collect::<HashSet<_>>();
+        let source = open_read_only(&preview.source)?;
+        let candidates = legacy_session_candidates(&source, &preview.tables)?
+            .into_iter()
+            .filter(|candidate| selected.contains(candidate.source_conversation_id.as_str()))
+            .collect::<Vec<_>>();
+        let destinations = self.store.read(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT source_path, destination_id FROM import_source_destinations
+                 WHERE import_id = ?1 AND destination_kind = 'session_candidate'",
+            )?;
+            statement
+                .query_map([import_id.to_string()], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<Result<HashMap<_, _>, _>>()
+                .map_err(Into::into)
+        })?;
+        let checkout_paths = self.store.read(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT checkout.id, path.path FROM checkouts checkout
+                 JOIN checkout_paths path ON path.checkout_id = checkout.id
+                 WHERE checkout.repository_id = ?1",
+            )?;
+            let rows = statement
+                .query_map([repository_id.to_string()], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows.into_iter()
+                .map(|(checkout_id, path)| Ok((parse_id(&checkout_id)?, PathBuf::from(path))))
+                .collect::<Result<Vec<_>, AppError>>()
+        })?;
+        let summaries = legacy_summary_records(&source, &preview.tables, &selected)?;
+        let cwd_observations = legacy_cwd_records(&source, &preview.tables, &selected)?;
+        self.store.write(|transaction| {
+            for candidate in &candidates {
+                let Some(destination) = destinations.get(&candidate.source_conversation_id) else {
+                    continue;
+                };
+                let session_id = parse_id::<ConversationId>(destination)?;
+                let checkout_id = candidate
+                    .observed_cwd
+                    .as_deref()
+                    .and_then(|cwd| checkout_for_path(cwd, &checkout_paths));
+                let observed_cwd = candidate
+                    .observed_cwd
+                    .as_deref()
+                    .map(path_text)
+                    .transpose()?;
+                transaction.execute(
+                    "UPDATE imported_session_candidates SET
+                         checkout_id = COALESCE(checkout_id, ?3), native_title = ?4,
+                         first_prompt_preview = ?5, last_prompt_preview = ?6,
+                         last_activity_at = ?7, observed_cwd = ?8
+                     WHERE workspace_id = ?1 AND session_id = ?2",
+                    params![
+                        workspace_id.to_string(),
+                        session_id.to_string(),
+                        checkout_id.map(|id| id.to_string()),
+                        candidate.native_title,
+                        candidate.first_prompt_preview,
+                        candidate.last_prompt_preview,
+                        candidate.last_activity_at,
+                        observed_cwd,
+                    ],
+                )?;
+                transaction.execute(
+                    "UPDATE legacy_import_records SET payload_json = ?4
+                     WHERE import_id = ?1 AND source_table = 'conversations' AND source_key = ?2
+                       AND destination_id = ?3",
+                    params![
+                        import_id.to_string(),
+                        candidate.source_conversation_id,
+                        session_id.to_string(),
+                        serde_json::json!({
+                            "id": candidate.source_conversation_id,
+                            "tool": tool_name(candidate.tool),
+                            "nativeId": candidate.native_id,
+                            "createdAt": candidate.discovered_at,
+                            "lastActivityAt": candidate.last_activity_at,
+                        })
+                        .to_string(),
+                    ],
+                )?;
+            }
+            for (source_id, payload) in &summaries {
+                let Some(destination) = destinations.get(source_id) else {
+                    continue;
+                };
+                record_legacy_row_once(
+                    transaction,
+                    import_id,
+                    "conversation_summaries",
+                    source_id,
+                    "session_summary",
+                    destination,
+                    payload,
+                )?;
+            }
+            for (source_id, conversation_id, payload) in &cwd_observations {
+                let Some(destination) = destinations.get(conversation_id) else {
+                    continue;
+                };
+                record_legacy_row_once(
+                    transaction,
+                    import_id,
+                    "conversation_cwd_observations",
+                    source_id,
+                    "session_cwd_observation",
+                    destination,
+                    payload,
+                )?;
+            }
+            Ok(())
+        })
     }
 
     fn validate_candidate_adoptions<'a>(
@@ -1323,6 +1565,126 @@ fn import_context_evidence(
     Ok(())
 }
 
+fn legacy_summary_records(
+    source: &Connection,
+    tables: &[String],
+    selected: &HashSet<&str>,
+) -> Result<Vec<(String, serde_json::Value)>, AppError> {
+    if !tables.iter().any(|table| table == "conversation_summaries") {
+        return Ok(Vec::new());
+    }
+    let mut statement = source.prepare(
+        "SELECT conversation_id, native_title, first_prompt_preview, last_prompt_preview,
+                tool_version, compacted, source_version, updated_at
+         FROM conversation_summaries ORDER BY conversation_id",
+    )?;
+    let rows = statement.query_map([], |row| {
+        let conversation_id = row.get::<_, String>(0)?;
+        Ok((
+            conversation_id.clone(),
+            serde_json::json!({
+                "conversationId": conversation_id,
+                "nativeTitle": row.get::<_, Option<String>>(1)?,
+                "firstPromptPreview": row.get::<_, Option<String>>(2)?,
+                "lastPromptPreview": row.get::<_, Option<String>>(3)?,
+                "toolVersion": row.get::<_, Option<String>>(4)?,
+                "compacted": row.get::<_, i64>(5)?,
+                "sourceVersion": row.get::<_, String>(6)?,
+                "updatedAt": row.get::<_, String>(7)?,
+            }),
+        ))
+    })?;
+    rows.filter_map(|row| match row {
+        Ok((source_id, payload)) if selected.contains(source_id.as_str()) => {
+            Some(Ok((source_id, payload)))
+        }
+        Ok(_) => None,
+        Err(error) => Some(Err(error.into())),
+    })
+    .collect()
+}
+
+fn legacy_cwd_records(
+    source: &Connection,
+    tables: &[String],
+    selected: &HashSet<&str>,
+) -> Result<Vec<(String, String, serde_json::Value)>, AppError> {
+    if !tables
+        .iter()
+        .any(|table| table == "conversation_cwd_observations")
+    {
+        return Ok(Vec::new());
+    }
+    let mut statement = source.prepare(
+        "SELECT conversation_id, path, observed_at, source_path
+         FROM conversation_cwd_observations
+         ORDER BY conversation_id, path, observed_at, source_path",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, String>(3)?,
+        ))
+    })?;
+    rows.filter_map(|row| match row {
+        Ok((conversation_id, path, observed_at, source_path))
+            if selected.contains(conversation_id.as_str()) =>
+        {
+            let payload = serde_json::json!({
+                "conversationId": conversation_id,
+                "path": path,
+                "observedAt": observed_at,
+                "sourcePath": source_path,
+            });
+            let source_id = format!(
+                "{}:{}",
+                conversation_id,
+                hash_bytes(payload.to_string().as_bytes())
+            );
+            Some(Ok((source_id, conversation_id, payload)))
+        }
+        Ok(_) => None,
+        Err(error) => Some(Err(error.into())),
+    })
+    .collect()
+}
+
+fn checkout_for_path(cwd: &Path, checkout_paths: &[(CheckoutId, PathBuf)]) -> Option<CheckoutId> {
+    checkout_paths
+        .iter()
+        .filter(|(_, root)| paths_equal(cwd, root) || path_is_within(cwd, root))
+        .max_by_key(|(_, root)| root.as_os_str().len())
+        .map(|(checkout_id, _)| *checkout_id)
+}
+
+fn record_legacy_row_once(
+    transaction: &Transaction<'_>,
+    import_id: ImportBatchId,
+    source_table: &str,
+    source_key: &str,
+    destination_kind: &str,
+    destination_id: &str,
+    payload: &serde_json::Value,
+) -> Result<(), AppError> {
+    transaction.execute(
+        "INSERT OR IGNORE INTO legacy_import_records (
+             import_id, source_table, source_key, destination_kind,
+             destination_id, payload_json
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            import_id.to_string(),
+            source_table,
+            source_key,
+            destination_kind,
+            destination_id,
+            payload.to_string(),
+        ],
+    )?;
+    Ok(())
+}
+
 fn record_legacy_row(
     transaction: &Transaction<'_>,
     import_id: ImportBatchId,
@@ -1449,9 +1811,40 @@ fn paths_equal(left: &Path, right: &Path) -> bool {
         .eq_ignore_ascii_case(&right.as_os_str().to_string_lossy())
 }
 
+#[cfg(windows)]
+fn path_is_within(path: &Path, root: &Path) -> bool {
+    let path = windows_path_key(path);
+    let root = windows_path_key(root);
+    path.strip_prefix(&root)
+        .is_some_and(|remainder| remainder.starts_with('\\'))
+}
+
+#[cfg(windows)]
+fn windows_path_key(path: &Path) -> String {
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let mut text = canonical
+        .as_os_str()
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_lowercase();
+    if let Some(remainder) = text.strip_prefix(r"\\?\unc\") {
+        text = format!(r"\\{remainder}");
+    } else if let Some(remainder) = text.strip_prefix(r"\\?\") {
+        text = remainder.to_owned();
+    }
+    text.trim_end_matches('\\').to_owned()
+}
+
 #[cfg(not(windows))]
 fn paths_equal(left: &Path, right: &Path) -> bool {
     left == right
+}
+
+#[cfg(not(windows))]
+fn path_is_within(path: &Path, root: &Path) -> bool {
+    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    path.starts_with(root) && path != root
 }
 
 fn count_first_present(
@@ -1606,7 +1999,7 @@ mod tests {
                 workspace_id: workspace.workspace.id,
                 slug: Slug::new("source").expect("repository slug"),
                 title: "Source".to_owned(),
-                path: source_repository,
+                path: source_repository.clone(),
             })
             .expect("register repository");
         let first = application
@@ -1626,10 +2019,41 @@ mod tests {
         assert!(second.already_applied);
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].status, "unassigned");
+        assert_eq!(candidates[0].native_title.as_deref(), Some("Native Launch"));
+        assert_eq!(
+            candidates[0].first_prompt_preview.as_deref(),
+            Some("Implement the launch flow")
+        );
+        assert_eq!(
+            candidates[0].last_prompt_preview.as_deref(),
+            Some("Verify the launch flow")
+        );
+        assert_eq!(candidates[0].last_activity_at.as_deref(), Some("250"));
+        assert_eq!(
+            candidates[0].observed_cwd.as_deref(),
+            Some(source_repository.as_path())
+        );
+        assert!(candidates[0].checkout_id.is_some());
         assert_eq!(
             candidates[0].legacy_workstream_title.as_deref(),
             Some("Launch")
         );
+        let reconstruction_rows = application
+            .store
+            .read(|connection| {
+                connection
+                    .query_row(
+                        "SELECT COUNT(*) FROM legacy_import_records
+                         WHERE import_id = ?1 AND source_table IN (
+                             'conversation_summaries', 'conversation_cwd_observations'
+                         )",
+                        [first.import_id.to_string()],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .map_err(Into::into)
+            })
+            .expect("count reconstruction rows");
+        assert_eq!(reconstruction_rows, 2);
 
         let epic = application
             .create_epic(CreateEpic {
@@ -1703,7 +2127,18 @@ mod tests {
                  );
                  CREATE TABLE conversations (
                      id TEXT PRIMARY KEY, tool TEXT NOT NULL, native_id TEXT NOT NULL,
-                     created_at TEXT NOT NULL
+                     created_at TEXT NOT NULL, last_activity_at TEXT
+                 );
+                 CREATE TABLE conversation_summaries (
+                     conversation_id TEXT PRIMARY KEY, native_title TEXT,
+                     first_prompt_preview TEXT, last_prompt_preview TEXT, tool_version TEXT,
+                     compacted INTEGER NOT NULL, source_version TEXT NOT NULL,
+                     updated_at TEXT NOT NULL
+                 );
+                 CREATE TABLE conversation_cwd_observations (
+                     conversation_id TEXT NOT NULL, path TEXT NOT NULL, observed_at TEXT,
+                     source_path TEXT NOT NULL,
+                     PRIMARY KEY(conversation_id, path, observed_at, source_path)
                  );
                  CREATE TABLE transcript_sources (
                      id INTEGER PRIMARY KEY, conversation_id TEXT NOT NULL, tool TEXT NOT NULL,
@@ -1778,7 +2213,11 @@ mod tests {
         connection
             .execute_batch(
                 "INSERT INTO conversations VALUES (
-                     '22222222-2222-4222-8222-222222222222', 'codex', 'native-session', '100'
+                     '22222222-2222-4222-8222-222222222222', 'codex', 'native-session', '100', '250'
+                 );
+                 INSERT INTO conversation_summaries VALUES (
+                     '22222222-2222-4222-8222-222222222222', 'Native Launch',
+                     'Implement the launch flow', 'Verify the launch flow', '1.0', 0, '1', '250'
                  );
                  INSERT INTO transcript_sources VALUES (
                      1, '22222222-2222-4222-8222-222222222222', 'codex', '1',
@@ -1804,6 +2243,15 @@ mod tests {
                  );",
             )
             .expect("insert legacy evidence");
+        connection
+            .execute(
+                "INSERT INTO conversation_cwd_observations VALUES (
+                     '22222222-2222-4222-8222-222222222222', ?1, '240',
+                     'C:/transcripts/session.jsonl'
+                 )",
+                [repository_text.as_str()],
+            )
+            .expect("insert legacy CWD observation");
     }
 
     fn successful(command: &mut Command) {

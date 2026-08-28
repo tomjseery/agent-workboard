@@ -11,7 +11,7 @@ use workboard_core::{ConversationId, LaunchLeaseId};
 
 use crate::AppError;
 
-const CURRENT_SCHEMA_VERSION: i64 = 12;
+const CURRENT_SCHEMA_VERSION: i64 = 13;
 const FOUNDATION_SCHEMA_CHECKSUM: &str = "agent-workboard-foundation-v1";
 const LAUNCH_LEASE_SCHEMA_CHECKSUM: &str = "agent-workboard-launch-leases-v1";
 const WORKBOARD_DOMAIN_SCHEMA_CHECKSUM: &str = "agent-workboard-domain-v1";
@@ -24,6 +24,8 @@ const SESSION_REQUEST_SCHEMA_CHECKSUM: &str = "agent-workboard-session-request-v
 const MANAGED_RECOVERY_SCHEMA_CHECKSUM: &str = "agent-workboard-managed-recovery-v1";
 const LEGACY_IMPORT_SCHEMA_CHECKSUM: &str = "agent-workboard-legacy-import-v1";
 const LEGACY_IMPORT_RECORD_SCHEMA_CHECKSUM: &str = "agent-workboard-legacy-import-record-v1";
+const LEGACY_CANDIDATE_METADATA_SCHEMA_CHECKSUM: &str =
+    "agent-workboard-legacy-candidate-metadata-v1";
 
 pub struct SqliteStore {
     path: PathBuf,
@@ -886,6 +888,16 @@ fn migrate(connection: &Connection) -> Result<(), AppError> {
              payload_json TEXT NOT NULL CHECK (payload_json <> ''),
              PRIMARY KEY (import_id, source_table, source_key)
          );",
+    )?;
+    apply_migration(
+        connection,
+        13,
+        LEGACY_CANDIDATE_METADATA_SCHEMA_CHECKSUM,
+        "ALTER TABLE imported_session_candidates ADD COLUMN native_title TEXT;
+         ALTER TABLE imported_session_candidates ADD COLUMN first_prompt_preview TEXT;
+         ALTER TABLE imported_session_candidates ADD COLUMN last_prompt_preview TEXT;
+         ALTER TABLE imported_session_candidates ADD COLUMN last_activity_at TEXT;
+         ALTER TABLE imported_session_candidates ADD COLUMN observed_cwd TEXT;",
     )?;
     Ok(())
 }
