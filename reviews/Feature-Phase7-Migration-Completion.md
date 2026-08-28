@@ -39,10 +39,12 @@
   Resolved by copying and hashing through one open source file handle, integrity-checking the private copy,
   and retaining its single read-only SQLite connection through import and enrichment.
 
-- [ ] **P7-003 — HIGH — security** — `crates/workboard-application/src/concertable_import.rs:1023`
+- [x] **P7-003 — HIGH — security** — `crates/workboard-application/src/concertable_import.rs:1023`
   Markdown discovery follows symlinks/junctions and has no visited-directory guard; an escaped source can be
   exposed in the preview and a cycle can recurse indefinitely. Reject linked entries, verify canonical
   containment for every visited path, and terminate deterministically on repeated filesystem identities.
+  Resolved by canonical containment checks, link/reparse detection through resolved-path equality, and a
+  visited-directory set; edited source references now reject traversal and linked paths too.
 
 - [ ] **P7-004 — HIGH — correctness** — `crates/workboard-application/src/concertable_import.rs:301`
   Apply accepts any code repository in the workspace and can assign a Concertable preview to an unrelated
@@ -60,10 +62,12 @@
   Completion detection uses substring matching, so imperative or completion-noun phase headings become Done.
   Recognise only a checkmark, checked item, or bounded terminal status marker and test misleading headings.
 
-- [ ] **P7-007 — HIGH — correctness** — `crates/workboard-application/src/concertable_import.rs:128`
+- [x] **P7-007 — HIGH — correctness** — `crates/workboard-application/src/concertable_import.rs:128`
   Progress files are keyed only by filename stem, so same-named plans in different directories can consume
   each other's progress and unmatched progress silently disappears. Pair by parent-relative path plus stem,
   reject duplicates, and fail preview with the paths of every unmatched progress document.
+  Resolved by directory-qualified pairing keys and an explicit unmatched-progress error; fixtures cover
+  identical filenames in separate directories and orphan progress documents.
 
 - [ ] **P7-008 — MEDIUM — correctness** — `crates/workboard-application/src/concertable_import.rs:289`
   Existing-import lookups are not scoped to workspace/repository and occur after mutable-source validation,
