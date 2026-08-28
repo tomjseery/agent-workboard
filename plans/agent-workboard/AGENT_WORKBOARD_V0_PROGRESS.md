@@ -18,6 +18,8 @@ identity, contains planning-source traversal, preflights destination collisions,
 repository provenance, preserves legacy checkout history, and fails closed when an older batch lacks one
 unambiguous immutable repository identity. Later direct provenance survives upgrade unchanged, and both
 batch-side and repository-side mutations preserve the ownership invariant.
+Already-stamped schema-15 databases receive a separate versioned audit and stop with durable explicit-repair
+instructions whenever earlier direct provenance cannot be recovered safely.
 
 ## Next Steps
 
@@ -28,7 +30,7 @@ before the external Concertable parity acceptance gate.
 
 - Phases 1–6 shipped through `f5eae79`.
 - Phase 7 planning and native-session import shipped through `d2b5647`.
-- All thirteen findings from the full and incremental review passes have been resolved in the local
+- All fourteen findings from the full and incremental review passes have been resolved in the local
   candidate.
 
 ## Verification

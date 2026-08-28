@@ -5,8 +5,8 @@
 > irreversible or ambiguous finding: record its durable disposition, take the safe path, and keep going.
 
 **Review status:** `complete`
-**Reviewed up to commit:** `8b0873c15fbb9440889acd8a3a634c950da8690d`  `(2026-08-28)`
-**Security-reviewed up to commit:** `8b0873c15fbb9440889acd8a3a634c950da8690d`  `(2026-08-28)`
+**Reviewed up to commit:** `c60e1cdf667e6663ff4c7710e888bee543fe9d73`  `(2026-08-28)`
+**Security-reviewed up to commit:** `c60e1cdf667e6663ff4c7710e888bee543fe9d73`  `(2026-08-28)`
 **Judgment:** `changes-requested`
 
 ## Review pass — 2026-08-28 — full
@@ -163,3 +163,26 @@
   mutations while any import batch references the repository.
   Resolved by guarding referenced repository workspace and planning-store-role changes; focused assertions
   reject both parent mutations.
+
+## Review pass — 2026-08-28 — incremental
+
+**Candidate base:** `8b0873c15fbb9440889acd8a3a634c950da8690d`
+**Candidate head:** `c60e1cdf667e6663ff4c7710e888bee543fe9d73`
+**Candidate branch:** `Feature/Phase7-Migration-Completion`
+**Candidate scope:** `all`
+**Candidate path-set:** `sha256:335501e5eaca737f34a0cb43006d8cf5027a0d61ee71065c04c0aafd85397c3c` `(3 paths)`
+**Candidate bundle:** `C:\Users\TommySeery\AppData\Local\Temp\agent-workboard-review-ca76733cbb984505b5d2d48d81af32a5`
+**Candidate bundle identity:** `sha256:fc717db869d27afa229f4a870df4cc4287c57159be4b7c65961cf60d31e2c912`
+**Work-order path:** `reviews/Feature-Phase7-Migration-Completion.md`
+**Work-order mode:** `append`
+**Pass judgment:** `changes-requested`
+
+### Findings
+
+- [x] **P7-014 — HIGH — security/correctness** — `crates/workboard-application/src/storage.rs:947`
+  Migration 15 changed behavior without changing its version or checksum, so databases already stamped by
+  the earlier implementation skip the corrective callback and can retain an overwritten repository owner.
+  Restore the issued migration, audit already-stamped databases under a new version and checksum, and fail
+  closed with explicit repair instructions when original direct provenance is no longer recoverable.
+  Resolved by retaining the issued schema-15 data repair, adding versioned attestation and audit migrations,
+  and requiring an immutable explicit repair before any already-stamped direct owner can be corrected.
