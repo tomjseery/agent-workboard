@@ -16,7 +16,8 @@ Context Catalogue evidence import, explicit imported-session adoption, imported-
 the CLI and documentation needed to operate those paths. The review remediation pins legacy snapshot
 identity, contains planning-source traversal, preflights destination collisions, scopes replays to immutable
 repository provenance, preserves legacy checkout history, and fails closed when an older batch lacks one
-unambiguous immutable repository identity.
+unambiguous immutable repository identity. Later direct provenance survives upgrade unchanged, and both
+batch-side and repository-side mutations preserve the ownership invariant.
 
 ## Next Steps
 
@@ -27,7 +28,7 @@ before the external Concertable parity acceptance gate.
 
 - Phases 1–6 shipped through `f5eae79`.
 - Phase 7 planning and native-session import shipped through `d2b5647`.
-- All eleven findings from the full and incremental review passes have been resolved in the local
+- All thirteen findings from the full and incremental review passes have been resolved in the local
   candidate.
 
 ## Verification
