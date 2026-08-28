@@ -58,9 +58,11 @@
   Resolved by closing the imported interval at import time when another path is current and recording the
   generated `CheckoutPathId`; the focused fixture proves both paths and provenance survive.
 
-- [ ] **P7-006 — MEDIUM — correctness** — `crates/workboard-application/src/concertable_import.rs:978`
+- [x] **P7-006 — MEDIUM — correctness** — `crates/workboard-application/src/concertable_import.rs:978`
   Completion detection uses substring matching, so imperative or completion-noun phase headings become Done.
   Recognise only a checkmark, checked item, or bounded terminal status marker and test misleading headings.
+  Resolved by accepting only a checkmark or a terminal done/complete/completed/shipped/merged token; focused
+  assertions keep imperative and completion-noun headings Ready.
 
 - [x] **P7-007 — HIGH — correctness** — `crates/workboard-application/src/concertable_import.rs:128`
   Progress files are keyed only by filename stem, so same-named plans in different directories can consume
