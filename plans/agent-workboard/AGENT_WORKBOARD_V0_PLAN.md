@@ -677,7 +677,7 @@ the intended checkout exactly once or returns a per-entry typed conflict with no
 
 ### Phase 7 — import Concertable and retire progress-ledger orchestration
 
-Status: implementation complete; review pending.
+Status: implementation and review complete; external parity acceptance pending.
 
 - Import Concertable roadmaps as Epics, existing plans as candidate Features, plan phases as proposed Work
   items, and durable progress facts into the appropriate Work-item documents through an editable preview.
