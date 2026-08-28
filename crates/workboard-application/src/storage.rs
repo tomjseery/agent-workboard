@@ -11,7 +11,7 @@ use workboard_core::{ConversationId, LaunchLeaseId};
 
 use crate::AppError;
 
-const CURRENT_SCHEMA_VERSION: i64 = 14;
+const CURRENT_SCHEMA_VERSION: i64 = 15;
 const FOUNDATION_SCHEMA_CHECKSUM: &str = "agent-workboard-foundation-v1";
 const LAUNCH_LEASE_SCHEMA_CHECKSUM: &str = "agent-workboard-launch-leases-v1";
 const WORKBOARD_DOMAIN_SCHEMA_CHECKSUM: &str = "agent-workboard-domain-v1";
@@ -27,6 +27,8 @@ const LEGACY_IMPORT_RECORD_SCHEMA_CHECKSUM: &str = "agent-workboard-legacy-impor
 const LEGACY_CANDIDATE_METADATA_SCHEMA_CHECKSUM: &str =
     "agent-workboard-legacy-candidate-metadata-v1";
 const IMPORT_BATCH_REPOSITORY_SCHEMA_CHECKSUM: &str = "agent-workboard-import-batch-repository-v1";
+const IMPORT_BATCH_REPOSITORY_REPAIR_SCHEMA_CHECKSUM: &str =
+    "agent-workboard-import-batch-repository-repair-v1";
 
 pub struct SqliteStore {
     path: PathBuf,
@@ -940,6 +942,53 @@ fn migrate(connection: &Connection) -> Result<(), AppError> {
          CREATE INDEX import_batches_target
              ON import_batches (workspace_id, repository_id, kind, preview_hash);",
     )?;
+    apply_validated_migration(
+        connection,
+        15,
+        IMPORT_BATCH_REPOSITORY_REPAIR_SCHEMA_CHECKSUM,
+        "UPDATE import_batches
+            SET repository_id = (
+                SELECT MIN(record.destination_id)
+                  FROM legacy_import_records record
+                  JOIN repositories repository ON repository.id = record.destination_id
+                 WHERE record.import_id = import_batches.id
+                   AND record.destination_kind = 'repository'
+                   AND repository.workspace_id = import_batches.workspace_id
+                   AND repository.is_planning_store = 0
+                HAVING COUNT(DISTINCT record.destination_id) = 1
+            )
+          WHERE kind = 'context_catalogue';
+         UPDATE import_batches
+            SET repository_id = (
+                SELECT MIN(path.repository_id)
+                  FROM repository_paths path
+                  JOIN repositories repository ON repository.id = path.repository_id
+                 WHERE path.path = import_batches.source_path
+                   AND repository.workspace_id = import_batches.workspace_id
+                   AND repository.is_planning_store = 0
+                HAVING COUNT(DISTINCT path.repository_id) = 1
+            )
+          WHERE kind = 'concertable_plans';
+         CREATE TRIGGER import_batches_repository_required
+         BEFORE INSERT ON import_batches
+         WHEN NEW.repository_id IS NULL OR NOT EXISTS (
+             SELECT 1 FROM repositories repository
+              WHERE repository.id = NEW.repository_id
+                AND repository.workspace_id = NEW.workspace_id
+                AND repository.is_planning_store = 0
+         )
+         BEGIN
+             SELECT RAISE(ABORT, 'import batch repository is invalid');
+         END;
+         CREATE TRIGGER import_batches_repository_immutable
+         BEFORE UPDATE OF repository_id, workspace_id ON import_batches
+         WHEN NEW.repository_id IS NOT OLD.repository_id
+              OR NEW.workspace_id IS NOT OLD.workspace_id
+         BEGIN
+             SELECT RAISE(ABORT, 'import batch repository is immutable');
+         END;",
+        validate_import_batch_repository_migration,
+    )?;
     Ok(())
 }
 
@@ -948,6 +997,16 @@ fn apply_migration(
     version: i64,
     checksum: &str,
     sql: &str,
+) -> Result<(), AppError> {
+    apply_validated_migration(connection, version, checksum, sql, |_| Ok(()))
+}
+
+fn apply_validated_migration(
+    connection: &Connection,
+    version: i64,
+    checksum: &str,
+    sql: &str,
+    validate: impl FnOnce(&Transaction<'_>) -> Result<(), AppError>,
 ) -> Result<(), AppError> {
     let existing = connection
         .query_row(
@@ -967,6 +1026,7 @@ fn apply_migration(
             let transaction =
                 Transaction::new_unchecked(connection, TransactionBehavior::Immediate)?;
             transaction.execute_batch(sql)?;
+            validate(&transaction)?;
             transaction.execute(
                 "INSERT INTO schema_migrations (version, checksum, applied_at)
                  VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
@@ -977,6 +1037,38 @@ fn apply_migration(
         }
     }
     Ok(())
+}
+
+fn validate_import_batch_repository_migration(
+    transaction: &Transaction<'_>,
+) -> Result<(), AppError> {
+    let mut statement = transaction.prepare(
+        "SELECT batch.id, batch.kind, batch.source_path
+           FROM import_batches batch
+           LEFT JOIN repositories repository
+             ON repository.id = batch.repository_id
+            AND repository.workspace_id = batch.workspace_id
+            AND repository.is_planning_store = 0
+          WHERE repository.id IS NULL
+          ORDER BY batch.id",
+    )?;
+    let unresolved = statement
+        .query_map([], |row| {
+            Ok(format!(
+                "{} [{}: {}]",
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    if unresolved.is_empty() {
+        return Ok(());
+    }
+    Err(AppError::Domain(format!(
+        "schema migration 15 cannot resolve immutable import repository ownership for {}; record exactly one matching non-planning repository path or legacy repository destination in the batch workspace, then retry",
+        unresolved.join(", ")
+    )))
 }
 
 fn health(connection: &Connection) -> Result<StorageHealth, AppError> {
@@ -996,7 +1088,7 @@ fn health(connection: &Connection) -> Result<StorageHealth, AppError> {
 
 #[cfg(test)]
 mod tests {
-    use rusqlite::{Transaction, params};
+    use rusqlite::{Connection, Transaction, params};
     use tempfile::TempDir;
     use time::OffsetDateTime;
     use workboard_core::ConversationId;
@@ -1101,6 +1193,160 @@ mod tests {
                 .expect("health")
                 .is_healthy()
         );
+    }
+
+    #[test]
+    fn import_repository_migration_fails_closed_and_repairs_immutable_ownership() {
+        let directory = TempDir::new().expect("temporary directory");
+        let path = directory.path().join("workboard.sqlite");
+        let mut store = SqliteStore::open(&path).expect("open store");
+        store.write(seed_hierarchy).expect("seed hierarchy");
+        drop(store);
+
+        let connection = Connection::open(&path).expect("open raw database");
+        connection
+            .execute_batch(
+                "DROP TRIGGER import_batches_repository_required;
+                 DROP TRIGGER import_batches_repository_immutable;
+                 DROP INDEX import_batches_target;
+                 ALTER TABLE import_batches DROP COLUMN repository_id;
+                 DELETE FROM schema_migrations WHERE version >= 14;
+                 PRAGMA user_version = 13;
+                 INSERT INTO repositories (
+                     id, workspace_id, slug, title, git_common_directory, default_branch,
+                     is_planning_store, created_at
+                 ) VALUES (
+                     'aaa-repository', 'workspace', 'unrelated', 'Unrelated',
+                     'C:/unrelated/.git', 'main', 0, '2026-08-27T08:00:00Z'
+                 );
+                 INSERT INTO repository_paths (
+                     id, repository_id, path, observed_from, observed_until
+                 ) VALUES (
+                     'unrelated-path', 'aaa-repository', 'C:/unrelated',
+                     '2026-08-27T08:00:00Z', NULL
+                 );
+                 INSERT INTO work_item_repositories (work_item_id, repository_id)
+                 VALUES ('work-item', 'aaa-repository');
+                 INSERT INTO import_batches (
+                     id, workspace_id, kind, source_path, source_head, preview_hash,
+                     planning_commit, imported_at
+                 ) VALUES (
+                     'legacy-batch', 'workspace', 'concertable_plans', 'C:/code-linked',
+                     'source-head',
+                     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                     'planning-commit', '2026-08-27T08:00:00Z'
+                 );
+                 INSERT INTO import_source_destinations (
+                     import_id, source_path, source_hash, destination_kind,
+                     destination_id, document_id
+                 ) VALUES (
+                     'legacy-batch', 'plans/feature.md',
+                     'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+                     'work_item', 'work-item', NULL
+                 );",
+            )
+            .expect("seed schema 13 import");
+        drop(connection);
+
+        let error = match SqliteStore::open(&path) {
+            Ok(_) => panic!("unresolved migration must fail"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("legacy-batch"));
+        assert!(error.to_string().contains("C:/code-linked"));
+
+        let connection = Connection::open(&path).expect("inspect failed migration");
+        let version: i64 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .expect("schema version");
+        let unsafe_repository: String = connection
+            .query_row(
+                "SELECT repository_id FROM import_batches WHERE id = 'legacy-batch'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("schema 14 provisional repository");
+        assert_eq!(version, 14);
+        assert_eq!(unsafe_repository, "aaa-repository");
+        drop(connection);
+
+        let ambiguous_path = directory.path().join("ambiguous.sqlite");
+        std::fs::copy(&path, &ambiguous_path).expect("copy unresolved database");
+        let ambiguous = Connection::open(&ambiguous_path).expect("open ambiguous database");
+        ambiguous
+            .execute_batch(
+                "INSERT INTO repository_paths (
+                     id, repository_id, path, observed_from, observed_until
+                 ) VALUES
+                     (
+                         'ambiguous-code-path', 'code-repository', 'C:/code-linked',
+                         '2026-08-27T08:00:00Z', '2026-08-27T09:00:00Z'
+                     ),
+                     (
+                         'ambiguous-unrelated-path', 'aaa-repository', 'C:/code-linked',
+                         '2026-08-27T08:00:00Z', '2026-08-27T09:00:00Z'
+                     );",
+            )
+            .expect("seed ambiguous immutable evidence");
+        drop(ambiguous);
+        let ambiguous_error = match SqliteStore::open(&ambiguous_path) {
+            Ok(_) => panic!("ambiguous migration must fail"),
+            Err(error) => error,
+        };
+        assert!(ambiguous_error.to_string().contains("legacy-batch"));
+
+        let connection = Connection::open(&path).expect("open repairable database");
+        connection
+            .execute(
+                "INSERT INTO repository_paths (
+                     id, repository_id, path, observed_from, observed_until
+                 ) VALUES (
+                     'linked-code-path', 'code-repository', 'C:/code-linked',
+                     '2026-08-27T08:00:00Z', '2026-08-27T09:00:00Z'
+                 )",
+                [],
+            )
+            .expect("record immutable source path identity");
+        drop(connection);
+
+        let mut store = SqliteStore::open(&path).expect("retry repaired migration");
+        let repository: String = store
+            .read(|connection| {
+                Ok(connection.query_row(
+                    "SELECT repository_id FROM import_batches WHERE id = 'legacy-batch'",
+                    [],
+                    |row| row.get(0),
+                )?)
+            })
+            .expect("read repaired repository");
+        assert_eq!(repository, "code-repository");
+        assert!(store.health().expect("storage health").is_healthy());
+
+        let missing_repository = store.write::<()>(|transaction| {
+            transaction.execute(
+                "INSERT INTO import_batches (
+                     id, workspace_id, kind, source_path, source_head, preview_hash,
+                     planning_commit, imported_at
+                 ) VALUES (
+                     'missing-repository', 'workspace', 'concertable_plans', 'C:/code',
+                     'source-head',
+                     'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+                     'planning-commit', '2026-08-27T08:00:00Z'
+                 )",
+                [],
+            )?;
+            Ok(())
+        });
+        assert!(missing_repository.is_err());
+        let reassignment = store.write::<()>(|transaction| {
+            transaction.execute(
+                "UPDATE import_batches SET repository_id = 'aaa-repository'
+                 WHERE id = 'legacy-batch'",
+                [],
+            )?;
+            Ok(())
+        });
+        assert!(reassignment.is_err());
     }
 
     #[test]

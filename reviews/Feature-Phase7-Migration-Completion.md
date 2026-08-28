@@ -5,8 +5,8 @@
 > irreversible or ambiguous finding: record its durable disposition, take the safe path, and keep going.
 
 **Review status:** `complete`
-**Reviewed up to commit:** `362bd0280f4e6c209a4efe44da69952fbfdf09b7`  `(2026-08-28)`
-**Security-reviewed up to commit:** `362bd0280f4e6c209a4efe44da69952fbfdf09b7`  `(2026-08-28)`
+**Reviewed up to commit:** `3b5e40996a42ace1e0cab4ced4ef0bce4112d836`  `(2026-08-28)`
+**Security-reviewed up to commit:** `3b5e40996a42ace1e0cab4ced4ef0bce4112d836`  `(2026-08-28)`
 **Judgment:** `changes-requested`
 
 ## Review pass — 2026-08-28 — full
@@ -109,3 +109,27 @@
   provenance on the import batch.
   Resolved by migrating import batches to direct repository provenance and querying it for replays; focused
   fixtures cover imports without Work items and later associations with a second repository.
+
+## Review pass — 2026-08-28 — incremental
+
+**Candidate base:** `362bd0280f4e6c209a4efe44da69952fbfdf09b7`
+**Candidate head:** `3b5e40996a42ace1e0cab4ced4ef0bce4112d836`
+**Candidate branch:** `Feature/Phase7-Migration-Completion`
+**Candidate scope:** `all`
+**Candidate path-set:** `sha256:03b31a3aa58a3bd1f3f8281a15bfea2da0bf436ef7764f25f8a1a2adc564a55b` `(5 paths)`
+**Candidate bundle:** `C:\Users\TommySeery\AppData\Local\Temp\agent-workboard-review-90abb967b5a7481dbf5c86035d6f0f25`
+**Candidate bundle identity:** `sha256:6cf93be1a7b9779f779778c2a92294afe0c65082def141c473f8d7b700642d70`
+**Work-order path:** `reviews/Feature-Phase7-Migration-Completion.md`
+**Work-order mode:** `append`
+**Pass judgment:** `changes-requested`
+
+### Findings
+
+- [x] **P7-011 — HIGH — security/correctness** — `crates/workboard-application/src/storage.rs:919`
+  Migration 14 can leave a pre-v14 Concertable batch unowned or assign it to the wrong repository: an exact
+  source-path match misses sibling worktrees, while the fallback arbitrarily chooses from mutable Work-item
+  associations. Backfill only from one workspace-consistent immutable repository-path identity, abort with
+  explicit repair evidence when ownership is unresolved or ambiguous, and enforce repository provenance for
+  every completed import batch.
+  Resolved by a corrective migration that recomputes ownership only from unique immutable evidence, rejects
+  unresolved batches with their source paths, and makes valid batch ownership mandatory and immutable.

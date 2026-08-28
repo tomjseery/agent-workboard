@@ -15,7 +15,8 @@ Phases 1–6 are complete. The Phase 7 candidate implements editable Concertable
 Context Catalogue evidence import, explicit imported-session adoption, imported-checkout attachment, and
 the CLI and documentation needed to operate those paths. The review remediation pins legacy snapshot
 identity, contains planning-source traversal, preflights destination collisions, scopes replays to immutable
-repository provenance, and preserves legacy checkout history.
+repository provenance, preserves legacy checkout history, and fails closed when an older batch lacks one
+unambiguous immutable repository identity.
 
 ## Next Steps
 
@@ -26,7 +27,7 @@ before the external Concertable parity acceptance gate.
 
 - Phases 1–6 shipped through `f5eae79`.
 - Phase 7 planning and native-session import shipped through `d2b5647`.
-- All ten findings from the full and first incremental review passes have been resolved in the local
+- All eleven findings from the full and incremental review passes have been resolved in the local
   candidate.
 
 ## Verification
@@ -37,9 +38,9 @@ before the external Concertable parity acceptance gate.
 
 ## Reviews
 
-The full review of `f5eae79..89c6cc1` and first incremental review through `362bd02` are complete with
-changes requested. The canonical work order is `reviews/Feature-Phase7-Migration-Completion.md`; every
-recorded finding is resolved and the remediation requires a clean incremental pass.
+The full review of `f5eae79..89c6cc1` and incremental reviews through `3b5e409` are complete with changes
+requested. The canonical work order is `reviews/Feature-Phase7-Migration-Completion.md`; every recorded
+finding is resolved and the latest remediation requires a clean incremental pass.
 
 ## Decisions, discoveries, blockers, and deviations
 
