@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 use rusqlite::{OptionalExtension, params};
@@ -121,11 +121,12 @@ pub fn preview_concertable_plans(repository: &Path) -> Result<ConcertableImportP
         )));
     }
     let mut files = Vec::new();
-    collect_markdown(&plans_root, &root, &mut files)?;
+    let mut visited_directories = HashSet::new();
+    collect_markdown(&plans_root, &root, &mut visited_directories, &mut files)?;
     files.sort();
     let mut roadmaps = Vec::new();
     let mut plans = Vec::new();
-    let mut progress_by_stem = HashMap::new();
+    let mut progress_by_plan = HashMap::new();
     for relative_path in files {
         let name = relative_path
             .file_name()
@@ -136,10 +137,16 @@ pub fn preview_concertable_plans(repository: &Path) -> Result<ConcertableImportP
         } else if name.ends_with("_PLAN.md") {
             plans.push(read_source(&root, relative_path)?);
         } else if name.ends_with("_PROGRESS.md") {
-            progress_by_stem.insert(
-                document_stem(name, "_PROGRESS.md"),
-                read_source(&root, relative_path)?,
-            );
+            let key = document_pair_key(&relative_path, "_PROGRESS.md");
+            if progress_by_plan
+                .insert(key.clone(), read_source(&root, relative_path)?)
+                .is_some()
+            {
+                return Err(AppError::Domain(format!(
+                    "duplicate Concertable progress document key: {}",
+                    key.display()
+                )));
+            }
         }
     }
     if plans.is_empty() {
@@ -218,12 +225,9 @@ pub fn preview_concertable_plans(repository: &Path) -> Result<ConcertableImportP
             &mut feature_slugs,
         )?;
         let mut work_items = phase_work_items(&plan)?;
-        let plan_name = plan
-            .relative_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or_default();
-        if let Some(progress) = progress_by_stem.remove(&document_stem(plan_name, "_PLAN.md")) {
+        if let Some(progress) =
+            progress_by_plan.remove(&document_pair_key(&plan.relative_path, "_PLAN.md"))
+        {
             let mut used = work_items
                 .iter()
                 .map(|item| item.slug.to_string())
@@ -265,6 +269,21 @@ pub fn preview_concertable_plans(repository: &Path) -> Result<ConcertableImportP
             source: source_reference(&plan, None, None),
             work_items,
         });
+    }
+    if !progress_by_plan.is_empty() {
+        let mut unmatched = progress_by_plan
+            .into_values()
+            .map(|progress| progress.relative_path)
+            .collect::<Vec<_>>();
+        unmatched.sort();
+        return Err(AppError::Domain(format!(
+            "Concertable progress documents have no matching plan: {}",
+            unmatched
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )));
     }
     epics.sort_by(|left, right| left.slug.as_str().cmp(right.slug.as_str()));
     for epic in &mut epics {
@@ -750,16 +769,15 @@ fn validate_source(preview: &ConcertableImportPreview) -> Result<(), AppError> {
     }
     let mut checked = HashMap::new();
     for source in preview_sources(preview) {
+        let source_path = concertable_source_path(&root, &source.relative_path)?;
         let existing = checked
             .entry(source.relative_path.clone())
-            .or_insert_with(|| {
-                fs::read(root.join(&source.relative_path)).map(|bytes| hash_bytes(&bytes))
-            });
+            .or_insert_with(|| fs::read(&source_path).map(|bytes| hash_bytes(&bytes)));
         let actual = existing
             .as_ref()
             .map_err(|source_error| AppError::PlanningStoreIo {
                 operation: "revalidating a Concertable source document",
-                path: root.join(&source.relative_path),
+                path: source_path,
                 source: std::io::Error::new(source_error.kind(), source_error.to_string()),
             })?;
         if actual != &source.content_hash {
@@ -767,6 +785,40 @@ fn validate_source(preview: &ConcertableImportPreview) -> Result<(), AppError> {
         }
     }
     Ok(())
+}
+
+fn concertable_source_path(root: &Path, relative_path: &Path) -> Result<PathBuf, AppError> {
+    if relative_path.as_os_str().is_empty()
+        || relative_path.is_absolute()
+        || relative_path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(AppError::Domain(format!(
+            "unsafe Concertable source path: {}",
+            relative_path.display()
+        )));
+    }
+    let path = root.join(relative_path);
+    let metadata = fs::symlink_metadata(&path).map_err(|source| AppError::PlanningStoreIo {
+        operation: "inspecting a Concertable source document",
+        path: path.clone(),
+        source,
+    })?;
+    if metadata.file_type().is_symlink() {
+        return Err(AppError::Domain(format!(
+            "linked Concertable planning paths are unsupported: {}",
+            path.display()
+        )));
+    }
+    let canonical = safe_concertable_path(root, &path)?;
+    if !paths_equal(&path, &canonical) {
+        return Err(AppError::Domain(format!(
+            "linked Concertable planning paths are unsupported: {}",
+            path.display()
+        )));
+    }
+    Ok(canonical)
 }
 
 fn preview_sources(preview: &ConcertableImportPreview) -> Vec<&SourceReference> {
@@ -1008,23 +1060,54 @@ fn selected_counts(preview: &ConcertableImportPreview) -> (usize, usize, usize) 
 fn collect_markdown(
     root: &Path,
     repository: &Path,
+    visited_directories: &mut HashSet<PathBuf>,
     result: &mut Vec<PathBuf>,
 ) -> Result<(), AppError> {
-    for entry in fs::read_dir(root).map_err(|source| AppError::PlanningStoreIo {
+    let canonical_root = safe_concertable_path(repository, root)?;
+    if !visited_directories.insert(canonical_root.clone()) {
+        return Err(AppError::Domain(format!(
+            "Concertable planning directory was visited more than once: {}",
+            canonical_root.display()
+        )));
+    }
+    for entry in fs::read_dir(&canonical_root).map_err(|source| AppError::PlanningStoreIo {
         operation: "reading Concertable planning files",
-        path: root.to_path_buf(),
+        path: canonical_root.clone(),
         source,
     })? {
         let entry = entry.map_err(|source| AppError::PlanningStoreIo {
             operation: "reading a Concertable planning entry",
-            path: root.to_path_buf(),
+            path: canonical_root.clone(),
             source,
         })?;
         let path = entry.path();
-        if path.is_dir() {
-            collect_markdown(&path, repository, result)?;
-        } else if path.extension().and_then(|extension| extension.to_str()) == Some("md") {
-            let name = path
+        let metadata = fs::symlink_metadata(&path).map_err(|source| AppError::PlanningStoreIo {
+            operation: "inspecting a Concertable planning entry",
+            path: path.clone(),
+            source,
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err(AppError::Domain(format!(
+                "linked Concertable planning paths are unsupported: {}",
+                path.display()
+            )));
+        }
+        let canonical_path = safe_concertable_path(repository, &path)?;
+        if !paths_equal(&path, &canonical_path) {
+            return Err(AppError::Domain(format!(
+                "linked Concertable planning paths are unsupported: {}",
+                path.display()
+            )));
+        }
+        if metadata.is_dir() {
+            collect_markdown(&canonical_path, repository, visited_directories, result)?;
+        } else if metadata.is_file()
+            && canonical_path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                == Some("md")
+        {
+            let name = canonical_path
                 .file_name()
                 .and_then(|name| name.to_str())
                 .unwrap_or_default();
@@ -1033,7 +1116,8 @@ fn collect_markdown(
                 || name.ends_with("_PROGRESS.md")
             {
                 result.push(
-                    path.strip_prefix(repository)
+                    canonical_path
+                        .strip_prefix(repository)
                         .map_err(|_| {
                             AppError::Domain(
                                 "Concertable planning path escaped its repository".to_owned(),
@@ -1045,6 +1129,23 @@ fn collect_markdown(
         }
     }
     Ok(())
+}
+
+fn safe_concertable_path(repository: &Path, path: &Path) -> Result<PathBuf, AppError> {
+    let canonical = path
+        .canonicalize()
+        .map_err(|source| AppError::PlanningStoreIo {
+            operation: "resolving a Concertable planning path",
+            path: path.to_path_buf(),
+            source,
+        })?;
+    if canonical.strip_prefix(repository).is_err() {
+        return Err(AppError::Domain(format!(
+            "Concertable planning path escaped its repository: {}",
+            path.display()
+        )));
+    }
+    Ok(canonical)
 }
 
 fn read_source(root: &Path, relative_path: PathBuf) -> Result<SourceFile, AppError> {
@@ -1157,6 +1258,16 @@ fn document_stem(name: &str, suffix: &str) -> String {
     name.strip_suffix(suffix).unwrap_or(name).to_owned()
 }
 
+fn document_pair_key(path: &Path, suffix: &str) -> PathBuf {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    path.parent()
+        .unwrap_or(Path::new(""))
+        .join(document_stem(name, suffix))
+}
+
 fn status_name(status: WorkItemStatus) -> &'static str {
     match status {
         WorkItemStatus::Backlog => "backlog",
@@ -1235,7 +1346,9 @@ mod tests {
     use tempfile::TempDir;
     use workboard_core::Slug;
 
-    use super::{CONCERTABLE_IMPORT_FORMAT_VERSION, preview_concertable_plans};
+    use super::{
+        CONCERTABLE_IMPORT_FORMAT_VERSION, concertable_source_path, preview_concertable_plans,
+    };
     use crate::workspace::{InitialiseWorkspace, RegisterRepository, WorkboardApplication};
 
     #[test]
@@ -1254,6 +1367,97 @@ mod tests {
         );
         assert!(feature.work_items[2].body.contains("Current state"));
         assert!(feature.body.contains("Phase 2"));
+    }
+
+    #[test]
+    fn preview_pairs_same_named_progress_with_its_own_directory() {
+        let directory = TempDir::new().expect("temporary directory");
+        let source = directory.path().join("Concertable");
+        for (folder, title) in [("first", "First"), ("second", "Second")] {
+            let plans = source.join("plans").join(folder);
+            fs::create_dir_all(&plans).expect("create plans");
+            fs::write(
+                plans.join("SHARED_PLAN.md"),
+                format!("# {title}\n\n## Phases\n\n### Phase 1 — Build\n\nBuild.\n"),
+            )
+            .expect("write plan");
+            fs::write(
+                plans.join("SHARED_PROGRESS.md"),
+                format!("# {title} progress\n\n{title} progress body.\n"),
+            )
+            .expect("write progress");
+        }
+        initialise_repository(&source);
+
+        let preview = preview_concertable_plans(&source).expect("preview plans");
+
+        for title in ["First", "Second"] {
+            let feature = preview
+                .epics
+                .iter()
+                .flat_map(|epic| &epic.features)
+                .find(|feature| feature.title == title)
+                .expect("find Feature");
+            let progress = feature
+                .work_items
+                .iter()
+                .find(|item| item.title.ends_with("progress and handoff"))
+                .expect("find progress Work item");
+            assert!(progress.body.contains(&format!("{title} progress body.")));
+        }
+    }
+
+    #[test]
+    fn preview_rejects_unmatched_progress() {
+        let directory = TempDir::new().expect("temporary directory");
+        let source = directory.path().join("Concertable");
+        let plans = source.join("plans/launch");
+        fs::create_dir_all(&plans).expect("create plans");
+        fs::write(
+            plans.join("AVAILABILITY_PLAN.md"),
+            "# Availability\n\n## Phases\n\n### Phase 1 — API\n\nBuild API.\n",
+        )
+        .expect("write plan");
+        fs::write(
+            plans.join("ORPHAN_PROGRESS.md"),
+            "# Orphan progress\n\nDurable state.\n",
+        )
+        .expect("write progress");
+        initialise_repository(&source);
+
+        let error = preview_concertable_plans(&source).expect_err("reject unmatched progress");
+
+        assert!(error.to_string().contains("ORPHAN_PROGRESS.md"));
+    }
+
+    #[test]
+    fn source_reference_rejects_parent_traversal() {
+        let fixture = Fixture::new();
+
+        let error = concertable_source_path(&fixture.source, Path::new("../outside.md"))
+            .expect_err("reject traversal");
+
+        assert!(error.to_string().contains("unsafe Concertable source path"));
+    }
+
+    #[test]
+    fn preview_rejects_linked_planning_directories() {
+        let fixture = Fixture::new();
+        let external = fixture.directory.path().join("external");
+        fs::create_dir_all(&external).expect("create external directory");
+        fs::write(
+            external.join("EXTERNAL_PLAN.md"),
+            "# External\n\n## Phases\n\n### Phase 1 — Escape\n\nEscape.\n",
+        )
+        .expect("write external plan");
+        let linked = fixture.source.join("plans/linked");
+        if !create_directory_link(&external, &linked) {
+            return;
+        }
+
+        let error = preview_concertable_plans(&fixture.source).expect_err("reject linked plans");
+
+        assert!(error.to_string().contains("planning path"));
     }
 
     #[test]
@@ -1349,6 +1553,43 @@ mod tests {
                     .args(["commit", "-m", "Seed plans"]),
             );
             Self { directory, source }
+        }
+    }
+
+    fn initialise_repository(source: &Path) {
+        successful(
+            Command::new("git")
+                .arg("init")
+                .args(["-b", "main"])
+                .arg(source),
+        );
+        successful(Command::new("git").arg("-C").arg(source).args(["add", "."]));
+        successful(
+            Command::new("git")
+                .arg("-C")
+                .arg(source)
+                .args(["-c", "user.name=Test", "-c", "user.email=test@example.com"])
+                .args(["commit", "-m", "Seed plans"]),
+        );
+    }
+
+    #[cfg(unix)]
+    fn create_directory_link(target: &Path, link: &Path) -> bool {
+        std::os::unix::fs::symlink(target, link).expect("create directory link");
+        true
+    }
+
+    #[cfg(windows)]
+    fn create_directory_link(target: &Path, link: &Path) -> bool {
+        match std::os::windows::fs::symlink_dir(target, link) {
+            Ok(()) => true,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::PermissionDenied
+                    || error.raw_os_error() == Some(1314) =>
+            {
+                false
+            }
+            Err(error) => panic!("create directory link: {error}"),
         }
     }
 
