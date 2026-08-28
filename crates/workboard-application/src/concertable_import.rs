@@ -519,6 +519,11 @@ impl WorkboardApplication {
                     )?;
                 }
             }
+            transaction.execute(
+                "INSERT INTO import_document_membership_finalizations (import_id, finalized_at)
+                 VALUES (?1, ?2)",
+                params![import_id.to_string(), imported_at],
+            )?;
             Ok(())
         })?;
         Ok(ConcertableImportOutcome {
@@ -542,7 +547,10 @@ impl WorkboardApplication {
         self.store.read(|connection| {
             let row = connection
                 .query_row(
-                    "SELECT batch.id, batch.planning_commit FROM import_batches batch
+                    "SELECT batch.id, batch.planning_commit, finalization.import_id
+                       FROM import_batches batch
+                     LEFT JOIN import_document_membership_finalizations finalization
+                       ON finalization.import_id = batch.id
                      WHERE batch.preview_hash = ?1 AND batch.kind = 'concertable_plans'
                        AND batch.workspace_id = ?2
                        AND batch.repository_id = ?3",
@@ -551,10 +559,26 @@ impl WorkboardApplication {
                         workspace_id.to_string(),
                         repository_id.to_string(),
                     ],
-                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, Option<String>>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                        ))
+                    },
                 )
                 .optional()?;
-            row.map(|(id, planning_commit)| {
+            row.map(|(id, planning_commit, finalization)| {
+                if finalization.is_none() {
+                    return Err(AppError::Domain(format!(
+                        "Concertable import batch {id} has no finalized document membership"
+                    )));
+                }
+                let planning_commit = planning_commit.ok_or_else(|| {
+                    AppError::Domain(format!(
+                        "Concertable import batch {id} has no planning commit"
+                    ))
+                })?;
                 let import_id = id
                     .parse()
                     .map_err(|error| AppError::Domain(format!("invalid import ID: {error}")))?;
@@ -742,6 +766,11 @@ fn validate_preview(preview: &ConcertableImportPreview) -> Result<(), AppError> 
                 ));
             }
             continue;
+        }
+        if epic.source.is_none() && !epic.features.iter().any(|feature| feature.selected) {
+            return Err(AppError::Domain(
+                "a generated Epic must contain a selected Feature".to_owned(),
+            ));
         }
         validate_import_text(&epic.title, &epic.body)?;
         ensure_unique(&mut ids, epic.id.to_string(), "destination ID")?;
@@ -1578,61 +1607,102 @@ mod tests {
         let first = application
             .apply_concertable_import(workspace.workspace.id, repository.id, &preview)
             .expect("apply import");
-        drop(application);
-        let connection = Connection::open(&database).expect("open schema 23 database");
-        connection
-            .execute_batch(
-                "DROP TRIGGER import_document_memberships_no_update;
-                 DROP TRIGGER import_document_memberships_no_delete;
-                 DROP TRIGGER import_document_memberships_valid;
-                 DROP TABLE import_document_memberships;
-                 DELETE FROM schema_migrations WHERE version = 23;
-                 PRAGMA user_version = 22;",
-            )
-            .expect("restore schema 22 import database");
-        drop(connection);
-        let mut application =
-            WorkboardApplication::open(&database).expect("upgrade import database");
         let unrelated_epic_id = EpicId::generate();
         let unrelated_document_id = DocumentId::generate();
         let unrelated_hash = "f".repeat(64);
-        application
+        drop(application);
+        let connection = Connection::open(&database).expect("open schema 24 database");
+        restore_schema_22_import_database(&connection);
+        connection
+            .execute(
+                "INSERT INTO epics (id, workspace_id, slug, title, created_at)
+                 VALUES (?1, ?2, 'unrelated', 'Unrelated', 'later')",
+                params![
+                    unrelated_epic_id.to_string(),
+                    workspace.workspace.id.to_string(),
+                ],
+            )
+            .expect("record unrelated epic");
+        connection
+            .execute(
+                "INSERT INTO documents (
+                     id, repository_id, epic_id, kind, relative_path, content_hash,
+                     observed_commit, observed_at
+                 ) VALUES (?1, ?2, ?3, 'epic', 'unrelated.md', ?4, ?5, 'later')",
+                params![
+                    unrelated_document_id.to_string(),
+                    workspace.workspace.planning_store_repository_id.to_string(),
+                    unrelated_epic_id.to_string(),
+                    unrelated_hash,
+                    first.planning_commit,
+                ],
+            )
+            .expect("record unrelated document");
+        connection
+            .execute(
+                "INSERT INTO document_revisions (
+                     document_id, revision, content_hash, observed_commit, observed_at
+                 ) VALUES (?1, 1, ?2, ?3, 'later')",
+                params![
+                    unrelated_document_id.to_string(),
+                    unrelated_hash,
+                    first.planning_commit,
+                ],
+            )
+            .expect("record unrelated same-commit revision");
+        drop(connection);
+        let mut application =
+            WorkboardApplication::open(&database).expect("upgrade import database");
+        let (membership_count, unrelated_membership): (i64, i64) = application
+            .store
+            .read(|connection| {
+                let membership_count = connection.query_row(
+                    "SELECT COUNT(*) FROM import_document_memberships WHERE import_id = ?1",
+                    [first.import_id.to_string()],
+                    |row| row.get(0),
+                )?;
+                let unrelated_membership = connection.query_row(
+                    "SELECT COUNT(*) FROM import_document_memberships WHERE document_id = ?1",
+                    [unrelated_document_id.to_string()],
+                    |row| row.get(0),
+                )?;
+                Ok((membership_count, unrelated_membership))
+            })
+            .expect("read upgraded import membership");
+        assert_eq!(membership_count, 6);
+        assert_eq!(unrelated_membership, 0);
+        let insert_error = application
             .store
             .write(|transaction| {
                 transaction.execute(
-                    "INSERT INTO epics (id, workspace_id, slug, title, created_at)
-                     VALUES (?1, ?2, 'unrelated', 'Unrelated', 'later')",
+                    "INSERT INTO import_document_memberships (
+                         import_id, document_id, destination_kind
+                     ) VALUES (?1, ?2, 'epic')",
                     params![
-                        unrelated_epic_id.to_string(),
-                        workspace.workspace.id.to_string(),
-                    ],
-                )?;
-                transaction.execute(
-                    "INSERT INTO documents (
-                         id, repository_id, epic_id, kind, relative_path, content_hash,
-                         observed_commit, observed_at
-                     ) VALUES (?1, ?2, ?3, 'epic', 'unrelated.md', ?4, ?5, 'later')",
-                    params![
+                        first.import_id.to_string(),
                         unrelated_document_id.to_string(),
-                        workspace.workspace.planning_store_repository_id.to_string(),
-                        unrelated_epic_id.to_string(),
-                        unrelated_hash,
-                        first.planning_commit,
-                    ],
-                )?;
-                transaction.execute(
-                    "INSERT INTO document_revisions (
-                         document_id, revision, content_hash, observed_commit, observed_at
-                     ) VALUES (?1, 1, ?2, ?3, 'later')",
-                    params![
-                        unrelated_document_id.to_string(),
-                        unrelated_hash,
-                        first.planning_commit,
                     ],
                 )?;
                 Ok(())
             })
-            .expect("record unrelated same-commit document");
+            .expect_err("reject membership after finalization");
+        assert!(insert_error.to_string().contains("membership is finalized"));
+        let imported_document_id = preview.epics[0].document_id;
+        let update_error = application
+            .store
+            .write(|transaction| {
+                transaction.execute(
+                    "UPDATE documents SET repository_id = ?2 WHERE id = ?1",
+                    params![imported_document_id.to_string(), repository.id.to_string(),],
+                )?;
+                Ok(())
+            })
+            .expect_err("reject imported document reassignment");
+        assert!(
+            update_error
+                .to_string()
+                .contains("membership fields are immutable")
+        );
         let second = application
             .apply_concertable_import(workspace.workspace.id, repository.id, &preview)
             .expect("repeat import");
@@ -1656,6 +1726,193 @@ mod tests {
         assert_eq!(
             git_count(&fixture.directory.path().join("planning-store")),
             2
+        );
+    }
+
+    #[test]
+    fn schema_23_upgrade_rejects_incomplete_and_ambiguous_membership() {
+        let fixture = Fixture::new();
+        let database = fixture.directory.path().join("workboard.sqlite");
+        let planning_store = fixture.directory.path().join("planning-store");
+        let mut application = WorkboardApplication::open(&database).expect("open Workboard");
+        let workspace = application
+            .initialise_workspace(InitialiseWorkspace {
+                slug: Slug::new("demo").expect("workspace slug"),
+                title: "Demo".to_owned(),
+                planning_store_path: planning_store,
+            })
+            .expect("initialise workspace");
+        let repository = application
+            .register_repository(RegisterRepository {
+                workspace_id: workspace.workspace.id,
+                slug: Slug::new("concertable").expect("repository slug"),
+                title: "Concertable".to_owned(),
+                path: fixture.source.clone(),
+            })
+            .expect("register repository");
+        let preview = preview_concertable_plans(&fixture.source).expect("preview plans");
+        let first = application
+            .apply_concertable_import(workspace.workspace.id, repository.id, &preview)
+            .expect("apply import");
+        let mapped_document_id = preview.epics[0].features[0].document_id;
+        let unrelated_epic_id = EpicId::generate();
+        let unrelated_document_id = DocumentId::generate();
+        drop(application);
+
+        let connection = Connection::open(&database).expect("open schema 24 database");
+        restore_schema_23_import_database(&connection);
+        let revision: (String, String, String) = connection
+            .query_row(
+                "SELECT content_hash, observed_commit, observed_at
+                   FROM document_revisions WHERE document_id = ?1",
+                [mapped_document_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("read mapped revision");
+        connection
+            .execute(
+                "DELETE FROM document_revisions WHERE document_id = ?1",
+                [mapped_document_id.to_string()],
+            )
+            .expect("remove mapped revision");
+        drop(connection);
+
+        let missing_error = match WorkboardApplication::open(&database) {
+            Ok(_) => panic!("missing mapped revision must stop schema 24"),
+            Err(error) => error,
+        };
+        assert!(missing_error.to_string().contains("schema migration 24"));
+        assert!(
+            missing_error
+                .to_string()
+                .contains(&first.import_id.to_string())
+        );
+
+        let connection = Connection::open(&database).expect("reopen schema 23 database");
+        let migration_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM schema_migrations WHERE version = 24",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count schema 24 stamps");
+        assert_eq!(migration_count, 0);
+        connection
+            .execute(
+                "INSERT INTO document_revisions (
+                     document_id, revision, content_hash, observed_commit, observed_at
+                 ) VALUES (?1, 1, ?2, ?3, ?4)",
+                params![
+                    mapped_document_id.to_string(),
+                    revision.0,
+                    revision.1,
+                    revision.2,
+                ],
+            )
+            .expect("restore mapped revision");
+        let imported_at: String = connection
+            .query_row(
+                "SELECT imported_at FROM import_batches WHERE id = ?1",
+                [first.import_id.to_string()],
+                |row| row.get(0),
+            )
+            .expect("read import timestamp");
+        let unrelated_hash = "e".repeat(64);
+        connection
+            .execute(
+                "INSERT INTO epics (id, workspace_id, slug, title, created_at)
+                 VALUES (?1, ?2, 'ambiguous', 'Ambiguous', ?3)",
+                params![
+                    unrelated_epic_id.to_string(),
+                    workspace.workspace.id.to_string(),
+                    imported_at,
+                ],
+            )
+            .expect("record ambiguous epic");
+        connection
+            .execute(
+                "INSERT INTO documents (
+                     id, repository_id, epic_id, kind, relative_path, content_hash,
+                     observed_commit, observed_at
+                 ) VALUES (?1, ?2, ?3, 'epic', 'ambiguous.md', ?4, ?5, ?6)",
+                params![
+                    unrelated_document_id.to_string(),
+                    workspace.workspace.planning_store_repository_id.to_string(),
+                    unrelated_epic_id.to_string(),
+                    unrelated_hash,
+                    first.planning_commit,
+                    imported_at,
+                ],
+            )
+            .expect("record ambiguous document");
+        connection
+            .execute(
+                "INSERT INTO document_revisions (
+                     document_id, revision, content_hash, observed_commit, observed_at
+                 ) VALUES (?1, 1, ?2, ?3, ?4)",
+                params![
+                    unrelated_document_id.to_string(),
+                    unrelated_hash,
+                    first.planning_commit,
+                    imported_at,
+                ],
+            )
+            .expect("record ambiguous revision");
+        drop(connection);
+
+        let ambiguous_error = match WorkboardApplication::open(&database) {
+            Ok(_) => panic!("ambiguous same-batch evidence must stop schema 24"),
+            Err(error) => error,
+        };
+        assert!(ambiguous_error.to_string().contains("schema migration 24"));
+
+        let connection = Connection::open(&database).expect("repair schema 23 database");
+        connection
+            .execute(
+                "DELETE FROM document_revisions WHERE document_id = ?1",
+                [unrelated_document_id.to_string()],
+            )
+            .expect("remove ambiguous revision");
+        connection
+            .execute(
+                "DELETE FROM documents WHERE id = ?1",
+                [unrelated_document_id.to_string()],
+            )
+            .expect("remove ambiguous document");
+        connection
+            .execute(
+                "DELETE FROM epics WHERE id = ?1",
+                [unrelated_epic_id.to_string()],
+            )
+            .expect("remove ambiguous epic");
+        drop(connection);
+
+        let application =
+            WorkboardApplication::open(&database).expect("complete schema 24 upgrade");
+        let membership_count: i64 = application
+            .store
+            .read(|connection| {
+                connection
+                    .query_row(
+                        "SELECT COUNT(*) FROM import_document_memberships WHERE import_id = ?1",
+                        [first.import_id.to_string()],
+                        |row| row.get(0),
+                    )
+                    .map_err(Into::into)
+            })
+            .expect("count repaired membership");
+        assert_eq!(
+            membership_count,
+            i64::try_from(first.epics + first.features + first.work_items)
+                .expect("membership count")
+        );
+        assert_eq!(
+            application
+                .store
+                .health()
+                .expect("upgraded storage health")
+                .schema_version,
+            24
         );
     }
 
@@ -1977,6 +2234,39 @@ mod tests {
             .trim()
             .parse()
             .expect("numeric count")
+    }
+
+    fn restore_schema_23_import_database(connection: &Connection) {
+        connection
+            .execute_batch(
+                "DROP TRIGGER import_source_destinations_finalized_insert;
+                 DROP TRIGGER import_source_destinations_finalized_update;
+                 DROP TRIGGER import_source_destinations_finalized_delete;
+                 DROP TRIGGER import_document_batches_finalized;
+                 DROP TRIGGER import_document_member_fields_immutable;
+                 DROP TRIGGER import_document_memberships_finalized;
+                 DROP TRIGGER import_document_membership_finalizations_no_update;
+                 DROP TRIGGER import_document_membership_finalizations_no_delete;
+                 DROP TRIGGER import_document_membership_finalizations_valid;
+                 DROP TABLE import_document_membership_finalizations;
+                 DELETE FROM schema_migrations WHERE version >= 24;
+                 PRAGMA user_version = 23;",
+            )
+            .expect("restore schema 23 import database");
+    }
+
+    fn restore_schema_22_import_database(connection: &Connection) {
+        restore_schema_23_import_database(connection);
+        connection
+            .execute_batch(
+                "DROP TRIGGER import_document_memberships_no_update;
+                 DROP TRIGGER import_document_memberships_no_delete;
+                 DROP TRIGGER import_document_memberships_valid;
+                 DROP TABLE import_document_memberships;
+                 DELETE FROM schema_migrations WHERE version >= 23;
+                 PRAGMA user_version = 22;",
+            )
+            .expect("restore schema 22 import database");
     }
 
     fn git_head(root: &Path) -> String {

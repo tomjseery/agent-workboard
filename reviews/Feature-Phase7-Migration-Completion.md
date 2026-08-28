@@ -5,8 +5,8 @@
 > irreversible or ambiguous finding: record its durable disposition, take the safe path, and keep going.
 
 **Review status:** `complete`
-**Reviewed up to commit:** `a6c8dee348f58311c36caa127b7974b3fadd7628`  `(2026-08-28)`
-**Security-reviewed up to commit:** `a6c8dee348f58311c36caa127b7974b3fadd7628`  `(2026-08-28)`
+**Reviewed up to commit:** `2a9c6233ca368e431051e1553692be56c447f921`  `(2026-08-28)`
+**Security-reviewed up to commit:** `2a9c6233ca368e431051e1553692be56c447f921`  `(2026-08-28)`
 **Judgment:** `changes-requested`
 
 ## Review pass — 2026-08-28 — full
@@ -334,3 +334,40 @@ No findings.
   from their original revision timestamp and commit; new imports record every document directly. The replay
   regression upgrades a schema-22 import, adds an unrelated same-commit revision, and preserves the original
   outcome exactly.
+
+## Review pass — 2026-08-28 — incremental
+
+**Candidate base:** `a6c8dee348f58311c36caa127b7974b3fadd7628`
+**Candidate head:** `2a9c6233ca368e431051e1553692be56c447f921`
+**Candidate branch:** `Feature/Phase7-Migration-Completion`
+**Candidate scope:** `all`
+**Candidate path-set:** `sha256:ee1d4e28380659a67492628d9d3728cfc1c21bcb266f3d6de81dbe3f80572119` `(4 paths)`
+**Candidate bundle:** `C:\Users\TommySeery\AppData\Local\Temp\agent-workboard-review-87b342294f2440c6a98005a28fd19f29`
+**Candidate bundle identity:** `sha256:929dcf81196d1a5f171401ae556a3843b9d5d070fe04fa80915f973fb33a9d4e`
+**Work-order path:** `reviews/Feature-Phase7-Migration-Completion.md`
+**Work-order mode:** `append`
+**Pass judgment:** `changes-requested`
+
+### Findings
+
+- [x] **P7-021 — HIGH — integrity** — `crates/workboard-application/src/storage.rs:56`
+  Membership rows are individually immutable, but a completed batch still accepts new same-workspace,
+  same-kind documents. A later insert can therefore freeze unrelated membership into a completed import and
+  inflate every replay. Finalize membership atomically with the import and reject later membership inserts
+  and repository/kind reassignment of member documents.
+
+  Resolved by schema 24's durable finalization row, written in the same database transaction as new import
+  membership. Database guards freeze finalized batches, members, member identity fields, and source mappings;
+  replay fails closed if an older matching batch lacks finalization.
+
+- [x] **P7-022 — HIGH — migration/test** — `crates/workboard-application/src/storage.rs:72`
+  Schema 23 stamps a commit-and-timestamp reconstruction without validating hierarchy completeness or
+  ambiguity, while its regression inserts the unrelated collision only after backfill. Reconstruct from
+  batch-owned hierarchy evidence, fail closed on missing or ambiguous membership, and seed the unrelated
+  same-commit revision before upgrade so the test proves exact backfill.
+
+  Resolved by the forward-only schema 24 rebuild and validation gate. It reconstructs membership from the
+  batch's exact hierarchy timestamp, planning repository, document revision, commit, and source evidence;
+  incomplete or ambiguous materialized batches roll back without a schema stamp. Regression coverage proves
+  valid schema-22 backfill, missing-revision rejection, copied timestamp/commit rejection, and successful
+  retry after evidence repair.

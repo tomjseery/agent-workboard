@@ -27,8 +27,10 @@ invalid and audit-incompatible legacy attestations are removed, consumable direc
 completed audit evidence is preserved, and freed repair slots accept only valid repositories. Every pending
 audit retry repeats the classification cleanup, so a later unusable repair cannot make the checkpoint
 permanently unrecoverable.
-Schema 23 records every Concertable planning document in immutable import membership, including generated
-source-less documents, so replay cannot absorb unrelated revisions that happen to share a Git commit.
+Schema 23 records every Concertable planning document in import membership, including generated source-less
+documents. Schema 24 reconstructs older membership from exact hierarchy evidence, rejects incomplete or
+ambiguous upgrades, and atomically finalizes each materialized batch so its members and source mappings
+cannot change after apply.
 
 ## Next Steps
 
@@ -58,7 +60,7 @@ and generic planning/session-recovery machinery.
   `C:\Users\TOMMYS~1\AppData\Local\Temp\agent-workboard-phase7-parity-2d6f6666170a439a98b534e463fa3625`.
   It published 168 planning-store files in clean commit `25afbd312d3540c0aa46bc65c4dfd2d14d79c338`.
   Real replay exposed a synthetic-Epic undercount and a same-commit crash-retry ambiguity. The isolated
-  database upgraded through schema 23, and replay now returns the original 10/25/132 hierarchy counts from
+  database upgraded through schema 24, and replay now returns the original 10/25/132 hierarchy counts from
   immutable import membership rather than source mappings or commit coincidence.
 - The isolated legacy apply stopped before mutation because all 1,793 session candidates are unselected.
   Selecting exact Work-item destinations remains an explicit owner-review gate; the dry run did not guess.
@@ -67,7 +69,7 @@ and generic planning/session-recovery machinery.
 
 - Phases 1–6 shipped through `f5eae79`.
 - Phase 7 planning and native-session import shipped through `d2b5647`.
-- All twenty findings from the full and incremental review passes have been resolved in the local
+- All twenty-two findings from the full and incremental review passes have been resolved in the local
   candidate.
 - Real Concertable dogfood found and repaired replay undercounting and same-commit overcounting.
 
@@ -76,13 +78,13 @@ and generic planning/session-recovery machinery.
 - `cargo fmt --all -- --check`
 - `cargo clippy --workspace --all-targets -- -D warnings`
 - `cargo test -p workboard-application` — 77 tests passed on 2026-08-28
-- `cargo test --workspace` — 135 tests passed on 2026-08-28
+- `cargo test --workspace` — 136 tests passed on 2026-08-28
 
 ## Reviews
 
-The full review of `f5eae79..89c6cc1` and all incremental reviews through `a6c8dee` are complete. The
-canonical work order is `reviews/Feature-Phase7-Migration-Completion.md`; all twenty findings are resolved,
-and the latest remediation requires a clean incremental pass.
+The full review of `f5eae79..89c6cc1` and all incremental reviews through `2a9c623` are complete. The
+canonical work order is `reviews/Feature-Phase7-Migration-Completion.md`; all twenty-two findings are
+resolved, and the latest remediation requires a clean incremental pass.
 
 ## Decisions, discoveries, blockers, and deviations
 
