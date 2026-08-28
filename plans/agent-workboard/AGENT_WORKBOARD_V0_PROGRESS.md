@@ -24,7 +24,9 @@ Schema-14 entrants apply the ownership migrations atomically, so interruption ca
 owner; explicit repair attestations are validated before becoming immutable.
 Already-stamped schema-17 databases receive forward-only compatibility repairs before audit: relationally
 invalid and audit-incompatible legacy attestations are removed, consumable direct repairs remain immutable,
-completed audit evidence is preserved, and freed repair slots accept only valid repositories.
+completed audit evidence is preserved, and freed repair slots accept only valid repositories. Every pending
+audit retry repeats the classification cleanup, so a later unusable repair cannot make the checkpoint
+permanently unrecoverable.
 
 ## Next Steps
 
@@ -35,7 +37,7 @@ before the external Concertable parity acceptance gate.
 
 - Phases 1–6 shipped through `f5eae79`.
 - Phase 7 planning and native-session import shipped through `d2b5647`.
-- All eighteen findings from the full and incremental review passes have been resolved in the local
+- All nineteen findings from the full and incremental review passes have been resolved in the local
   candidate.
 
 ## Verification
@@ -47,7 +49,7 @@ before the external Concertable parity acceptance gate.
 
 ## Reviews
 
-The full review of `f5eae79..89c6cc1` and incremental reviews through `a43df92` are complete with changes
+The full review of `f5eae79..89c6cc1` and incremental reviews through `118cd48` are complete with changes
 requested. The canonical work order is `reviews/Feature-Phase7-Migration-Completion.md`; every recorded
 finding is resolved and the latest remediation requires a clean incremental pass.
 
