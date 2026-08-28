@@ -1025,12 +1025,19 @@ fn clean_heading_title(title: &str) -> String {
 }
 
 fn explicit_completed_status(title: &str) -> WorkItemStatus {
-    let upper = title.to_ascii_uppercase();
+    let terminal = title
+        .split_whitespace()
+        .next_back()
+        .map(|word| {
+            word.trim_matches(|character: char| !character.is_ascii_alphabetic())
+                .to_ascii_lowercase()
+        })
+        .unwrap_or_default();
     if title.contains('✅')
-        || upper.contains(" DONE")
-        || upper.contains(" COMPLETE")
-        || upper.contains(" SHIPPED")
-        || upper.contains(" MERGED")
+        || matches!(
+            terminal.as_str(),
+            "done" | "complete" | "completed" | "shipped" | "merged"
+        )
     {
         WorkItemStatus::Done
     } else {
@@ -1347,7 +1354,8 @@ mod tests {
     use workboard_core::Slug;
 
     use super::{
-        CONCERTABLE_IMPORT_FORMAT_VERSION, concertable_source_path, preview_concertable_plans,
+        CONCERTABLE_IMPORT_FORMAT_VERSION, concertable_source_path, explicit_completed_status,
+        preview_concertable_plans,
     };
     use crate::workspace::{InitialiseWorkspace, RegisterRepository, WorkboardApplication};
 
@@ -1367,6 +1375,30 @@ mod tests {
         );
         assert!(feature.work_items[2].body.contains("Current state"));
         assert!(feature.body.contains("Phase 2"));
+    }
+
+    #[test]
+    fn completion_status_requires_an_explicit_terminal_marker() {
+        assert_eq!(
+            explicit_completed_status("Phase 2 — Complete migration"),
+            workboard_core::WorkItemStatus::Ready
+        );
+        assert_eq!(
+            explicit_completed_status("Phase 2 — Migration completion"),
+            workboard_core::WorkItemStatus::Ready
+        );
+        assert_eq!(
+            explicit_completed_status("Phase 2 — Migration complete"),
+            workboard_core::WorkItemStatus::Done
+        );
+        assert_eq!(
+            explicit_completed_status("Phase 2 — Migration [SHIPPED]"),
+            workboard_core::WorkItemStatus::Done
+        );
+        assert_eq!(
+            explicit_completed_status("Phase 2 — Migration ✅"),
+            workboard_core::WorkItemStatus::Done
+        );
     }
 
     #[test]
