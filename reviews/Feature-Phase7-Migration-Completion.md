@@ -5,8 +5,8 @@
 > irreversible or ambiguous finding: record its durable disposition, take the safe path, and keep going.
 
 **Review status:** `complete`
-**Reviewed up to commit:** `0a9a67865225623cd9181ecf2f8d571280639393`  `(2026-08-28)`
-**Security-reviewed up to commit:** `0a9a67865225623cd9181ecf2f8d571280639393`  `(2026-08-28)`
+**Reviewed up to commit:** `6c711084c83b5654820eb357664b321dca192626`  `(2026-08-28)`
+**Security-reviewed up to commit:** `6c711084c83b5654820eb357664b321dca192626`  `(2026-08-28)`
 **Judgment:** `changes-requested`
 
 ## Review pass — 2026-08-28 — full
@@ -410,3 +410,42 @@ No findings.
   and the replay outcome remain unchanged.
   Resolved by attempting a unique late source mapping, asserting the dedicated finalization error and an
   unchanged mapping count, then proving the replay still returns the original outcome.
+
+## Review pass — 2026-08-28 — incremental
+
+**Candidate base:** `0a9a67865225623cd9181ecf2f8d571280639393`
+**Candidate head:** `6c711084c83b5654820eb357664b321dca192626`
+**Candidate branch:** `Feature/Phase7-Migration-Completion`
+**Candidate scope:** `all`
+**Candidate path-set:** `sha256:ee1d4e28380659a67492628d9d3728cfc1c21bcb266f3d6de81dbe3f80572119` `(4 paths)`
+**Candidate bundle:** `C:\Users\TommySeery\AppData\Local\Temp\agent-workboard-review-42ead55de9f5443ba1482a10997b7640`
+**Candidate bundle identity:** `sha256:31589f1cd888d0df6bd5215a7a2030f06c0b600f260396f44a051e1fb43c5828`
+**Work-order path:** `reviews/Feature-Phase7-Migration-Completion.md`
+**Work-order mode:** `append`
+**Pass judgment:** `changes-requested`
+
+### Findings
+
+- [x] **P7-026 — HIGH — integrity** — `crates/workboard-application/src/storage.rs:262`
+  The expected-document view starts from existing documents and revisions, so a hierarchy entity missing
+  either artifact disappears from both sides of the set comparison and a partial batch can still finalize.
+  Derive completeness from the whole timestamp-owned hierarchy cohort and retain the application invariant
+  that every Concertable import contains at least one Feature.
+  Resolved by forward-only schema 26's cohort-evidence view and finalization guard. Focused regressions reject
+  a complete Feature whose generated Epic document is missing and a source-backed Epic-only batch.
+
+- [x] **P7-027 — HIGH — integrity** — `crates/workboard-application/src/storage.rs:273`
+  Revision and hierarchy-timestamp evidence remains mutable after finalization, while replay checks only the
+  finalization row. Revalidate complete evidence on replay so changing or removing original evidence, or
+  adding same-batch evidence, returns an integrity error instead of trusted counts.
+  Resolved by joining both membership and cohort failures into replay. Revision-timestamp changes,
+  hierarchy-timestamp changes, and extra same-batch documents all fail closed; restoring the exact evidence
+  restores the original replay outcome.
+
+- [x] **P7-028 — MEDIUM — test** — `crates/workboard-application/src/concertable_import.rs:1884`
+  The runtime finalization regression does not prove migration 25 rejects a partial finalization already
+  accepted by schema 24. Build that schema-24 state, prove upgrade rollback preserves its version and rows,
+  repair the missing evidence, and prove retry reaches schema 25 without changing a valid replay outcome.
+  Resolved by a schema-24 fixture that accepts one of two memberships, proves migration 25 rolls back without
+  a stamp or lost rows, repairs the missing membership and source mapping, and then reaches healthy schema 26
+  with the original valid replay counts unchanged.
