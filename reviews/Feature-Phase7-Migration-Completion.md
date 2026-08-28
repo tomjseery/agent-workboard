@@ -5,8 +5,8 @@
 > irreversible or ambiguous finding: record its durable disposition, take the safe path, and keep going.
 
 **Review status:** `complete`
-**Reviewed up to commit:** `3b5e40996a42ace1e0cab4ced4ef0bce4112d836`  `(2026-08-28)`
-**Security-reviewed up to commit:** `3b5e40996a42ace1e0cab4ced4ef0bce4112d836`  `(2026-08-28)`
+**Reviewed up to commit:** `8b0873c15fbb9440889acd8a3a634c950da8690d`  `(2026-08-28)`
+**Security-reviewed up to commit:** `8b0873c15fbb9440889acd8a3a634c950da8690d`  `(2026-08-28)`
 **Judgment:** `changes-requested`
 
 ## Review pass — 2026-08-28 — full
@@ -133,3 +133,33 @@
   every completed import batch.
   Resolved by a corrective migration that recomputes ownership only from unique immutable evidence, rejects
   unresolved batches with their source paths, and makes valid batch ownership mandatory and immutable.
+
+## Review pass — 2026-08-28 — incremental
+
+**Candidate base:** `3b5e40996a42ace1e0cab4ced4ef0bce4112d836`
+**Candidate head:** `8b0873c15fbb9440889acd8a3a634c950da8690d`
+**Candidate branch:** `Feature/Phase7-Migration-Completion`
+**Candidate scope:** `all`
+**Candidate path-set:** `sha256:7df44ac725a2a19dcb6862201fb6769934115611984f7473c9eb00f3d170be43` `(4 paths)`
+**Candidate bundle:** `C:\Users\TommySeery\AppData\Local\Temp\agent-workboard-review-43267258d35d445eac05d2e09068835f`
+**Candidate bundle identity:** `sha256:bfa032e6be0dfc40d9ae04c3c3e80b178e901551336e0ed725b0440c00f3f700`
+**Work-order path:** `reviews/Feature-Phase7-Migration-Completion.md`
+**Work-order mode:** `append`
+**Pass judgment:** `changes-requested`
+
+### Findings
+
+- [x] **P7-012 — HIGH — correctness** — `crates/workboard-application/src/storage.rs:949`
+  Migration 15 recomputes every Concertable batch, including schema-14 batches created with valid direct
+  provenance. A same-repository sibling-worktree import can therefore be nulled or overwritten despite
+  already having its trusted target. Distinguish provisional schema-13 backfills from later direct imports,
+  preserve valid direct ownership, and repair only provisional rows.
+  Resolved by using the schema-14 migration timestamp to preserve later valid direct records and restricting
+  immutable-evidence repair to earlier provisional batches; conflicting-path coverage proves direct wins.
+
+- [x] **P7-013 — HIGH — security/correctness** — `crates/workboard-application/src/storage.rs:972`
+  Batch triggers protect only child writes; changing a referenced repository's workspace or planning-store
+  role can invalidate the validated ownership invariant without violating a foreign key. Reject those parent
+  mutations while any import batch references the repository.
+  Resolved by guarding referenced repository workspace and planning-store-role changes; focused assertions
+  reject both parent mutations.

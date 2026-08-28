@@ -6,12 +6,12 @@ use rusqlite::{
     Connection, ErrorCode, MAIN_DB, OptionalExtension, Transaction, TransactionBehavior, params,
 };
 use serde::{Deserialize, Serialize};
-use time::OffsetDateTime;
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use workboard_core::{ConversationId, LaunchLeaseId};
 
 use crate::AppError;
 
-const CURRENT_SCHEMA_VERSION: i64 = 15;
+const CURRENT_SCHEMA_VERSION: i64 = 16;
 const FOUNDATION_SCHEMA_CHECKSUM: &str = "agent-workboard-foundation-v1";
 const LAUNCH_LEASE_SCHEMA_CHECKSUM: &str = "agent-workboard-launch-leases-v1";
 const WORKBOARD_DOMAIN_SCHEMA_CHECKSUM: &str = "agent-workboard-domain-v1";
@@ -29,6 +29,8 @@ const LEGACY_CANDIDATE_METADATA_SCHEMA_CHECKSUM: &str =
 const IMPORT_BATCH_REPOSITORY_SCHEMA_CHECKSUM: &str = "agent-workboard-import-batch-repository-v1";
 const IMPORT_BATCH_REPOSITORY_REPAIR_SCHEMA_CHECKSUM: &str =
     "agent-workboard-import-batch-repository-repair-v1";
+const IMPORT_BATCH_REPOSITORY_PARENT_SCHEMA_CHECKSUM: &str =
+    "agent-workboard-import-batch-repository-parent-v1";
 
 pub struct SqliteStore {
     path: PathBuf,
@@ -946,48 +948,24 @@ fn migrate(connection: &Connection) -> Result<(), AppError> {
         connection,
         15,
         IMPORT_BATCH_REPOSITORY_REPAIR_SCHEMA_CHECKSUM,
-        "UPDATE import_batches
-            SET repository_id = (
-                SELECT MIN(record.destination_id)
-                  FROM legacy_import_records record
-                  JOIN repositories repository ON repository.id = record.destination_id
-                 WHERE record.import_id = import_batches.id
-                   AND record.destination_kind = 'repository'
-                   AND repository.workspace_id = import_batches.workspace_id
-                   AND repository.is_planning_store = 0
-                HAVING COUNT(DISTINCT record.destination_id) = 1
-            )
-          WHERE kind = 'context_catalogue';
-         UPDATE import_batches
-            SET repository_id = (
-                SELECT MIN(path.repository_id)
-                  FROM repository_paths path
-                  JOIN repositories repository ON repository.id = path.repository_id
-                 WHERE path.path = import_batches.source_path
-                   AND repository.workspace_id = import_batches.workspace_id
-                   AND repository.is_planning_store = 0
-                HAVING COUNT(DISTINCT path.repository_id) = 1
-            )
-          WHERE kind = 'concertable_plans';
-         CREATE TRIGGER import_batches_repository_required
-         BEFORE INSERT ON import_batches
-         WHEN NEW.repository_id IS NULL OR NOT EXISTS (
-             SELECT 1 FROM repositories repository
-              WHERE repository.id = NEW.repository_id
-                AND repository.workspace_id = NEW.workspace_id
-                AND repository.is_planning_store = 0
-         )
+        "",
+        repair_import_batch_repository_migration,
+    )?;
+    apply_migration(
+        connection,
+        16,
+        IMPORT_BATCH_REPOSITORY_PARENT_SCHEMA_CHECKSUM,
+        "CREATE TRIGGER import_batch_repository_parent_immutable
+         BEFORE UPDATE OF workspace_id, is_planning_store ON repositories
+         WHEN (NEW.workspace_id IS NOT OLD.workspace_id
+               OR NEW.is_planning_store IS NOT OLD.is_planning_store)
+              AND EXISTS (
+                  SELECT 1 FROM import_batches batch
+                   WHERE batch.repository_id = OLD.id
+              )
          BEGIN
-             SELECT RAISE(ABORT, 'import batch repository is invalid');
-         END;
-         CREATE TRIGGER import_batches_repository_immutable
-         BEFORE UPDATE OF repository_id, workspace_id ON import_batches
-         WHEN NEW.repository_id IS NOT OLD.repository_id
-              OR NEW.workspace_id IS NOT OLD.workspace_id
-         BEGIN
-             SELECT RAISE(ABORT, 'import batch repository is immutable');
+             SELECT RAISE(ABORT, 'import batch repository parent is immutable');
          END;",
-        validate_import_batch_repository_migration,
     )?;
     Ok(())
 }
@@ -1039,36 +1017,116 @@ fn apply_validated_migration(
     Ok(())
 }
 
-fn validate_import_batch_repository_migration(
-    transaction: &Transaction<'_>,
-) -> Result<(), AppError> {
-    let mut statement = transaction.prepare(
-        "SELECT batch.id, batch.kind, batch.source_path
-           FROM import_batches batch
-           LEFT JOIN repositories repository
-             ON repository.id = batch.repository_id
-            AND repository.workspace_id = batch.workspace_id
-            AND repository.is_planning_store = 0
-          WHERE repository.id IS NULL
-          ORDER BY batch.id",
+fn repair_import_batch_repository_migration(transaction: &Transaction<'_>) -> Result<(), AppError> {
+    let migration_applied_at = transaction.query_row(
+        "SELECT applied_at FROM schema_migrations WHERE version = 14",
+        [],
+        |row| row.get::<_, String>(0),
     )?;
-    let unresolved = statement
+    let migration_timestamp = OffsetDateTime::parse(&migration_applied_at, &Rfc3339)
+        .map_err(|error| AppError::Domain(format!("invalid schema migration timestamp: {error}")))?
+        .unix_timestamp_nanos();
+    let batches = transaction
+        .prepare(
+            "SELECT id, workspace_id, kind, source_path, imported_at, repository_id
+               FROM import_batches ORDER BY id",
+        )?
         .query_map([], |row| {
-            Ok(format!(
-                "{} [{}: {}]",
+            Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, Option<String>>(5)?,
             ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
-    if unresolved.is_empty() {
-        return Ok(());
+    let mut unresolved = Vec::new();
+    for (id, workspace_id, kind, source_path, imported_at, repository_id) in batches {
+        let imported_at = imported_at.parse::<i128>().map_err(|error| {
+            AppError::Domain(format!("invalid import timestamp for batch {id}: {error}"))
+        })?;
+        if imported_at >= migration_timestamp {
+            let valid: i64 = transaction.query_row(
+                "SELECT EXISTS (
+                     SELECT 1 FROM repositories
+                      WHERE id = ?1 AND workspace_id = ?2 AND is_planning_store = 0
+                 )",
+                params![repository_id, workspace_id],
+                |row| row.get(0),
+            )?;
+            if valid == 0 {
+                unresolved.push(format!("{id} [{kind}: {source_path}]"));
+            }
+            continue;
+        }
+        let repaired = match kind.as_str() {
+            "context_catalogue" => transaction
+                .query_row(
+                    "SELECT MIN(record.destination_id)
+                       FROM legacy_import_records record
+                       JOIN repositories repository ON repository.id = record.destination_id
+                      WHERE record.import_id = ?1
+                        AND record.destination_kind = 'repository'
+                        AND repository.workspace_id = ?2
+                        AND repository.is_planning_store = 0
+                     HAVING COUNT(DISTINCT record.destination_id) = 1",
+                    params![id, workspace_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?,
+            "concertable_plans" => transaction
+                .query_row(
+                    "SELECT MIN(path.repository_id)
+                       FROM repository_paths path
+                       JOIN repositories repository ON repository.id = path.repository_id
+                      WHERE path.path = ?1
+                        AND repository.workspace_id = ?2
+                        AND repository.is_planning_store = 0
+                     HAVING COUNT(DISTINCT path.repository_id) = 1",
+                    params![source_path, workspace_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?,
+            _ => None,
+        };
+        let Some(repaired) = repaired else {
+            unresolved.push(format!("{id} [{kind}: {source_path}]"));
+            continue;
+        };
+        transaction.execute(
+            "UPDATE import_batches SET repository_id = ?2 WHERE id = ?1",
+            params![id, repaired],
+        )?;
     }
-    Err(AppError::Domain(format!(
-        "schema migration 15 cannot resolve immutable import repository ownership for {}; record exactly one matching non-planning repository path or legacy repository destination in the batch workspace, then retry",
-        unresolved.join(", ")
-    )))
+    if !unresolved.is_empty() {
+        return Err(AppError::Domain(format!(
+            "schema migration 15 cannot resolve immutable import repository ownership for {}; record exactly one matching non-planning repository path or legacy repository destination in the batch workspace, then retry",
+            unresolved.join(", ")
+        )));
+    }
+    transaction.execute_batch(
+        "CREATE TRIGGER import_batches_repository_required
+         BEFORE INSERT ON import_batches
+         WHEN NEW.repository_id IS NULL OR NOT EXISTS (
+             SELECT 1 FROM repositories repository
+              WHERE repository.id = NEW.repository_id
+                AND repository.workspace_id = NEW.workspace_id
+                AND repository.is_planning_store = 0
+         )
+         BEGIN
+             SELECT RAISE(ABORT, 'import batch repository is invalid');
+         END;
+         CREATE TRIGGER import_batches_repository_immutable
+         BEFORE UPDATE OF repository_id, workspace_id ON import_batches
+         WHEN NEW.repository_id IS NOT OLD.repository_id
+              OR NEW.workspace_id IS NOT OLD.workspace_id
+         BEGIN
+             SELECT RAISE(ABORT, 'import batch repository is immutable');
+         END;",
+    )?;
+    Ok(())
 }
 
 fn health(connection: &Connection) -> Result<StorageHealth, AppError> {
@@ -1208,6 +1266,7 @@ mod tests {
             .execute_batch(
                 "DROP TRIGGER import_batches_repository_required;
                  DROP TRIGGER import_batches_repository_immutable;
+                 DROP TRIGGER import_batch_repository_parent_immutable;
                  DROP INDEX import_batches_target;
                  ALTER TABLE import_batches DROP COLUMN repository_id;
                  DELETE FROM schema_migrations WHERE version >= 14;
@@ -1234,7 +1293,7 @@ mod tests {
                      'legacy-batch', 'workspace', 'concertable_plans', 'C:/code-linked',
                      'source-head',
                      'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-                     'planning-commit', '2026-08-27T08:00:00Z'
+                     'planning-commit', '1'
                  );
                  INSERT INTO import_source_destinations (
                      import_id, source_path, source_hash, destination_kind,
@@ -1347,6 +1406,111 @@ mod tests {
             Ok(())
         });
         assert!(reassignment.is_err());
+
+        store
+            .write(|transaction| {
+                transaction.execute(
+                    "INSERT INTO repositories (
+                         id, workspace_id, slug, title, git_common_directory, default_branch,
+                         is_planning_store, created_at
+                     ) VALUES (
+                         'other-store', 'other-workspace', 'planning', 'Other planning store',
+                         'C:/other-planning/.git', 'main', 1, '2026-08-27T08:00:00Z'
+                     )",
+                    [],
+                )?;
+                transaction.execute(
+                    "INSERT INTO workspaces (
+                         id, slug, title, planning_store_repository_id, created_at
+                     ) VALUES (
+                         'other-workspace', 'other', 'Other', 'other-store',
+                         '2026-08-27T08:00:00Z'
+                     )",
+                    [],
+                )?;
+                Ok(())
+            })
+            .expect("seed other workspace");
+        let moved_parent = store.write::<()>(|transaction| {
+            transaction.execute(
+                "UPDATE repositories SET workspace_id = 'other-workspace'
+                 WHERE id = 'code-repository'",
+                [],
+            )?;
+            Ok(())
+        });
+        assert!(moved_parent.is_err());
+        let planning_parent = store.write::<()>(|transaction| {
+            transaction.execute(
+                "UPDATE repositories SET is_planning_store = 1
+                 WHERE id = 'code-repository'",
+                [],
+            )?;
+            Ok(())
+        });
+        assert!(planning_parent.is_err());
+    }
+
+    #[test]
+    fn schema_14_direct_import_repository_survives_upgrade() {
+        let directory = TempDir::new().expect("temporary directory");
+        let path = directory.path().join("workboard.sqlite");
+        let mut store = SqliteStore::open(&path).expect("open store");
+        store.write(seed_hierarchy).expect("seed hierarchy");
+        drop(store);
+
+        let connection = Connection::open(&path).expect("open raw database");
+        connection
+            .execute_batch(
+                "DROP TRIGGER import_batches_repository_required;
+                 DROP TRIGGER import_batches_repository_immutable;
+                 DROP TRIGGER import_batch_repository_parent_immutable;
+                 DELETE FROM schema_migrations WHERE version >= 15;
+                 PRAGMA user_version = 14;
+                 INSERT INTO repositories (
+                     id, workspace_id, slug, title, git_common_directory, default_branch,
+                     is_planning_store, created_at
+                 ) VALUES (
+                     'aaa-repository', 'workspace', 'unrelated', 'Unrelated',
+                     'C:/unrelated/.git', 'main', 0, '2026-08-27T08:00:00Z'
+                 );
+                 INSERT INTO repository_paths (
+                     id, repository_id, path, observed_from, observed_until
+                 ) VALUES (
+                     'conflicting-history', 'aaa-repository', 'C:/code-linked',
+                     '2026-08-27T08:00:00Z', '2026-08-27T09:00:00Z'
+                 );",
+            )
+            .expect("prepare schema 14");
+        connection
+            .execute(
+                "INSERT INTO import_batches (
+                     id, workspace_id, repository_id, kind, source_path, source_head,
+                     preview_hash, planning_commit, imported_at
+                 ) VALUES (
+                     'direct-batch', 'workspace', 'code-repository', 'concertable_plans',
+                     'C:/code-linked', 'source-head',
+                     'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+                     'planning-commit', ?1
+                 )",
+                [OffsetDateTime::now_utc().unix_timestamp_nanos().to_string()],
+            )
+            .expect("seed direct schema 14 import");
+        drop(connection);
+
+        let store = SqliteStore::open(&path).expect("upgrade direct schema 14 import");
+        let repository: String = store
+            .read(|connection| {
+                Ok(connection.query_row(
+                    "SELECT repository_id FROM import_batches WHERE id = 'direct-batch'",
+                    [],
+                    |row| row.get(0),
+                )?)
+            })
+            .expect("read direct repository");
+
+        assert_eq!(repository, "code-repository");
+        assert!(store.health().expect("storage health").is_healthy());
     }
 
     #[test]
