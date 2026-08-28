@@ -19,8 +19,8 @@ unconfirmed candidates misassigned by an older import.
 
 ## Next Steps
 
-Run the canonical full review over the Phase 7 range `f5eae79..HEAD`, resolve every material finding, and
-repeat formatting, lint, and workspace tests before marking Phase 7 complete.
+Resolve the open findings in `reviews/Feature-Phase7-Migration-Completion.md`, then run an incremental
+review and repeat formatting, lint, and workspace tests before marking Phase 7 complete.
 
 ## Completed work
 
@@ -36,7 +36,8 @@ repeat formatting, lint, and workspace tests before marking Phase 7 complete.
 
 ## Reviews
 
-Full Phase 7 review pending for `f5eae79..HEAD`.
+The full review of `f5eae79..89c6cc1` is complete with changes requested. The canonical work order is
+`reviews/Feature-Phase7-Migration-Completion.md`; remediation is in progress.
 
 ## Decisions, discoveries, blockers, and deviations
 

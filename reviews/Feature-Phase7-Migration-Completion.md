@@ -1,0 +1,74 @@
+# Code review — Feature/Phase7-Migration-Completion
+
+> **This file is a work order, not a discussion.** If you're handed this file, fix the open `[ ]`
+> findings directly and report what changed. Tick each `[x]` as you land it. Pause only for a genuinely
+> irreversible or ambiguous finding: record its durable disposition, take the safe path, and keep going.
+
+**Review status:** `complete`
+**Reviewed up to commit:** `89c6cc14f15cd7c61dd8e39d8cddfc7be88d0126`  `(2026-08-28)`
+**Security-reviewed up to commit:** `89c6cc14f15cd7c61dd8e39d8cddfc7be88d0126`  `(2026-08-28)`
+**Judgment:** `changes-requested`
+
+## Review pass — 2026-08-28 — full
+
+**Candidate base:** `f5eae79577412524b494adf4738f37d3333ecd9b`
+**Candidate head:** `89c6cc14f15cd7c61dd8e39d8cddfc7be88d0126`
+**Candidate branch:** `Feature/Phase7-Migration-Completion`
+**Candidate scope:** `all`
+**Candidate path-set:** `sha256:ab6ce95b14e0ddb110b933537bec941df935bf26d5034051b42bdedca9aca4ba` `(15 paths)`
+**Candidate bundle:** `C:\Users\TOMMYS~1\AppData\Local\Temp\agent-workboard-review-c1a1461aebd14c528a2b68e34ebe0e02`
+**Candidate bundle identity:** `sha256:4e050d244ed6bc1194f29abfac413df5054cba66edb3d689a152fe0202b11f02`
+**Work-order path:** `reviews/Feature-Phase7-Migration-Completion.md`
+**Work-order mode:** `new`
+**Pass judgment:** `changes-requested`
+
+### Findings
+
+- [x] **P7-001 — HIGH — security/correctness** — `crates/workboard-application/src/legacy_import.rs:410`
+  Apply trusts editable preview identity and repository fields instead of joining selection/adoption controls
+  to candidates freshly read from the verified snapshot; a fabricated or relabelled candidate can import or
+  adopt the wrong native session. Rebuild immutable candidate fields from the snapshot and reject any
+  destination UUID whose existing provider/native identity differs.
+  Resolved by rebuilding selected candidates from the pinned snapshot, permitting only selection,
+  destination, and adoption controls, and rejecting identity edits and conflicting destination identities.
+
+- [x] **P7-002 — HIGH — security** — `crates/workboard-application/src/legacy_import.rs:362`
+  The legacy database path is hashed and reopened at separate boundaries, including enrichment, so a path or
+  symlink swap can import bytes other than the reviewed snapshot. Copy through one read-only SQLite handle to
+  an application-controlled temporary snapshot, verify that copy, and use it throughout apply/reconciliation.
+  Resolved by copying and hashing through one open source file handle, integrity-checking the private copy,
+  and retaining its single read-only SQLite connection through import and enrichment.
+
+- [ ] **P7-003 — HIGH — security** — `crates/workboard-application/src/concertable_import.rs:1023`
+  Markdown discovery follows symlinks/junctions and has no visited-directory guard; an escaped source can be
+  exposed in the preview and a cycle can recurse indefinitely. Reject linked entries, verify canonical
+  containment for every visited path, and terminate deterministically on repeated filesystem identities.
+
+- [ ] **P7-004 — HIGH — correctness** — `crates/workboard-application/src/concertable_import.rs:301`
+  Apply accepts any code repository in the workspace and can assign a Concertable preview to an unrelated
+  repository. Require the registered repository Git common-directory identity to equal the preview source
+  repository identity before publishing files or writing database rows.
+
+- [ ] **P7-005 — MEDIUM — correctness** — `crates/workboard-application/src/legacy_import.rs:1307`
+  When an imported checkout already has a different current Workboard path, the legacy current path is
+  discarded and provenance records a checkout ID as a checkout-path ID. Insert the legacy path as a closed
+  historical interval, preserve the existing current path, and map provenance to the new path-row ID.
+
+- [ ] **P7-006 — MEDIUM — correctness** — `crates/workboard-application/src/concertable_import.rs:978`
+  Completion detection uses substring matching, so imperative or completion-noun phase headings become Done.
+  Recognise only a checkmark, checked item, or bounded terminal status marker and test misleading headings.
+
+- [ ] **P7-007 — HIGH — correctness** — `crates/workboard-application/src/concertable_import.rs:128`
+  Progress files are keyed only by filename stem, so same-named plans in different directories can consume
+  each other's progress and unmatched progress silently disappears. Pair by parent-relative path plus stem,
+  reject duplicates, and fail preview with the paths of every unmatched progress document.
+
+- [ ] **P7-008 — MEDIUM — correctness** — `crates/workboard-application/src/concertable_import.rs:289`
+  Existing-import lookups are not scoped to workspace/repository and occur after mutable-source validation,
+  so another target can inherit a false success while a valid replay fails after source retirement. Scope
+  durable outcomes to the requested target and return a same-target prior outcome before source validation.
+
+- [ ] **P7-009 — HIGH — correctness** — `crates/workboard-application/src/concertable_import.rs:318`
+  Preflight omits document IDs, allowing the planning-store commit to succeed before SQLite rejects an
+  existing document ID. Preflight every selected document ID/path and prove collisions leave planning-store
+  HEAD and Workboard state unchanged while safe retries remain idempotent.
