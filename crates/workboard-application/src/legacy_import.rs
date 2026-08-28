@@ -618,12 +618,13 @@ impl WorkboardApplication {
         self.store.write(|transaction| {
             transaction.execute(
                 "INSERT INTO import_batches (
-                     id, workspace_id, kind, source_path, source_head, preview_hash,
-                     planning_commit, imported_at
-                 ) VALUES (?1, ?2, 'context_catalogue', ?3, NULL, ?4, NULL, ?5)",
+                     id, workspace_id, repository_id, kind, source_path, source_head,
+                     preview_hash, planning_commit, imported_at
+                 ) VALUES (?1, ?2, ?3, 'context_catalogue', ?4, NULL, ?5, NULL, ?6)",
                 params![
                     import_id.to_string(),
                     workspace_id.to_string(),
+                    repository_id.to_string(),
                     path_text(&preview.source)?,
                     preview_hash,
                     imported_at,
@@ -1247,11 +1248,15 @@ impl WorkboardApplication {
                     "SELECT batch.id FROM import_batches batch
                      WHERE batch.preview_hash = ?1 AND batch.kind = 'context_catalogue'
                        AND batch.workspace_id = ?2
-                       AND EXISTS (
-                           SELECT 1 FROM legacy_import_records record
-                           WHERE record.import_id = batch.id
-                             AND record.destination_kind = 'repository'
-                             AND record.destination_id = ?3
+                       AND (
+                           batch.repository_id = ?3 OR (
+                               batch.repository_id IS NULL AND EXISTS (
+                                   SELECT 1 FROM legacy_import_records record
+                                    WHERE record.import_id = batch.id
+                                      AND record.destination_kind = 'repository'
+                                      AND record.destination_id = ?3
+                               )
+                           )
                        )",
                     params![
                         preview_hash,
