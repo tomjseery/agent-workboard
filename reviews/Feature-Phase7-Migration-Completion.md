@@ -5,9 +5,9 @@
 > irreversible or ambiguous finding: record its durable disposition, take the safe path, and keep going.
 
 **Review status:** `complete`
-**Reviewed up to commit:** `68b68fa77303c782ecb67876d138c2aee00cfb3c`  `(2026-08-28)`
-**Security-reviewed up to commit:** `68b68fa77303c782ecb67876d138c2aee00cfb3c`  `(2026-08-28)`
-**Judgment:** `approved`
+**Reviewed up to commit:** `a6c8dee348f58311c36caa127b7974b3fadd7628`  `(2026-08-28)`
+**Security-reviewed up to commit:** `a6c8dee348f58311c36caa127b7974b3fadd7628`  `(2026-08-28)`
+**Judgment:** `changes-requested`
 
 ## Review pass — 2026-08-28 — full
 
@@ -308,3 +308,29 @@
 ### Findings
 
 No findings.
+
+## Review pass — 2026-08-28 — incremental
+
+**Candidate base:** `68b68fa77303c782ecb67876d138c2aee00cfb3c`
+**Candidate head:** `a6c8dee348f58311c36caa127b7974b3fadd7628`
+**Candidate branch:** `Feature/Phase7-Migration-Completion`
+**Candidate scope:** `all`
+**Candidate path-set:** `sha256:e8367bddbe959b15618850b768fa3ad4596dc79493d3fccc4331021b9d55e690` `(4 paths)`
+**Candidate bundle:** `C:\Users\TOMMYS~1\AppData\Local\Temp\agent-workboard-review-2de27941d86f45f8836338a049855307`
+**Candidate bundle identity:** `sha256:403f92e26cd1c30d152551c8556eaeaa5eeca417063c94fac91d9c2d420fd4e4`
+**Work-order path:** `reviews/Feature-Phase7-Migration-Completion.md`
+**Work-order mode:** `append`
+**Pass judgment:** `changes-requested`
+
+### Findings
+
+- [x] **P7-020 — HIGH — integrity/test** — `crates/workboard-application/src/concertable_import.rs:554`
+  Replay treats every planning-store document revision at the batch's Git commit as an import member. A
+  publish-before-database failure followed by unrelated planning work can make an unchanged retry record that
+  later commit, so replay overcounts unrelated documents. Persist membership for every imported document,
+  including source-less documents, and prove same-commit unrelated revisions cannot change the outcome.
+
+  Resolved by schema 23's immutable per-import document membership. Schema-22 imports backfill membership
+  from their original revision timestamp and commit; new imports record every document directly. The replay
+  regression upgrades a schema-22 import, adds an unrelated same-commit revision, and preserves the original
+  outcome exactly.

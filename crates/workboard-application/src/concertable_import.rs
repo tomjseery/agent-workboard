@@ -492,6 +492,16 @@ impl WorkboardApplication {
                         imported_at,
                     ],
                 )?;
+                transaction.execute(
+                    "INSERT INTO import_document_memberships (
+                         import_id, document_id, destination_kind
+                     ) VALUES (?1, ?2, ?3)",
+                    params![
+                        import_id.to_string(),
+                        stored.front_matter.id.to_string(),
+                        destination_kind,
+                    ],
+                )?;
                 if let Some(source) = &prepared.source {
                     transaction.execute(
                         "INSERT INTO import_source_destinations (
@@ -551,16 +561,9 @@ impl WorkboardApplication {
                 let mut counts = [0_usize; 3];
                 for (index, kind) in ["epic", "feature", "work_item"].iter().enumerate() {
                     let count: i64 = connection.query_row(
-                        "SELECT COUNT(DISTINCT document.id)
-                           FROM documents document
-                           JOIN document_revisions revision
-                             ON revision.document_id = document.id
-                            AND revision.observed_commit = ?1
-                           JOIN workspaces workspace
-                             ON workspace.id = ?2
-                            AND workspace.planning_store_repository_id = document.repository_id
-                          WHERE document.kind = ?3",
-                        params![planning_commit, workspace_id.to_string(), kind],
+                        "SELECT COUNT(*) FROM import_document_memberships
+                          WHERE import_id = ?1 AND destination_kind = ?2",
+                        params![id, kind],
                         |row| row.get(0),
                     )?;
                     counts[index] = usize::try_from(count)
@@ -1394,6 +1397,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::process::Command;
 
+    use rusqlite::{Connection, params};
     use tempfile::TempDir;
     use workboard_core::{DocumentId, EpicId, Slug};
 
@@ -1574,6 +1578,61 @@ mod tests {
         let first = application
             .apply_concertable_import(workspace.workspace.id, repository.id, &preview)
             .expect("apply import");
+        drop(application);
+        let connection = Connection::open(&database).expect("open schema 23 database");
+        connection
+            .execute_batch(
+                "DROP TRIGGER import_document_memberships_no_update;
+                 DROP TRIGGER import_document_memberships_no_delete;
+                 DROP TRIGGER import_document_memberships_valid;
+                 DROP TABLE import_document_memberships;
+                 DELETE FROM schema_migrations WHERE version = 23;
+                 PRAGMA user_version = 22;",
+            )
+            .expect("restore schema 22 import database");
+        drop(connection);
+        let mut application =
+            WorkboardApplication::open(&database).expect("upgrade import database");
+        let unrelated_epic_id = EpicId::generate();
+        let unrelated_document_id = DocumentId::generate();
+        let unrelated_hash = "f".repeat(64);
+        application
+            .store
+            .write(|transaction| {
+                transaction.execute(
+                    "INSERT INTO epics (id, workspace_id, slug, title, created_at)
+                     VALUES (?1, ?2, 'unrelated', 'Unrelated', 'later')",
+                    params![
+                        unrelated_epic_id.to_string(),
+                        workspace.workspace.id.to_string(),
+                    ],
+                )?;
+                transaction.execute(
+                    "INSERT INTO documents (
+                         id, repository_id, epic_id, kind, relative_path, content_hash,
+                         observed_commit, observed_at
+                     ) VALUES (?1, ?2, ?3, 'epic', 'unrelated.md', ?4, ?5, 'later')",
+                    params![
+                        unrelated_document_id.to_string(),
+                        workspace.workspace.planning_store_repository_id.to_string(),
+                        unrelated_epic_id.to_string(),
+                        unrelated_hash,
+                        first.planning_commit,
+                    ],
+                )?;
+                transaction.execute(
+                    "INSERT INTO document_revisions (
+                         document_id, revision, content_hash, observed_commit, observed_at
+                     ) VALUES (?1, 1, ?2, ?3, 'later')",
+                    params![
+                        unrelated_document_id.to_string(),
+                        unrelated_hash,
+                        first.planning_commit,
+                    ],
+                )?;
+                Ok(())
+            })
+            .expect("record unrelated same-commit document");
         let second = application
             .apply_concertable_import(workspace.workspace.id, repository.id, &preview)
             .expect("repeat import");
@@ -1587,12 +1646,13 @@ mod tests {
         assert_eq!(first.epics, second.epics);
         assert_eq!(first.features, second.features);
         assert_eq!(first.work_items, second.work_items);
+        assert_eq!(first.source_destinations, second.source_destinations);
         assert_eq!(first.epics, 2);
         assert_eq!(first.source_destinations, 5);
-        assert_eq!(snapshot.epics.len(), 2);
+        assert_eq!(snapshot.epics.len(), 3);
         assert_eq!(snapshot.features.len(), 1);
         assert_eq!(snapshot.work_items.len(), 3);
-        assert_eq!(snapshot.documents.len(), 6);
+        assert_eq!(snapshot.documents.len(), 7);
         assert_eq!(
             git_count(&fixture.directory.path().join("planning-store")),
             2

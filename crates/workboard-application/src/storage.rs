@@ -12,7 +12,7 @@ use workboard_core::{ConversationId, LaunchLeaseId};
 
 use crate::AppError;
 
-const CURRENT_SCHEMA_VERSION: i64 = 22;
+const CURRENT_SCHEMA_VERSION: i64 = 23;
 const FOUNDATION_SCHEMA_CHECKSUM: &str = "agent-workboard-foundation-v1";
 const LAUNCH_LEASE_SCHEMA_CHECKSUM: &str = "agent-workboard-launch-leases-v1";
 const WORKBOARD_DOMAIN_SCHEMA_CHECKSUM: &str = "agent-workboard-domain-v1";
@@ -43,6 +43,53 @@ const IMPORT_BATCH_PRE_AUDIT_ATTESTATION_REPAIR_SCHEMA_CHECKSUM: &str =
     "agent-workboard-import-batch-pre-audit-attestation-repair-v1";
 const IMPORT_BATCH_FINAL_AUDIT_CHECKPOINT_SCHEMA_CHECKSUM: &str =
     "agent-workboard-import-batch-final-audit-checkpoint-v1";
+const IMPORT_DOCUMENT_MEMBERSHIP_SCHEMA_CHECKSUM: &str =
+    "agent-workboard-import-document-membership-v1";
+const IMPORT_DOCUMENT_MEMBERSHIP_SQL: &str = "CREATE TABLE import_document_memberships (
+     import_id TEXT NOT NULL REFERENCES import_batches(id) ON DELETE RESTRICT,
+     document_id TEXT NOT NULL UNIQUE REFERENCES documents(id) ON DELETE RESTRICT,
+     destination_kind TEXT NOT NULL CHECK (
+         destination_kind IN ('epic', 'feature', 'work_item')
+     ),
+     PRIMARY KEY (import_id, document_id)
+ );
+ CREATE TRIGGER import_document_memberships_valid
+ BEFORE INSERT ON import_document_memberships
+ WHEN NOT EXISTS (
+     SELECT 1
+       FROM import_batches batch
+       JOIN workspaces workspace ON workspace.id = batch.workspace_id
+       JOIN documents document
+         ON document.id = NEW.document_id
+        AND document.repository_id = workspace.planning_store_repository_id
+        AND document.kind = NEW.destination_kind
+      WHERE batch.id = NEW.import_id
+        AND batch.kind = 'concertable_plans'
+ )
+ BEGIN
+     SELECT RAISE(ABORT, 'import document membership is invalid');
+ END;
+ INSERT INTO import_document_memberships (import_id, document_id, destination_kind)
+ SELECT DISTINCT batch.id, document.id, document.kind
+   FROM import_batches batch
+   JOIN workspaces workspace ON workspace.id = batch.workspace_id
+   JOIN documents document
+     ON document.repository_id = workspace.planning_store_repository_id
+   JOIN document_revisions revision
+     ON revision.document_id = document.id
+    AND revision.observed_commit = batch.planning_commit
+    AND revision.observed_at = batch.imported_at
+  WHERE batch.kind = 'concertable_plans';
+ CREATE TRIGGER import_document_memberships_no_update
+ BEFORE UPDATE ON import_document_memberships
+ BEGIN
+     SELECT RAISE(ABORT, 'import document membership is immutable');
+ END;
+ CREATE TRIGGER import_document_memberships_no_delete
+ BEFORE DELETE ON import_document_memberships
+ BEGIN
+     SELECT RAISE(ABORT, 'import document membership cannot be deleted');
+ END;";
 const IMPORT_BATCH_REPOSITORY_REPAIR_SQL: &str = "UPDATE import_batches
     SET repository_id = (
         SELECT MIN(record.destination_id)
@@ -1075,6 +1122,12 @@ fn migrate(connection: &Connection) -> Result<(), AppError> {
     } else {
         apply_import_repository_migrations_atomically(connection, &direct_ownership)?;
     }
+    apply_migration(
+        connection,
+        23,
+        IMPORT_DOCUMENT_MEMBERSHIP_SCHEMA_CHECKSUM,
+        IMPORT_DOCUMENT_MEMBERSHIP_SQL,
+    )?;
     Ok(())
 }
 
@@ -1646,6 +1699,17 @@ mod tests {
     use super::SqliteStore;
     use crate::AppError;
 
+    fn drop_import_document_membership_schema(connection: &Connection) {
+        connection
+            .execute_batch(
+                "DROP TRIGGER IF EXISTS import_document_memberships_no_update;
+                 DROP TRIGGER IF EXISTS import_document_memberships_no_delete;
+                 DROP TRIGGER IF EXISTS import_document_memberships_valid;
+                 DROP TABLE IF EXISTS import_document_memberships;",
+            )
+            .expect("remove import document membership schema");
+    }
+
     fn seed_hierarchy(transaction: &Transaction<'_>) -> Result<(), AppError> {
         transaction.execute(
             "INSERT INTO workspaces (id, slug, title, planning_store_repository_id, created_at)
@@ -1754,6 +1818,7 @@ mod tests {
         drop(store);
 
         let connection = Connection::open(&path).expect("open raw database");
+        drop_import_document_membership_schema(&connection);
         connection
             .execute_batch(
                 "DROP TRIGGER import_batches_repository_required;
@@ -1955,6 +2020,7 @@ mod tests {
         drop(store);
 
         let connection = Connection::open(&path).expect("open raw database");
+        drop_import_document_membership_schema(&connection);
         connection
             .execute_batch(
                 "DROP TRIGGER import_batches_repository_required;
@@ -2071,6 +2137,7 @@ mod tests {
         drop(store);
 
         let connection = Connection::open(&path).expect("open raw database");
+        drop_import_document_membership_schema(&connection);
         connection
             .execute_batch(
                 "DROP TRIGGER import_batch_repository_parent_immutable;
@@ -2169,6 +2236,7 @@ mod tests {
         drop(store);
 
         let connection = Connection::open(&path).expect("open raw database");
+        drop_import_document_membership_schema(&connection);
         connection
             .execute_batch(
                 "DROP TRIGGER import_batch_repository_attestations_valid;
@@ -2436,7 +2504,7 @@ mod tests {
         assert_eq!(preserved_attestation, valid_attestation);
         assert_eq!(legacy_authority, "immutable_evidence");
         let health = store.health().expect("storage health");
-        assert_eq!(health.schema_version, 22);
+        assert_eq!(health.schema_version, 23);
         assert!(health.is_healthy());
         let audited_attestations: Vec<(String, String, String, String)> = store
             .read(|connection| {
@@ -2455,6 +2523,7 @@ mod tests {
         drop(store);
 
         let connection = Connection::open(&path).expect("open schema 20 database");
+        drop_import_document_membership_schema(&connection);
         connection
             .execute_batch(
                 "DELETE FROM schema_migrations WHERE version >= 21;
@@ -2480,7 +2549,7 @@ mod tests {
             .expect("read upgraded schema 20 attestations");
         assert_eq!(upgraded_attestations, audited_attestations);
         let health = store.health().expect("upgraded storage health");
-        assert_eq!(health.schema_version, 22);
+        assert_eq!(health.schema_version, 23);
         assert!(health.is_healthy());
         drop(store);
 
