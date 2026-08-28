@@ -89,7 +89,7 @@ and generic planning/session-recovery machinery.
 - `cargo fmt --all --check`
 - `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 - `cargo test -p workboard-application --lib` — 83 tests passed on 2026-08-28
-- `cargo test --workspace` — 140 tests passed on 2026-08-28
+- `cargo test --workspace` — 141 tests passed on 2026-08-28
 
 ## Reviews
 
