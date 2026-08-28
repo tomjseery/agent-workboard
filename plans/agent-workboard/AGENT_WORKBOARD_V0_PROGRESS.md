@@ -43,19 +43,17 @@ containing spaces parse correctly and missing development executables do not fai
 
 ## Next Steps
 
-Paused: Tommy — review the current 10-Epic/25-Feature/132-Work-item Concertable preview, select or explicitly
-ignore every legacy-session candidate rather than inferring a destination, choose the accepted Workboard
-database and planning-store destination, and authorize the live apply plus the real Claude/Codex
-create/resume/replacement/restart-recovery exercise. Resume when the accepted destination and owner approval
-are recorded; then verify its backups and remove Concertable's migrated planning corpus and generic
-planning/session-recovery machinery.
+Paused: Tommy — provide an executable `codex` CLI so the live clean-start workspace can complete the required
+real Claude/Codex create, resume, replacement, and restart-recovery acceptance. Resume when both providers
+have recovered an accepted daily working set from the new store; then remove Concertable's migrated planning
+corpus and generic planning/session-recovery machinery.
 
 ## External parity preparation
 
 - Current Concertable preview: source head `5b9e20e7723aadc3813548ac833a339b1652b23b`; 10 Epics, 25 Features,
   and 132 Work items; preview SHA-256
-  `58960b6c2090231ddb7187feb3da4f943f2dee3d2406320095f7b1a9e7d228b5`. It is the only preview eligible for
-  owner review and apply. Preview:
+  `58960b6c2090231ddb7187feb3da4f943f2dee3d2406320095f7b1a9e7d228b5`. It was applied to the accepted clean
+  Workboard workspace as planning-store commit `fd4618a8e5c0dfa249d83f1fc91f91e12c6bcb0e`. Preview:
   `C:\Users\TommySeery\AppData\Local\Temp\agent-workboard-phase7-concertable-preview-20260828-current.json`.
 - Real Concertable preview: source head `74a7bf123750abdf38f568e6548e3cc9dac58464`; 10 Epics, 25 Features,
   and 132 Work items; preview SHA-256
@@ -69,9 +67,12 @@ planning/session-recovery machinery.
   candidates remain unselected for explicit review.
   Backup: `C:\Users\TOMMYS~1\AppData\Local\Temp\agent-workboard-phase7-catalogue-19fa9d7a1cd64c6c8658d35cae4df9ed.sqlite`.
   Preview: `C:\Users\TOMMYS~1\AppData\Local\Temp\agent-workboard-phase7-catalogue-19fa9d7a1cd64c6c8658d35cae4df9ed.json`.
-- Neither preview has been applied to an accepted destination. The verified backup and both editable
-  previews remain available in the current user's temporary directory until destination review and owner
-  acceptance are complete.
+- The legacy Context Catalogue will not be imported. Its 1,793 session candidates had no associations and
+  are intentionally excluded from this clean-start cutover; the verified source backup remains available.
+- The current preview was applied to the clean live database at
+  `C:\Users\TommySeery\AppData\Local\Agent Workboard\Agent Workboard\data\workboard.sqlite` and planning
+  store `C:\Users\TommySeery\agent-workboard-store`. The previous database and planning store remain as
+  dated rollback copies ending in `.pre-phase7-20260828`.
 - The Concertable preview was also applied to an isolated Workboard database and planning store at
   `C:\Users\TOMMYS~1\AppData\Local\Temp\agent-workboard-phase7-parity-2d6f6666170a439a98b534e463fa3625`.
   It published 168 planning-store files in clean commit `25afbd312d3540c0aa46bc65c4dfd2d14d79c338`.
@@ -93,6 +94,8 @@ planning/session-recovery machinery.
   candidate.
 - Real Concertable dogfood found and repaired replay undercounting and same-commit overcounting.
 - Native Codex integration no longer generates invalid PowerShell hook commands.
+- The accepted clean-start Workboard workspace now owns the current Concertable import; legacy sessions are
+  intentionally absent.
 
 ## Verification
 
@@ -104,6 +107,8 @@ planning/session-recovery machinery.
   25 Features, and 132 Work items.
 - The isolated parity destination and its verified backup both report 10 Epics, 25 Features, 132 Work items,
   and 167 planning documents.
+- The clean live workspace and its verified backup report 10 Epics, 25 Features, 132 Work items, and 167
+  planning documents. Its recovery preview is empty, as expected before the first new managed session.
 
 ## Reviews
 
@@ -113,7 +118,8 @@ resolved, and the latest incremental pass is approved and clean.
 
 ## Decisions, discoveries, blockers, and deviations
 
-- Legacy session import is review-first: candidates are unselected until the user explicitly selects them.
+- Legacy session import is excluded from the clean-start cutover; future CLI sessions become the managed
+  history instead.
 - Repository ownership evidence can come from an explicit repository, a source worktree, or an absolute
   observed working directory beneath known repository paths.
 - Concertable planning/recovery deletion remains gated by reviewed import parity, real restart recovery, and
