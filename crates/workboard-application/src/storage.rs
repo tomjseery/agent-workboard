@@ -12,7 +12,7 @@ use workboard_core::{ConversationId, LaunchLeaseId};
 
 use crate::AppError;
 
-const CURRENT_SCHEMA_VERSION: i64 = 25;
+const CURRENT_SCHEMA_VERSION: i64 = 26;
 const FOUNDATION_SCHEMA_CHECKSUM: &str = "agent-workboard-foundation-v1";
 const LAUNCH_LEASE_SCHEMA_CHECKSUM: &str = "agent-workboard-launch-leases-v1";
 const WORKBOARD_DOMAIN_SCHEMA_CHECKSUM: &str = "agent-workboard-domain-v1";
@@ -558,6 +558,91 @@ const IMPORT_DOCUMENT_MEMBERSHIP_GUARDS_SQL: &str =
  )
  BEGIN
      SELECT RAISE(ABORT, 'imported Work item repositories are finalized');
+ END;";
+const IMPORT_DOCUMENT_COHORT_GUARDS_SCHEMA_CHECKSUM: &str =
+    "agent-workboard-import-document-cohort-guards-v1";
+const IMPORT_DOCUMENT_COHORT_GUARDS_SQL: &str =
+    "CREATE VIEW concertable_import_cohort_evidence_failures AS
+ SELECT batch.id AS import_id
+   FROM import_batches batch
+  WHERE batch.kind = 'concertable_plans'
+    AND (
+        NOT EXISTS (
+            SELECT 1
+              FROM features feature
+              JOIN epics epic ON epic.id = feature.epic_id
+             WHERE epic.workspace_id = batch.workspace_id
+               AND epic.created_at = batch.imported_at
+               AND feature.created_at = batch.imported_at
+        )
+        OR EXISTS (
+            SELECT 1
+              FROM epics epic
+             WHERE epic.workspace_id = batch.workspace_id
+               AND epic.created_at = batch.imported_at
+               AND NOT EXISTS (
+                   SELECT 1
+                     FROM concertable_import_expected_documents expected
+                     JOIN documents document ON document.id = expected.document_id
+                    WHERE expected.import_id = batch.id
+                      AND expected.destination_kind = 'epic'
+                      AND document.epic_id = epic.id
+               )
+        )
+        OR EXISTS (
+            SELECT 1
+              FROM features feature
+              JOIN epics epic ON epic.id = feature.epic_id
+             WHERE epic.workspace_id = batch.workspace_id
+               AND epic.created_at = batch.imported_at
+               AND feature.created_at = batch.imported_at
+               AND NOT EXISTS (
+                   SELECT 1
+                     FROM concertable_import_expected_documents expected
+                     JOIN documents document ON document.id = expected.document_id
+                    WHERE expected.import_id = batch.id
+                      AND expected.destination_kind = 'feature'
+                      AND document.feature_id = feature.id
+               )
+        )
+        OR EXISTS (
+            SELECT 1
+              FROM work_items work_item
+              JOIN features feature ON feature.id = work_item.feature_id
+              JOIN epics epic ON epic.id = feature.epic_id
+             WHERE epic.workspace_id = batch.workspace_id
+               AND epic.created_at = batch.imported_at
+               AND feature.created_at = batch.imported_at
+               AND work_item.created_at = batch.imported_at
+               AND NOT EXISTS (
+                   SELECT 1
+                     FROM concertable_import_expected_documents expected
+                     JOIN documents document ON document.id = expected.document_id
+                    WHERE expected.import_id = batch.id
+                      AND expected.destination_kind = 'work_item'
+                      AND document.work_item_id = work_item.id
+               )
+        )
+    );
+ DROP TRIGGER import_document_membership_finalizations_valid;
+ CREATE TRIGGER import_document_membership_finalizations_valid
+ BEFORE INSERT ON import_document_membership_finalizations
+ WHEN NOT EXISTS (
+     SELECT 1 FROM import_batches batch
+      WHERE batch.id = NEW.import_id
+        AND batch.kind = 'concertable_plans'
+        AND batch.imported_at = NEW.finalized_at
+ )
+ OR EXISTS (
+     SELECT 1 FROM concertable_import_membership_evidence_failures failure
+      WHERE failure.import_id = NEW.import_id
+ )
+ OR EXISTS (
+     SELECT 1 FROM concertable_import_cohort_evidence_failures failure
+      WHERE failure.import_id = NEW.import_id
+ )
+ BEGIN
+     SELECT RAISE(ABORT, 'import document membership finalization is invalid');
  END;";
 const IMPORT_BATCH_REPOSITORY_REPAIR_SQL: &str = "UPDATE import_batches
     SET repository_id = (
@@ -1611,6 +1696,13 @@ fn migrate(connection: &Connection) -> Result<(), AppError> {
         IMPORT_DOCUMENT_MEMBERSHIP_GUARDS_SQL,
         validate_finalized_import_document_memberships,
     )?;
+    apply_validated_migration(
+        connection,
+        26,
+        IMPORT_DOCUMENT_COHORT_GUARDS_SCHEMA_CHECKSUM,
+        IMPORT_DOCUMENT_COHORT_GUARDS_SQL,
+        validate_finalized_import_document_cohorts,
+    )?;
     Ok(())
 }
 
@@ -2309,6 +2401,34 @@ fn validate_finalized_import_document_memberships(
     )))
 }
 
+fn validate_finalized_import_document_cohorts(
+    transaction: &Transaction<'_>,
+) -> Result<(), AppError> {
+    let invalid = transaction
+        .prepare(
+            "SELECT finalization.import_id
+               FROM import_document_membership_finalizations finalization
+               JOIN import_batches batch ON batch.id = finalization.import_id
+               LEFT JOIN concertable_import_membership_evidence_failures membership_failure
+                 ON membership_failure.import_id = finalization.import_id
+               LEFT JOIN concertable_import_cohort_evidence_failures cohort_failure
+                 ON cohort_failure.import_id = finalization.import_id
+              WHERE batch.imported_at <> finalization.finalized_at
+                 OR membership_failure.import_id IS NOT NULL
+                 OR cohort_failure.import_id IS NOT NULL
+              ORDER BY finalization.import_id",
+        )?
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    if invalid.is_empty() {
+        return Ok(());
+    }
+    Err(AppError::Domain(format!(
+        "schema migration 26 cannot validate finalized Concertable import hierarchy evidence for {}; restore the complete hierarchy, documents, revisions, and memberships, then retry",
+        invalid.join(", ")
+    )))
+}
+
 fn create_import_batch_repository_immutable_trigger(
     transaction: &Transaction<'_>,
 ) -> Result<(), AppError> {
@@ -2360,6 +2480,7 @@ mod tests {
                  DROP TRIGGER IF EXISTS import_work_item_membership_parent_immutable;
                  DROP TRIGGER IF EXISTS import_feature_membership_parent_immutable;
                  DROP TRIGGER IF EXISTS import_epic_membership_parent_immutable;
+                 DROP VIEW IF EXISTS concertable_import_cohort_evidence_failures;
                  DROP VIEW IF EXISTS concertable_import_membership_evidence_failures;
                  DROP VIEW IF EXISTS concertable_import_expected_documents;
                  DROP TRIGGER IF EXISTS import_source_destinations_finalized_insert;
@@ -3174,7 +3295,7 @@ mod tests {
         assert_eq!(preserved_attestation, valid_attestation);
         assert_eq!(legacy_authority, "immutable_evidence");
         let health = store.health().expect("storage health");
-        assert_eq!(health.schema_version, 25);
+        assert_eq!(health.schema_version, 26);
         assert!(health.is_healthy());
         let audited_attestations: Vec<(String, String, String, String)> = store
             .read(|connection| {
@@ -3219,7 +3340,7 @@ mod tests {
             .expect("read upgraded schema 20 attestations");
         assert_eq!(upgraded_attestations, audited_attestations);
         let health = store.health().expect("upgraded storage health");
-        assert_eq!(health.schema_version, 25);
+        assert_eq!(health.schema_version, 26);
         assert!(health.is_healthy());
         drop(store);
 
