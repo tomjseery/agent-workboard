@@ -19,8 +19,10 @@ use crate::git::{GitCli, GitRepositoryDiscovery, GitWorktreeResolver};
 use crate::integration_service::IntegrationService;
 use crate::native_sources::NativeSourceService;
 use crate::planning_store::{DocumentFrontMatter, PlanningStore, StoredDocument};
+use crate::planning_workflow::PlanningWorkflowService;
 use crate::session_launch::SessionLaunchService;
 use crate::storage::{SqliteStore, StorageHealth};
+use crate::workflow_operations::{AssignedHierarchy, WorkflowOperationService};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InitialiseWorkspace {
@@ -94,6 +96,29 @@ impl WorkboardApplication {
         IntegrationService::new(&mut self.store)
     }
 
+    pub fn planning_workflows(&mut self) -> PlanningWorkflowService<'_> {
+        PlanningWorkflowService::new(&mut self.store)
+    }
+
+    pub fn workflow_operations(&mut self) -> WorkflowOperationService<'_> {
+        WorkflowOperationService::new(&mut self.store)
+    }
+
+    pub fn assigned_hierarchy(
+        &mut self,
+        workflow_token: &str,
+        observed_at: OffsetDateTime,
+    ) -> Result<AssignedHierarchy, AppError> {
+        let principal = self
+            .workflow_operations()
+            .authenticate(workflow_token, observed_at)?;
+        let snapshot = self.snapshot(principal.workspace_id)?;
+        Ok(AssignedHierarchy {
+            principal,
+            snapshot,
+        })
+    }
+
     pub fn effective_work_item_checkout(
         &self,
         work_item_id: WorkItemId,
@@ -138,6 +163,111 @@ impl WorkboardApplication {
                 path: PathBuf::from(path),
                 title: title.clone(),
             })
+        })
+    }
+
+    pub fn ensure_repository_checkout(
+        &mut self,
+        repository_id: RepositoryId,
+        observed_at: OffsetDateTime,
+    ) -> Result<ManagedCheckout, AppError> {
+        let (path, title) = self.store.read(|connection| {
+            connection
+                .query_row(
+                    "SELECT path.path, repository.title
+                     FROM repositories repository
+                     JOIN repository_paths path
+                       ON path.repository_id = repository.id AND path.observed_until IS NULL
+                     WHERE repository.id = ?1 AND repository.is_planning_store = 0",
+                    [repository_id.to_string()],
+                    |row| {
+                        Ok((
+                            PathBuf::from(row.get::<_, String>(0)?),
+                            row.get::<_, String>(1)?,
+                        ))
+                    },
+                )
+                .optional()?
+                .ok_or(AppError::ResumeRepositoryMismatch)
+        })?;
+        let resolved = GitCli.resolve(&path)?;
+        let identity = path_text(&resolved.git_dir)?;
+        let branch = resolved
+            .branch
+            .as_deref()
+            .and_then(|value| value.strip_prefix("refs/heads/"));
+        let at = observed_at
+            .format(&Rfc3339)
+            .map_err(|error| AppError::Domain(error.to_string()))?;
+        let checkout_id = self.store.write(|transaction| {
+            let existing = transaction
+                .query_row(
+                    "SELECT id FROM checkouts
+                     WHERE repository_id = ?1 AND git_worktree_identity = ?2",
+                    params![repository_id.to_string(), identity],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            let checkout_id = existing
+                .as_deref()
+                .map(parse_id)
+                .transpose()?
+                .unwrap_or_else(CheckoutId::generate);
+            transaction.execute(
+                "INSERT INTO checkouts (
+                     id, repository_id, git_worktree_identity, branch, head,
+                     availability, created_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, 'available', ?6)
+                 ON CONFLICT(repository_id, git_worktree_identity) DO UPDATE SET
+                     branch = excluded.branch,
+                     head = excluded.head,
+                     availability = 'available'",
+                params![
+                    checkout_id.to_string(),
+                    repository_id.to_string(),
+                    identity,
+                    branch,
+                    resolved.head_oid,
+                    at,
+                ],
+            )?;
+            let current = transaction
+                .query_row(
+                    "SELECT id, path FROM checkout_paths
+                     WHERE checkout_id = ?1 AND observed_until IS NULL",
+                    [checkout_id.to_string()],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )
+                .optional()?;
+            if current
+                .as_ref()
+                .is_none_or(|(_, current)| !paths_equal(Path::new(current), &resolved.path))
+            {
+                if let Some((path_id, _)) = current {
+                    transaction.execute(
+                        "UPDATE checkout_paths SET observed_until = ?2 WHERE id = ?1",
+                        params![path_id, at],
+                    )?;
+                }
+                transaction.execute(
+                    "INSERT INTO checkout_paths (
+                         id, checkout_id, path, observed_from, observed_until
+                     ) VALUES (?1, ?2, ?3, ?4, NULL)",
+                    params![
+                        CheckoutPathId::generate().to_string(),
+                        checkout_id.to_string(),
+                        path_text(&resolved.path)?,
+                        at,
+                    ],
+                )?;
+            }
+            Ok(checkout_id)
+        })?;
+        Ok(ManagedCheckout {
+            checkout_id,
+            repository_id,
+            path: resolved.path,
+            title,
         })
     }
 
@@ -862,7 +992,7 @@ impl WorkboardApplication {
                         feature.workflow_state, document.id
                  FROM features feature
                  JOIN epics epic ON epic.id = feature.epic_id
-                 JOIN documents document ON document.feature_id = feature.id
+                 LEFT JOIN documents document ON document.feature_id = feature.id
                  WHERE epic.workspace_id = ?1 ORDER BY epic.slug, feature.slug",
             )?;
             let rows = statement
@@ -873,7 +1003,7 @@ impl WorkboardApplication {
                         row.get::<_, String>(2)?,
                         row.get::<_, String>(3)?,
                         row.get::<_, String>(4)?,
-                        row.get::<_, String>(5)?,
+                        row.get::<_, Option<String>>(5)?,
                     ))
                 })?
                 .collect::<Result<Vec<_>, _>>()?;
@@ -884,7 +1014,7 @@ impl WorkboardApplication {
                         epic_id: parse_id(&epic_id)?,
                         slug: parse_slug(slug)?,
                         title,
-                        document_id: parse_id(&document_id)?,
+                        document_id: document_id.as_deref().map(parse_id).transpose()?,
                         state: parse_workflow_state(&state)?,
                     })
                 })
@@ -1369,8 +1499,7 @@ mod tests {
     use rusqlite::params;
     use tempfile::TempDir;
     use workboard_core::{
-        AssociationIntervalId, CheckoutId, CheckoutPathId, ConversationId, DocumentId, FeatureId,
-        Slug, WorkItemId,
+        AssociationIntervalId, ConversationId, DocumentId, FeatureId, Slug, WorkItemId,
     };
 
     use super::{CreateEpic, InitialiseWorkspace, RegisterRepository, WorkboardApplication};
@@ -1458,6 +1587,18 @@ mod tests {
             })
             .expect("repeat repository registration");
         assert_eq!(repository.id, repeated_repository.id);
+        let observed_at = time::OffsetDateTime::parse(
+            "2026-08-28T13:00:00Z",
+            &time::format_description::well_known::Rfc3339,
+        )
+        .expect("checkout timestamp");
+        let checkout = application
+            .ensure_repository_checkout(repository.id, observed_at)
+            .expect("register repository checkout");
+        let repeated_checkout = application
+            .ensure_repository_checkout(repository.id, observed_at)
+            .expect("repeat repository checkout registration");
+        assert_eq!(checkout, repeated_checkout);
         let epic = application
             .create_epic(CreateEpic {
                 workspace_id: snapshot.workspace.id,
@@ -1478,8 +1619,7 @@ mod tests {
         let feature_document_id = DocumentId::generate();
         let work_item_id = WorkItemId::generate();
         let work_item_document_id = DocumentId::generate();
-        let checkout_id = CheckoutId::generate();
-        let checkout_path_id = CheckoutPathId::generate();
+        let checkout_id = checkout.checkout_id;
         let session_id = ConversationId::generate();
         let association_id = AssociationIntervalId::generate();
         let planning_repository_id = snapshot.workspace.planning_store_repository_id;
@@ -1533,25 +1673,6 @@ mod tests {
                         work_item_id.to_string(),
                         "workspaces/concertable/epics/launch/features/availability/work-items/api.md",
                         hash,
-                        now,
-                    ],
-                )?;
-                transaction.execute(
-                    "INSERT INTO checkouts (
-                         id, repository_id, git_worktree_identity, branch, head,
-                         availability, created_at
-                     ) VALUES (?1, ?2, 'availability-checkout', 'feature/availability',
-                         '0123456789abcdef', 'available', ?3)",
-                    params![checkout_id.to_string(), repository.id.to_string(), now],
-                )?;
-                transaction.execute(
-                    "INSERT INTO checkout_paths (
-                         id, checkout_id, path, observed_from, observed_until
-                     ) VALUES (?1, ?2, ?3, ?4, NULL)",
-                    params![
-                        checkout_path_id.to_string(),
-                        checkout_id.to_string(),
-                        repository.paths[0].path.to_string_lossy(),
                         now,
                     ],
                 )?;

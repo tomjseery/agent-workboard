@@ -6,6 +6,7 @@ use std::process::Command;
 use crate::{ConversationRef, Tool};
 
 pub const WORKBOARD_LAUNCH_TOKEN_ENV: &str = "WORKBOARD_LAUNCH_TOKEN";
+pub const WORKBOARD_WORKFLOW_TOKEN_ENV: &str = "WORKBOARD_WORKFLOW_TOKEN";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandSpec {
@@ -61,6 +62,8 @@ pub struct ManagedLaunchRequest {
     pub working_directory: PathBuf,
     pub title: String,
     pub launch_token: String,
+    pub workflow_token: Option<String>,
+    pub initial_prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,6 +73,7 @@ pub struct ManagedLaunchSpec {
     working_directory: PathBuf,
     title: String,
     launch_token: String,
+    workflow_token: Option<String>,
 }
 
 impl ManagedLaunchSpec {
@@ -83,25 +87,44 @@ impl ManagedLaunchSpec {
             working_directory,
             title,
             launch_token,
+            workflow_token,
+            initial_prompt,
         } = request;
         validate_path(&working_directory)?;
         if launch_token.is_empty() || launch_token.chars().any(char::is_control) {
             return Err(LaunchSpecError::UnsafeLaunchToken);
         }
+        if workflow_token
+            .as_deref()
+            .is_some_and(|token| token.is_empty() || token.chars().any(char::is_control))
+        {
+            return Err(LaunchSpecError::UnsafeLaunchToken);
+        }
         if native_executable.as_os_str().is_empty() {
             return Err(LaunchSpecError::EmptyExecutable);
         }
-        let native_arguments = match (tool, mode) {
-            (Tool::Claude, ManagedLaunchMode::New) => Vec::new(),
-            (Tool::Claude, ManagedLaunchMode::Resume(native_id)) => {
+        if initial_prompt.as_deref().is_some_and(|prompt| {
+            prompt.is_empty() || prompt.len() > 16 * 1024 || prompt.contains('\0')
+        }) {
+            return Err(LaunchSpecError::UnsafeInitialPrompt);
+        }
+        let native_arguments = match (tool, mode, initial_prompt) {
+            (Tool::Claude, ManagedLaunchMode::New, prompt) => {
+                prompt.map(OsString::from).into_iter().collect()
+            }
+            (Tool::Claude, ManagedLaunchMode::Resume(native_id), None) => {
                 validate_native_id(&native_id)?;
                 vec![OsString::from("--resume"), OsString::from(native_id)]
             }
-            (Tool::Codex, ManagedLaunchMode::New) => vec![
-                OsString::from("--cd"),
-                working_directory.as_os_str().to_owned(),
-            ],
-            (Tool::Codex, ManagedLaunchMode::Resume(native_id)) => {
+            (Tool::Codex, ManagedLaunchMode::New, prompt) => {
+                let mut arguments = vec![
+                    OsString::from("--cd"),
+                    working_directory.as_os_str().to_owned(),
+                ];
+                arguments.extend(prompt.map(OsString::from));
+                arguments
+            }
+            (Tool::Codex, ManagedLaunchMode::Resume(native_id), None) => {
                 validate_native_id(&native_id)?;
                 vec![
                     OsString::from("--cd"),
@@ -109,6 +132,9 @@ impl ManagedLaunchSpec {
                     OsString::from("resume"),
                     OsString::from(native_id),
                 ]
+            }
+            (_, ManagedLaunchMode::Resume(_), Some(_)) => {
+                return Err(LaunchSpecError::UnsafeInitialPrompt);
             }
         };
         let native = CommandSpec::new(native_executable, native_arguments);
@@ -129,6 +155,7 @@ impl ManagedLaunchSpec {
             working_directory,
             title,
             launch_token,
+            workflow_token,
         })
     }
 
@@ -152,12 +179,19 @@ impl ManagedLaunchSpec {
         &self.launch_token
     }
 
+    pub fn workflow_token(&self) -> Option<&str> {
+        self.workflow_token.as_deref()
+    }
+
     pub fn direct_child_command(&self) -> Command {
         let mut command = Command::new(self.terminal.executable());
         command
             .args(self.terminal.arguments())
             .current_dir(&self.working_directory)
             .env(WORKBOARD_LAUNCH_TOKEN_ENV, &self.launch_token);
+        if let Some(token) = &self.workflow_token {
+            command.env(WORKBOARD_WORKFLOW_TOKEN_ENV, token);
+        }
         command
     }
 }
@@ -277,6 +311,7 @@ pub enum LaunchSpecError {
     UnsafeWorkingDirectory(PathBuf),
     UnsafeNativeId,
     UnsafeLaunchToken,
+    UnsafeInitialPrompt,
 }
 
 impl Display for LaunchSpecError {
@@ -297,6 +332,7 @@ impl Display for LaunchSpecError {
                 formatter.write_str("native conversation ID contains a control character")
             }
             Self::UnsafeLaunchToken => formatter.write_str("launch token is empty or unsafe"),
+            Self::UnsafeInitialPrompt => formatter.write_str("initial prompt is empty or unsafe"),
         }
     }
 }
@@ -347,7 +383,8 @@ mod tests {
 
     use super::{
         LaunchSpecError, ManagedLaunchMode, ManagedLaunchRequest, ManagedLaunchSpec,
-        ResumeLaunchSpec, TerminalKind, WORKBOARD_LAUNCH_TOKEN_ENV, sanitise_terminal_title,
+        ResumeLaunchSpec, TerminalKind, WORKBOARD_LAUNCH_TOKEN_ENV, WORKBOARD_WORKFLOW_TOKEN_ENV,
+        sanitise_terminal_title,
     };
 
     #[test]
@@ -362,13 +399,20 @@ mod tests {
             working_directory: directory.clone(),
             title: "Planning".to_owned(),
             launch_token: "opaque-token".to_owned(),
+            workflow_token: Some("workflow-token".to_owned()),
+            initial_prompt: Some("Use the managed Feature planning workflow.".to_owned()),
         })
         .expect("new managed launch");
         assert_eq!(
             new_launch.native().arguments(),
-            [OsString::from("--cd"), directory.as_os_str().to_owned()]
+            [
+                OsString::from("--cd"),
+                directory.as_os_str().to_owned(),
+                OsString::from("Use the managed Feature planning workflow.")
+            ]
         );
         assert_eq!(new_launch.launch_token(), "opaque-token");
+        assert_eq!(new_launch.workflow_token(), Some("workflow-token"));
         let command = new_launch.direct_child_command();
         assert_eq!(command.get_current_dir(), Some(directory.as_path()));
         assert_eq!(
@@ -377,6 +421,13 @@ mod tests {
                 .find(|(name, _)| *name == std::ffi::OsStr::new(WORKBOARD_LAUNCH_TOKEN_ENV))
                 .and_then(|(_, value)| value),
             Some(std::ffi::OsStr::new("opaque-token"))
+        );
+        assert_eq!(
+            command
+                .get_envs()
+                .find(|(name, _)| *name == std::ffi::OsStr::new(WORKBOARD_WORKFLOW_TOKEN_ENV))
+                .and_then(|(_, value)| value),
+            Some(std::ffi::OsStr::new("workflow-token"))
         );
 
         let resumed = ManagedLaunchSpec::new(ManagedLaunchRequest {
@@ -388,6 +439,8 @@ mod tests {
             working_directory: directory.clone(),
             title: "Delivery".to_owned(),
             launch_token: "opaque-token".to_owned(),
+            workflow_token: None,
+            initial_prompt: None,
         })
         .expect("managed resume");
         assert_eq!(

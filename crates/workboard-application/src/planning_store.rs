@@ -29,6 +29,13 @@ pub struct StoredDocument {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewPlanningDocument {
+    pub relative_path: PathBuf,
+    pub front_matter: DocumentFrontMatter,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanningStore {
     root: PathBuf,
 }
@@ -207,6 +214,83 @@ impl PlanningStore {
         })
     }
 
+    pub fn publish_batch_new(
+        &self,
+        documents: &[NewPlanningDocument],
+        message: &str,
+    ) -> Result<Vec<StoredDocument>, AppError> {
+        if documents.is_empty() {
+            return Err(AppError::PlanningDocumentInvalid(
+                "at least one planning document is required".to_owned(),
+            ));
+        }
+        let mut candidates = Vec::with_capacity(documents.len());
+        for document in documents {
+            let path = self.resolve_relative(&document.relative_path)?;
+            if candidates.iter().any(
+                |(candidate, _, _): &(PathBuf, String, &NewPlanningDocument)| {
+                    paths_equal(candidate, &path)
+                },
+            ) {
+                return Err(AppError::PlanningDocumentInvalid(
+                    "planning publication contains a duplicate path".to_owned(),
+                ));
+            }
+            let rendered = render_document(&document.front_matter, &document.body)?;
+            if path.is_file() {
+                let existing = fs::read(&path)
+                    .map_err(|source| planning_io("reading a document", &path, source))?;
+                if existing != rendered.as_bytes() {
+                    return Err(AppError::PlanningDocumentExists(path));
+                }
+            }
+            candidates.push((path, rendered, document));
+        }
+        for (path, rendered, _) in &candidates {
+            if path.exists() {
+                continue;
+            }
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).map_err(|source| {
+                    planning_io("creating document directories", parent, source)
+                })?;
+            }
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)
+                .map_err(|source| planning_io("creating a document", path, source))?;
+            file.write_all(rendered.as_bytes())
+                .and_then(|_| file.sync_all())
+                .map_err(|source| planning_io("writing a document", path, source))?;
+        }
+        let relative_paths = documents
+            .iter()
+            .map(|document| document.relative_path.as_path())
+            .collect::<Vec<_>>();
+        let changed = relative_paths
+            .iter()
+            .map(|path| self.path_is_changed(path))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .any(|changed| changed);
+        let observed_commit = if changed {
+            self.commit_paths(relative_paths, message)?
+        } else {
+            self.head()?
+        };
+        Ok(candidates
+            .into_iter()
+            .map(|(_, rendered, document)| StoredDocument {
+                front_matter: document.front_matter.clone(),
+                body: normalise_body(&document.body),
+                relative_path: document.relative_path.clone(),
+                content_hash: content_hash(rendered.as_bytes()),
+                observed_commit: Some(observed_commit.clone()),
+            })
+            .collect())
+    }
+
     pub fn read_document(&self, relative_path: &Path) -> Result<StoredDocument, AppError> {
         let path = self.resolve_relative(relative_path)?;
         let bytes =
@@ -306,6 +390,18 @@ impl PlanningStore {
             )));
         }
         Ok(self.root.join(relative_path))
+    }
+
+    fn path_is_changed(&self, relative_path: &Path) -> Result<bool, AppError> {
+        self.resolve_relative(relative_path)?;
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&self.root)
+            .args(["status", "--porcelain", "--"])
+            .arg(relative_path)
+            .output()
+            .map_err(AppError::GitIo)?;
+        successful_git(output).map(|value| !value.trim().is_empty())
     }
 }
 

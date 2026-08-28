@@ -765,7 +765,7 @@ mod tests {
             epic_id,
             slug: Slug::new("availability").expect("Feature slug"),
             title: "Availability".to_owned(),
-            document_id: DocumentId::generate(),
+            document_id: Some(DocumentId::generate()),
             state: WorkflowState::ReconciliationRequired,
         });
         let work_item_id = WorkItemId::generate();

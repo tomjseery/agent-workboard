@@ -358,7 +358,11 @@ fn validate_resolved(
     request: &PrepareFeatureCheckout,
     resolved: &ResolvedWorktree,
 ) -> Result<(), AppError> {
-    if !paths_equal(&request.target, &resolved.path) {
+    let target = request
+        .target
+        .canonicalize()
+        .unwrap_or_else(|_| request.target.clone());
+    if !paths_equal(&target, &resolved.path) {
         return Err(AppError::CallerIdentityMismatch);
     }
     if resolved.branch.as_deref().map(short_branch) != Some(request.branch.as_str()) {
@@ -408,9 +412,18 @@ where
 
 #[cfg(windows)]
 fn paths_equal(left: &Path, right: &Path) -> bool {
-    left.as_os_str()
-        .to_string_lossy()
-        .eq_ignore_ascii_case(&right.as_os_str().to_string_lossy())
+    windows_path_text(left).eq_ignore_ascii_case(&windows_path_text(right))
+}
+
+#[cfg(windows)]
+fn windows_path_text(path: &Path) -> String {
+    let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let value = resolved.as_os_str().to_string_lossy();
+    if let Some(value) = value.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{value}")
+    } else {
+        value.strip_prefix(r"\\?\").unwrap_or(&value).to_owned()
+    }
 }
 
 #[cfg(not(windows))]

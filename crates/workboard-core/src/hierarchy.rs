@@ -183,7 +183,7 @@ pub struct Feature {
     pub epic_id: EpicId,
     pub slug: Slug,
     pub title: String,
-    pub document_id: DocumentId,
+    pub document_id: Option<DocumentId>,
     pub state: WorkflowState,
 }
 

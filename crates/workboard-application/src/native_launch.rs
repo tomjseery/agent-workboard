@@ -89,6 +89,18 @@ pub struct PreparedManagedLaunch {
     pub preview: ManagedLaunchPreview,
 }
 
+pub struct PrepareManagedLaunch {
+    pub tool: Tool,
+    pub mode: ManagedLaunchMode,
+    pub working_directory: PathBuf,
+    pub title: String,
+    pub terminal: PathBuf,
+    pub native: PathBuf,
+    pub launch_token: String,
+    pub workflow_token: Option<String>,
+    pub initial_prompt: Option<String>,
+}
+
 pub trait LaunchExecutor {
     fn launch(&self, specification: &ResumeLaunchSpec) -> Result<LaunchedProcess, AppError>;
 }
@@ -211,26 +223,22 @@ pub fn prepare_resume(
 }
 
 pub fn prepare_managed_launch(
-    tool: Tool,
-    mode: ManagedLaunchMode,
-    working_directory: &Path,
-    title: &str,
-    terminal: &Path,
-    native: &Path,
-    launch_token: String,
+    request: PrepareManagedLaunch,
 ) -> Result<PreparedManagedLaunch, AppError> {
-    let (terminal_kind, terminal) = resolve_terminal(terminal)?;
-    let native = resolve_executable(native)
-        .ok_or_else(|| AppError::NativeExecutableUnavailable(native.to_owned()))?;
+    let (terminal_kind, terminal) = resolve_terminal(&request.terminal)?;
+    let native = resolve_executable(&request.native)
+        .ok_or_else(|| AppError::NativeExecutableUnavailable(request.native.clone()))?;
     let launch = ManagedLaunchSpec::new(ManagedLaunchRequest {
         terminal_kind,
         terminal_executable: terminal,
         native_executable: native,
-        tool,
-        mode,
-        working_directory: working_directory.to_path_buf(),
-        title: title.to_owned(),
-        launch_token,
+        tool: request.tool,
+        mode: request.mode,
+        working_directory: request.working_directory,
+        title: request.title,
+        launch_token: request.launch_token,
+        workflow_token: request.workflow_token,
+        initial_prompt: request.initial_prompt,
     })
     .map_err(|error| AppError::Domain(error.to_string()))?;
     let preview = ManagedLaunchPreview {

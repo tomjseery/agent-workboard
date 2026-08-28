@@ -66,6 +66,8 @@ define_id!(GitOperationIntentId);
 define_id!(LaunchIntentId);
 define_id!(SessionBindingId);
 define_id!(ManagedSessionId);
+define_id!(WorkItemCheckpointId);
+define_id!(ManagedSessionRequestId);
 
 #[cfg(test)]
 mod tests {
