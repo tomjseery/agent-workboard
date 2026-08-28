@@ -12,7 +12,7 @@ use workboard_core::{ConversationId, LaunchLeaseId};
 
 use crate::AppError;
 
-const CURRENT_SCHEMA_VERSION: i64 = 24;
+const CURRENT_SCHEMA_VERSION: i64 = 25;
 const FOUNDATION_SCHEMA_CHECKSUM: &str = "agent-workboard-foundation-v1";
 const LAUNCH_LEASE_SCHEMA_CHECKSUM: &str = "agent-workboard-launch-leases-v1";
 const WORKBOARD_DOMAIN_SCHEMA_CHECKSUM: &str = "agent-workboard-domain-v1";
@@ -253,6 +253,311 @@ const IMPORT_DOCUMENT_MEMBERSHIP_FINALIZATION_SQL: &str =
  )
  BEGIN
      SELECT RAISE(ABORT, 'import source destinations are finalized');
+ END;";
+const IMPORT_DOCUMENT_MEMBERSHIP_GUARDS_SCHEMA_CHECKSUM: &str =
+    "agent-workboard-import-document-membership-guards-v1";
+const IMPORT_DOCUMENT_MEMBERSHIP_GUARDS_SQL: &str =
+    "DROP TRIGGER import_document_membership_finalizations_valid;
+ DROP TRIGGER import_document_member_fields_immutable;
+ CREATE VIEW concertable_import_expected_documents AS
+ SELECT batch.id AS import_id, document.id AS document_id, 'epic' AS destination_kind
+   FROM import_batches batch
+   JOIN workspaces workspace ON workspace.id = batch.workspace_id
+   JOIN epics epic
+     ON epic.workspace_id = batch.workspace_id
+    AND epic.created_at = batch.imported_at
+   JOIN documents document
+     ON document.epic_id = epic.id
+    AND document.repository_id = workspace.planning_store_repository_id
+    AND document.kind = 'epic'
+   JOIN document_revisions revision
+     ON revision.document_id = document.id
+    AND revision.observed_commit = batch.planning_commit
+    AND revision.observed_at = batch.imported_at
+  WHERE batch.kind = 'concertable_plans'
+ UNION ALL
+ SELECT batch.id, document.id, 'feature'
+   FROM import_batches batch
+   JOIN workspaces workspace ON workspace.id = batch.workspace_id
+   JOIN epics epic
+     ON epic.workspace_id = batch.workspace_id
+    AND epic.created_at = batch.imported_at
+   JOIN features feature
+     ON feature.epic_id = epic.id
+    AND feature.created_at = batch.imported_at
+   JOIN documents document
+     ON document.feature_id = feature.id
+    AND document.repository_id = workspace.planning_store_repository_id
+    AND document.kind = 'feature'
+   JOIN document_revisions revision
+     ON revision.document_id = document.id
+    AND revision.observed_commit = batch.planning_commit
+    AND revision.observed_at = batch.imported_at
+  WHERE batch.kind = 'concertable_plans'
+ UNION ALL
+ SELECT batch.id, document.id, 'work_item'
+   FROM import_batches batch
+   JOIN workspaces workspace ON workspace.id = batch.workspace_id
+   JOIN epics epic
+     ON epic.workspace_id = batch.workspace_id
+    AND epic.created_at = batch.imported_at
+   JOIN features feature
+     ON feature.epic_id = epic.id
+    AND feature.created_at = batch.imported_at
+   JOIN work_items work_item
+     ON work_item.feature_id = feature.id
+    AND work_item.created_at = batch.imported_at
+   JOIN documents document
+     ON document.work_item_id = work_item.id
+    AND document.repository_id = workspace.planning_store_repository_id
+    AND document.kind = 'work_item'
+   JOIN document_revisions revision
+     ON revision.document_id = document.id
+    AND revision.observed_commit = batch.planning_commit
+    AND revision.observed_at = batch.imported_at
+  WHERE batch.kind = 'concertable_plans';
+ CREATE VIEW concertable_import_membership_evidence_failures AS
+ SELECT batch.id AS import_id
+   FROM import_batches batch
+  WHERE batch.kind = 'concertable_plans'
+    AND (
+        NOT EXISTS (
+            SELECT 1 FROM import_document_memberships membership
+             WHERE membership.import_id = batch.id
+        )
+        OR EXISTS (
+            SELECT expected.document_id, expected.destination_kind
+              FROM concertable_import_expected_documents expected
+             WHERE expected.import_id = batch.id
+            EXCEPT
+            SELECT membership.document_id, membership.destination_kind
+              FROM import_document_memberships membership
+             WHERE membership.import_id = batch.id
+        )
+        OR EXISTS (
+            SELECT membership.document_id, membership.destination_kind
+              FROM import_document_memberships membership
+             WHERE membership.import_id = batch.id
+            EXCEPT
+            SELECT expected.document_id, expected.destination_kind
+              FROM concertable_import_expected_documents expected
+             WHERE expected.import_id = batch.id
+        )
+        OR EXISTS (
+            SELECT 1
+              FROM import_source_destinations source
+              LEFT JOIN import_document_memberships membership
+                ON membership.import_id = source.import_id
+               AND membership.document_id = source.document_id
+               AND membership.destination_kind = source.destination_kind
+              LEFT JOIN documents document ON document.id = membership.document_id
+             WHERE source.import_id = batch.id
+               AND (
+                   membership.document_id IS NULL
+                   OR document.id IS NULL
+                   OR NOT (
+                       (source.destination_kind = 'epic'
+                        AND document.epic_id = source.destination_id)
+                       OR (source.destination_kind = 'feature'
+                           AND document.feature_id = source.destination_id)
+                       OR (source.destination_kind = 'work_item'
+                           AND document.work_item_id = source.destination_id)
+                   )
+               )
+        )
+        OR EXISTS (
+            SELECT 1
+              FROM import_document_memberships membership
+              JOIN documents document ON document.id = membership.document_id
+             WHERE membership.import_id = batch.id
+               AND NOT EXISTS (
+                   SELECT 1 FROM import_source_destinations source
+                    WHERE source.import_id = batch.id
+                      AND source.document_id = membership.document_id
+                      AND source.destination_kind = membership.destination_kind
+               )
+               AND NOT (
+                   membership.destination_kind = 'epic'
+                   AND EXISTS (
+                       SELECT 1
+                         FROM features feature
+                         JOIN documents feature_document
+                           ON feature_document.feature_id = feature.id
+                         JOIN import_document_memberships feature_membership
+                           ON feature_membership.import_id = batch.id
+                          AND feature_membership.document_id = feature_document.id
+                          AND feature_membership.destination_kind = 'feature'
+                         JOIN import_source_destinations source
+                           ON source.import_id = batch.id
+                          AND source.document_id = feature_document.id
+                          AND source.destination_kind = 'feature'
+                        WHERE feature.epic_id = document.epic_id
+                   )
+               )
+        )
+        OR EXISTS (
+            SELECT 1
+              FROM import_document_memberships membership
+              JOIN documents document ON document.id = membership.document_id
+             WHERE membership.import_id = batch.id
+               AND membership.destination_kind = 'work_item'
+               AND NOT EXISTS (
+                   SELECT 1 FROM work_item_repositories relation
+                    WHERE relation.work_item_id = document.work_item_id
+                      AND relation.repository_id = batch.repository_id
+               )
+        )
+    );
+ CREATE TRIGGER import_document_membership_finalizations_valid
+ BEFORE INSERT ON import_document_membership_finalizations
+ WHEN NOT EXISTS (
+     SELECT 1 FROM import_batches batch
+      WHERE batch.id = NEW.import_id
+        AND batch.kind = 'concertable_plans'
+        AND batch.imported_at = NEW.finalized_at
+ )
+ OR EXISTS (
+     SELECT 1 FROM concertable_import_membership_evidence_failures failure
+      WHERE failure.import_id = NEW.import_id
+ )
+ BEGIN
+     SELECT RAISE(ABORT, 'import document membership finalization is invalid');
+ END;
+ CREATE TRIGGER import_document_member_fields_immutable
+ BEFORE UPDATE OF repository_id, epic_id, feature_id, work_item_id, kind ON documents
+ WHEN (
+         NEW.repository_id IS NOT OLD.repository_id
+         OR NEW.epic_id IS NOT OLD.epic_id
+         OR NEW.feature_id IS NOT OLD.feature_id
+         OR NEW.work_item_id IS NOT OLD.work_item_id
+         OR NEW.kind IS NOT OLD.kind
+      )
+      AND EXISTS (
+          SELECT 1
+            FROM import_document_memberships membership
+            JOIN import_document_membership_finalizations finalization
+              ON finalization.import_id = membership.import_id
+           WHERE membership.document_id = OLD.id
+      )
+ BEGIN
+     SELECT RAISE(ABORT, 'import document membership fields are immutable');
+ END;
+ CREATE TRIGGER import_epic_membership_parent_immutable
+ BEFORE UPDATE OF workspace_id ON epics
+ WHEN NEW.workspace_id IS NOT OLD.workspace_id
+      AND EXISTS (
+          SELECT 1
+            FROM documents document
+            JOIN import_document_memberships membership
+              ON membership.document_id = document.id
+            JOIN import_document_membership_finalizations finalization
+              ON finalization.import_id = membership.import_id
+           WHERE document.epic_id = OLD.id
+      )
+ BEGIN
+     SELECT RAISE(ABORT, 'imported Epic workspace is immutable');
+ END;
+ CREATE TRIGGER import_feature_membership_parent_immutable
+ BEFORE UPDATE OF epic_id ON features
+ WHEN NEW.epic_id IS NOT OLD.epic_id
+      AND EXISTS (
+          SELECT 1
+            FROM documents document
+            JOIN import_document_memberships membership
+              ON membership.document_id = document.id
+            JOIN import_document_membership_finalizations finalization
+              ON finalization.import_id = membership.import_id
+           WHERE document.feature_id = OLD.id
+      )
+ BEGIN
+     SELECT RAISE(ABORT, 'imported Feature parent is immutable');
+ END;
+ CREATE TRIGGER import_work_item_membership_parent_immutable
+ BEFORE UPDATE OF feature_id ON work_items
+ WHEN NEW.feature_id IS NOT OLD.feature_id
+      AND EXISTS (
+          SELECT 1
+            FROM documents document
+            JOIN import_document_memberships membership
+              ON membership.document_id = document.id
+            JOIN import_document_membership_finalizations finalization
+              ON finalization.import_id = membership.import_id
+           WHERE document.work_item_id = OLD.id
+      )
+ BEGIN
+     SELECT RAISE(ABORT, 'imported Work item parent is immutable');
+ END;
+ CREATE TRIGGER import_workspace_planning_repository_immutable
+ BEFORE UPDATE OF planning_store_repository_id ON workspaces
+ WHEN NEW.planning_store_repository_id IS NOT OLD.planning_store_repository_id
+      AND EXISTS (
+          SELECT 1
+            FROM import_batches batch
+            JOIN import_document_membership_finalizations finalization
+              ON finalization.import_id = batch.id
+           WHERE batch.workspace_id = OLD.id
+      )
+ BEGIN
+     SELECT RAISE(ABORT, 'import workspace planning repository is immutable');
+ END;
+ CREATE TRIGGER import_planning_repository_parent_immutable
+ BEFORE UPDATE OF workspace_id, is_planning_store ON repositories
+ WHEN (
+         NEW.workspace_id IS NOT OLD.workspace_id
+         OR NEW.is_planning_store IS NOT OLD.is_planning_store
+      )
+      AND EXISTS (
+          SELECT 1
+            FROM workspaces workspace
+            JOIN import_batches batch ON batch.workspace_id = workspace.id
+            JOIN import_document_membership_finalizations finalization
+              ON finalization.import_id = batch.id
+           WHERE workspace.planning_store_repository_id = OLD.id
+      )
+ BEGIN
+     SELECT RAISE(ABORT, 'import planning repository parent is immutable');
+ END;
+ CREATE TRIGGER import_work_item_repositories_finalized_insert
+ BEFORE INSERT ON work_item_repositories
+ WHEN EXISTS (
+     SELECT 1
+       FROM documents document
+       JOIN import_document_memberships membership
+         ON membership.document_id = document.id
+       JOIN import_document_membership_finalizations finalization
+         ON finalization.import_id = membership.import_id
+      WHERE document.work_item_id = NEW.work_item_id
+ )
+ BEGIN
+     SELECT RAISE(ABORT, 'imported Work item repositories are finalized');
+ END;
+ CREATE TRIGGER import_work_item_repositories_finalized_update
+ BEFORE UPDATE ON work_item_repositories
+ WHEN EXISTS (
+     SELECT 1
+       FROM documents document
+       JOIN import_document_memberships membership
+         ON membership.document_id = document.id
+       JOIN import_document_membership_finalizations finalization
+         ON finalization.import_id = membership.import_id
+      WHERE document.work_item_id IN (OLD.work_item_id, NEW.work_item_id)
+ )
+ BEGIN
+     SELECT RAISE(ABORT, 'imported Work item repositories are finalized');
+ END;
+ CREATE TRIGGER import_work_item_repositories_finalized_delete
+ BEFORE DELETE ON work_item_repositories
+ WHEN EXISTS (
+     SELECT 1
+       FROM documents document
+       JOIN import_document_memberships membership
+         ON membership.document_id = document.id
+       JOIN import_document_membership_finalizations finalization
+         ON finalization.import_id = membership.import_id
+      WHERE document.work_item_id = OLD.work_item_id
+ )
+ BEGIN
+     SELECT RAISE(ABORT, 'imported Work item repositories are finalized');
  END;";
 const IMPORT_BATCH_REPOSITORY_REPAIR_SQL: &str = "UPDATE import_batches
     SET repository_id = (
@@ -1299,6 +1604,13 @@ fn migrate(connection: &Connection) -> Result<(), AppError> {
         IMPORT_DOCUMENT_MEMBERSHIP_FINALIZATION_SQL,
         validate_import_document_memberships,
     )?;
+    apply_validated_migration(
+        connection,
+        25,
+        IMPORT_DOCUMENT_MEMBERSHIP_GUARDS_SCHEMA_CHECKSUM,
+        IMPORT_DOCUMENT_MEMBERSHIP_GUARDS_SQL,
+        validate_finalized_import_document_memberships,
+    )?;
     Ok(())
 }
 
@@ -1972,6 +2284,31 @@ fn validate_import_document_memberships(transaction: &Transaction<'_>) -> Result
     )))
 }
 
+fn validate_finalized_import_document_memberships(
+    transaction: &Transaction<'_>,
+) -> Result<(), AppError> {
+    let invalid = transaction
+        .prepare(
+            "SELECT finalization.import_id
+               FROM import_document_membership_finalizations finalization
+               JOIN import_batches batch ON batch.id = finalization.import_id
+               LEFT JOIN concertable_import_membership_evidence_failures failure
+                 ON failure.import_id = finalization.import_id
+              WHERE batch.imported_at <> finalization.finalized_at
+                 OR failure.import_id IS NOT NULL
+              ORDER BY finalization.import_id",
+        )?
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    if invalid.is_empty() {
+        return Ok(());
+    }
+    Err(AppError::Domain(format!(
+        "schema migration 25 cannot validate finalized Concertable import document membership for {}; restore complete immutable membership, source mapping, hierarchy, planning repository, and Work item repository evidence, then retry",
+        invalid.join(", ")
+    )))
+}
+
 fn create_import_batch_repository_immutable_trigger(
     transaction: &Transaction<'_>,
 ) -> Result<(), AppError> {
@@ -2015,7 +2352,17 @@ mod tests {
     fn drop_import_document_membership_schema(connection: &Connection) {
         connection
             .execute_batch(
-                "DROP TRIGGER IF EXISTS import_source_destinations_finalized_insert;
+                "DROP TRIGGER IF EXISTS import_work_item_repositories_finalized_insert;
+                 DROP TRIGGER IF EXISTS import_work_item_repositories_finalized_update;
+                 DROP TRIGGER IF EXISTS import_work_item_repositories_finalized_delete;
+                 DROP TRIGGER IF EXISTS import_planning_repository_parent_immutable;
+                 DROP TRIGGER IF EXISTS import_workspace_planning_repository_immutable;
+                 DROP TRIGGER IF EXISTS import_work_item_membership_parent_immutable;
+                 DROP TRIGGER IF EXISTS import_feature_membership_parent_immutable;
+                 DROP TRIGGER IF EXISTS import_epic_membership_parent_immutable;
+                 DROP VIEW IF EXISTS concertable_import_membership_evidence_failures;
+                 DROP VIEW IF EXISTS concertable_import_expected_documents;
+                 DROP TRIGGER IF EXISTS import_source_destinations_finalized_insert;
                  DROP TRIGGER IF EXISTS import_source_destinations_finalized_update;
                  DROP TRIGGER IF EXISTS import_source_destinations_finalized_delete;
                  DROP TRIGGER IF EXISTS import_document_batches_finalized;
@@ -2827,7 +3174,7 @@ mod tests {
         assert_eq!(preserved_attestation, valid_attestation);
         assert_eq!(legacy_authority, "immutable_evidence");
         let health = store.health().expect("storage health");
-        assert_eq!(health.schema_version, 24);
+        assert_eq!(health.schema_version, 25);
         assert!(health.is_healthy());
         let audited_attestations: Vec<(String, String, String, String)> = store
             .read(|connection| {
@@ -2872,7 +3219,7 @@ mod tests {
             .expect("read upgraded schema 20 attestations");
         assert_eq!(upgraded_attestations, audited_attestations);
         let health = store.health().expect("upgraded storage health");
-        assert_eq!(health.schema_version, 24);
+        assert_eq!(health.schema_version, 25);
         assert!(health.is_healthy());
         drop(store);
 

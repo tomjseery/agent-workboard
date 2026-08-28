@@ -1428,7 +1428,7 @@ mod tests {
 
     use rusqlite::{Connection, params};
     use tempfile::TempDir;
-    use workboard_core::{DocumentId, EpicId, Slug};
+    use workboard_core::{DocumentId, EpicId, FeatureId, ImportBatchId, Slug};
 
     use super::{
         CONCERTABLE_IMPORT_FORMAT_VERSION, ConcertableEpicImport, concertable_source_path,
@@ -1671,6 +1671,46 @@ mod tests {
             .expect("read upgraded import membership");
         assert_eq!(membership_count, 6);
         assert_eq!(unrelated_membership, 0);
+        let partial_feature_id = FeatureId::generate();
+        let partial_document_id = DocumentId::generate();
+        application
+            .store
+            .write(|transaction| {
+                transaction.execute(
+                    "INSERT INTO features (
+                         id, epic_id, slug, title, workflow_state, created_at
+                     ) VALUES (?1, ?2, 'partial-feature', 'Partial feature', 'planned', 'later')",
+                    params![
+                        partial_feature_id.to_string(),
+                        unrelated_epic_id.to_string(),
+                    ],
+                )?;
+                transaction.execute(
+                    "INSERT INTO documents (
+                         id, repository_id, feature_id, kind, relative_path, content_hash,
+                         observed_commit, observed_at
+                     ) VALUES (?1, ?2, ?3, 'feature', 'partial-feature.md', ?4, ?5, 'later')",
+                    params![
+                        partial_document_id.to_string(),
+                        workspace.workspace.planning_store_repository_id.to_string(),
+                        partial_feature_id.to_string(),
+                        "b".repeat(64),
+                        first.planning_commit,
+                    ],
+                )?;
+                transaction.execute(
+                    "INSERT INTO document_revisions (
+                         document_id, revision, content_hash, observed_commit, observed_at
+                     ) VALUES (?1, 1, ?2, ?3, 'later')",
+                    params![
+                        partial_document_id.to_string(),
+                        "b".repeat(64),
+                        first.planning_commit,
+                    ],
+                )?;
+                Ok(())
+            })
+            .expect("record partial-import target");
         let insert_error = application
             .store
             .write(|transaction| {
@@ -1688,6 +1728,57 @@ mod tests {
             .expect_err("reject membership after finalization");
         assert!(insert_error.to_string().contains("membership is finalized"));
         let imported_document_id = preview.epics[0].document_id;
+        let imported_epic_id = preview.epics[0].id;
+        let imported_feature_id = preview.epics[1].features[0].id;
+        let imported_work_item_id = preview.epics[1].features[0].work_items[0].id;
+        let source_count_before: i64 = application
+            .store
+            .read(|connection| {
+                connection
+                    .query_row(
+                        "SELECT COUNT(*) FROM import_source_destinations WHERE import_id = ?1",
+                        [first.import_id.to_string()],
+                        |row| row.get(0),
+                    )
+                    .map_err(Into::into)
+            })
+            .expect("count source mappings before rejected insert");
+        let source_insert_error = application
+            .store
+            .write(|transaction| {
+                transaction.execute(
+                    "INSERT INTO import_source_destinations (
+                         import_id, source_path, source_hash, destination_kind,
+                         destination_id, document_id
+                     ) VALUES (?1, 'late-source.md', ?2, 'epic', ?3, ?4)",
+                    params![
+                        first.import_id.to_string(),
+                        "a".repeat(64),
+                        imported_epic_id.to_string(),
+                        imported_document_id.to_string(),
+                    ],
+                )?;
+                Ok(())
+            })
+            .expect_err("reject source mapping after finalization");
+        assert!(
+            source_insert_error
+                .to_string()
+                .contains("source destinations are finalized")
+        );
+        let source_count_after: i64 = application
+            .store
+            .read(|connection| {
+                connection
+                    .query_row(
+                        "SELECT COUNT(*) FROM import_source_destinations WHERE import_id = ?1",
+                        [first.import_id.to_string()],
+                        |row| row.get(0),
+                    )
+                    .map_err(Into::into)
+            })
+            .expect("count source mappings after rejected insert");
+        assert_eq!(source_count_after, source_count_before);
         let update_error = application
             .store
             .write(|transaction| {
@@ -1702,6 +1793,147 @@ mod tests {
             update_error
                 .to_string()
                 .contains("membership fields are immutable")
+        );
+        let owner_update_error = application
+            .store
+            .write(|transaction| {
+                transaction.execute(
+                    "UPDATE documents SET epic_id = ?2 WHERE id = ?1",
+                    params![
+                        imported_document_id.to_string(),
+                        unrelated_epic_id.to_string(),
+                    ],
+                )?;
+                Ok(())
+            })
+            .expect_err("reject imported document owner reassignment");
+        assert!(
+            owner_update_error
+                .to_string()
+                .contains("membership fields are immutable")
+        );
+        let hierarchy_update_error = application
+            .store
+            .write(|transaction| {
+                transaction.execute(
+                    "UPDATE features SET epic_id = ?2 WHERE id = ?1",
+                    params![
+                        imported_feature_id.to_string(),
+                        unrelated_epic_id.to_string(),
+                    ],
+                )?;
+                Ok(())
+            })
+            .expect_err("reject imported Feature parent reassignment");
+        assert!(
+            hierarchy_update_error
+                .to_string()
+                .contains("imported Feature parent is immutable")
+        );
+        let planning_repository_update_error = application
+            .store
+            .write(|transaction| {
+                transaction.execute(
+                    "UPDATE workspaces SET planning_store_repository_id = ?2 WHERE id = ?1",
+                    params![
+                        workspace.workspace.id.to_string(),
+                        repository.id.to_string(),
+                    ],
+                )?;
+                Ok(())
+            })
+            .expect_err("reject imported workspace planning repository reassignment");
+        assert!(
+            planning_repository_update_error
+                .to_string()
+                .contains("import workspace planning repository is immutable")
+        );
+        let work_item_repository_error = application
+            .store
+            .write(|transaction| {
+                transaction.execute(
+                    "INSERT INTO work_item_repositories (work_item_id, repository_id)
+                     VALUES (?1, ?2)",
+                    params![
+                        imported_work_item_id.to_string(),
+                        workspace.workspace.planning_store_repository_id.to_string(),
+                    ],
+                )?;
+                Ok(())
+            })
+            .expect_err("reject imported Work item repository association");
+        assert!(
+            work_item_repository_error
+                .to_string()
+                .contains("imported Work item repositories are finalized")
+        );
+        application
+            .store
+            .write(|transaction| {
+                transaction.execute(
+                    "UPDATE features SET workflow_state = 'planning_active' WHERE id = ?1",
+                    [imported_feature_id.to_string()],
+                )?;
+                transaction.execute(
+                    "UPDATE work_items SET status = 'review' WHERE id = ?1",
+                    [imported_work_item_id.to_string()],
+                )?;
+                Ok(())
+            })
+            .expect("update ordinary imported workflow state");
+        let partial_import_id = ImportBatchId::generate();
+        let partial_finalization_error = application
+            .store
+            .write(|transaction| {
+                transaction.execute(
+                    "INSERT INTO import_batches (
+                         id, workspace_id, kind, source_path, source_head, preview_hash,
+                         planning_commit, imported_at, repository_id
+                     ) VALUES (?1, ?2, 'concertable_plans', 'partial', ?3, ?4, ?5, ?6, ?7)",
+                    params![
+                        partial_import_id.to_string(),
+                        workspace.workspace.id.to_string(),
+                        preview.source_head,
+                        "d".repeat(64),
+                        first.planning_commit,
+                        "later",
+                        repository.id.to_string(),
+                    ],
+                )?;
+                transaction.execute(
+                    "INSERT INTO import_document_memberships (
+                         import_id, document_id, destination_kind
+                    ) VALUES (?1, ?2, 'epic')",
+                    params![
+                        partial_import_id.to_string(),
+                        unrelated_document_id.to_string(),
+                    ],
+                )?;
+                transaction.execute(
+                    "INSERT INTO import_source_destinations (
+                         import_id, source_path, source_hash, destination_kind,
+                         destination_id, document_id
+                     ) VALUES (?1, 'partial.md', ?2, 'epic', ?3, ?4)",
+                    params![
+                        partial_import_id.to_string(),
+                        "c".repeat(64),
+                        unrelated_epic_id.to_string(),
+                        unrelated_document_id.to_string(),
+                    ],
+                )?;
+                transaction.execute(
+                    "INSERT INTO import_document_membership_finalizations (import_id, finalized_at)
+                     VALUES (?1, ?2)",
+                    params![partial_import_id.to_string(), "later"],
+                )?;
+                Ok(())
+            })
+            .expect_err("reject partial import finalization");
+        assert!(
+            partial_finalization_error
+                .to_string()
+                .contains("finalization is invalid"),
+            "{partial_finalization_error}"
         );
         let second = application
             .apply_concertable_import(workspace.workspace.id, repository.id, &preview)
@@ -1720,9 +1952,9 @@ mod tests {
         assert_eq!(first.epics, 2);
         assert_eq!(first.source_destinations, 5);
         assert_eq!(snapshot.epics.len(), 3);
-        assert_eq!(snapshot.features.len(), 1);
+        assert_eq!(snapshot.features.len(), 2);
         assert_eq!(snapshot.work_items.len(), 3);
-        assert_eq!(snapshot.documents.len(), 7);
+        assert_eq!(snapshot.documents.len(), 8);
         assert_eq!(
             git_count(&fixture.directory.path().join("planning-store")),
             2
@@ -1912,7 +2144,7 @@ mod tests {
                 .health()
                 .expect("upgraded storage health")
                 .schema_version,
-            24
+            25
         );
     }
 
@@ -2007,7 +2239,7 @@ mod tests {
             .expect("snapshot imported Work items")
             .work_items[0]
             .id;
-        application
+        let association_error = application
             .store
             .write(|transaction| {
                 transaction.execute(
@@ -2017,7 +2249,12 @@ mod tests {
                 )?;
                 Ok(())
             })
-            .expect("associate imported Work item with unrelated repository");
+            .expect_err("reject imported Work item association after finalization");
+        assert!(
+            association_error
+                .to_string()
+                .contains("imported Work item repositories are finalized")
+        );
         fs::rename(
             &fixture.source,
             fixture.directory.path().join("Retired-Concertable"),
@@ -2239,7 +2476,17 @@ mod tests {
     fn restore_schema_23_import_database(connection: &Connection) {
         connection
             .execute_batch(
-                "DROP TRIGGER import_source_destinations_finalized_insert;
+                "DROP TRIGGER IF EXISTS import_work_item_repositories_finalized_insert;
+                 DROP TRIGGER IF EXISTS import_work_item_repositories_finalized_update;
+                 DROP TRIGGER IF EXISTS import_work_item_repositories_finalized_delete;
+                 DROP TRIGGER IF EXISTS import_planning_repository_parent_immutable;
+                 DROP TRIGGER IF EXISTS import_workspace_planning_repository_immutable;
+                 DROP TRIGGER IF EXISTS import_work_item_membership_parent_immutable;
+                 DROP TRIGGER IF EXISTS import_feature_membership_parent_immutable;
+                 DROP TRIGGER IF EXISTS import_epic_membership_parent_immutable;
+                 DROP VIEW IF EXISTS concertable_import_membership_evidence_failures;
+                 DROP VIEW IF EXISTS concertable_import_expected_documents;
+                 DROP TRIGGER import_source_destinations_finalized_insert;
                  DROP TRIGGER import_source_destinations_finalized_update;
                  DROP TRIGGER import_source_destinations_finalized_delete;
                  DROP TRIGGER import_document_batches_finalized;
