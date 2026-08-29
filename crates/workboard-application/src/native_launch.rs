@@ -539,6 +539,7 @@ mod tests {
             vec![
                 "--cd".to_owned(),
                 directory.path().to_string_lossy().into_owned(),
+                "--dangerously-bypass-hook-trust".to_owned(),
                 "resume".to_owned(),
                 "codex-resume".to_owned(),
             ]
