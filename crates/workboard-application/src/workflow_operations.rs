@@ -65,6 +65,12 @@ pub struct ManagedSessionRequestOutcome {
     pub status: String,
 }
 
+pub fn work_item_bootstrap_prompt(work_item_id: WorkItemId) -> String {
+    format!(
+        "Use the installed Agent Workboard workflow to execute assigned Work item {work_item_id}. Read the assigned hierarchy and repository instructions through the typed operation before changing files. Work only within the assigned checkout and Work-item scope. Record durable progress, blockers, decisions, verification, and next action through Workboard checkpoints. Do not use repository planning ledgers as managed-session state."
+    )
+}
+
 pub struct WorkflowOperationService<'a> {
     store: &'a mut SqliteStore,
 }
@@ -518,6 +524,7 @@ mod tests {
 
     use super::{
         CheckpointWorkItem, RequestManagedSession, WorkflowOperationService, timestamp, token_hash,
+        work_item_bootstrap_prompt,
     };
     use crate::AppError;
     use crate::storage::SqliteStore;
@@ -739,5 +746,16 @@ mod tests {
                 .authenticate(&fixture.token, fixture.at + time::Duration::hours(13),),
             Err(AppError::WorkflowOperationUnauthorized)
         ));
+    }
+
+    #[test]
+    fn work_item_bootstrap_requires_typed_hierarchy_and_checkpoints() {
+        let work_item_id = WorkItemId::generate();
+        let prompt = work_item_bootstrap_prompt(work_item_id);
+
+        assert!(prompt.contains(&work_item_id.to_string()));
+        assert!(prompt.contains("assigned hierarchy"));
+        assert!(prompt.contains("Workboard checkpoints"));
+        assert!(prompt.contains("Do not use repository planning ledgers"));
     }
 }

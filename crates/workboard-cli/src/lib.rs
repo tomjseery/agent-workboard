@@ -27,7 +27,9 @@ use workboard_application::native_sources::RefreshNativeSources;
 use workboard_application::planning_workflow::FeatureProposal;
 use workboard_application::planning_workflow::{CreateFeaturePlanning, planner_bootstrap_prompt};
 use workboard_application::session_launch::BeginManagedSessionLaunch;
-use workboard_application::workflow_operations::{CheckpointWorkItem, RequestManagedSession};
+use workboard_application::workflow_operations::{
+    CheckpointWorkItem, RequestManagedSession, work_item_bootstrap_prompt,
+};
 use workboard_application::workspace::{
     CreateEpic, InitialiseWorkspace, RegisterRepository, WorkboardApplication,
 };
@@ -890,7 +892,7 @@ fn execute(cli: Cli) -> Result<String, AppError> {
                 created_at: now,
                 expires_at: now + time::Duration::minutes(2),
                 resume_context: None,
-                initial_prompt: None,
+                initial_prompt: Some(work_item_bootstrap_prompt(work_item.id)),
             };
             let prepared = application.session_launch().begin(request)?;
             application
@@ -2190,7 +2192,7 @@ fn execute_managed_session_request(
             created_at: now,
             expires_at: now + time::Duration::minutes(2),
             resume_context: None,
-            initial_prompt: None,
+            initial_prompt: Some(work_item_bootstrap_prompt(requested.work_item_id)),
         })?;
     application
         .session_launch()

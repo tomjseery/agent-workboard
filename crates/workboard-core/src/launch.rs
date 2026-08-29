@@ -127,6 +127,7 @@ impl ManagedLaunchSpec {
                 let mut arguments = vec![
                     OsString::from("--cd"),
                     working_directory.as_os_str().to_owned(),
+                    OsString::from("--dangerously-bypass-hook-trust"),
                 ];
                 arguments.extend(prompt.map(OsString::from));
                 arguments
@@ -136,6 +137,7 @@ impl ManagedLaunchSpec {
                 vec![
                     OsString::from("--cd"),
                     working_directory.as_os_str().to_owned(),
+                    OsString::from("--dangerously-bypass-hook-trust"),
                     OsString::from("resume"),
                     OsString::from(native_id),
                 ]
@@ -233,6 +235,7 @@ impl ResumeLaunchSpec {
             Tool::Codex => vec![
                 OsString::from("--cd"),
                 working_directory.as_os_str().to_owned(),
+                OsString::from("--dangerously-bypass-hook-trust"),
                 OsString::from("resume"),
                 OsString::from(conversation.native_id()),
             ],
@@ -425,6 +428,7 @@ mod tests {
             [
                 OsString::from("--cd"),
                 directory.as_os_str().to_owned(),
+                OsString::from("--dangerously-bypass-hook-trust"),
                 OsString::from("Use the managed Feature planning workflow.")
             ]
         );
@@ -544,6 +548,7 @@ mod tests {
             [
                 OsString::from("--cd"),
                 directory.as_os_str().to_owned(),
+                OsString::from("--dangerously-bypass-hook-trust"),
                 OsString::from("resume"),
                 OsString::from("thread-456"),
             ]
@@ -615,6 +620,7 @@ mod tests {
                 OsString::from("codex"),
                 OsString::from("--cd"),
                 directory.as_os_str().to_owned(),
+                OsString::from("--dangerously-bypass-hook-trust"),
                 OsString::from("resume"),
                 OsString::from("thread-456"),
             ]
