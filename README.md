@@ -25,6 +25,9 @@ For non-interactive use, review `--dry-run` and then pass `--yes`. An unresumabl
 `--replace-unresumable` starts a confirmed new managed session for the same owner. Remove a session from future
 working sets explicitly with `workboard session remove-from-restore`.
 
+Close an exact Workboard-managed CLI and retire it from active and restore tracking while preserving its audit
+history with `workboard session close <session>`. Unmanaged sessions and changed process identities fail closed.
+
 ## Import existing work
 
 Concertable planning import is review-first. Generate an editable JSON preview, review its selected records,

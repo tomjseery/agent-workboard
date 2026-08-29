@@ -114,6 +114,10 @@ pub trait ProcessInspector {
     fn inspect(&self, pid: u32) -> Option<ProcessIdentity>;
 }
 
+pub trait ProcessTerminator {
+    fn terminate(&self, expected: &ProcessIdentity) -> Result<(), AppError>;
+}
+
 pub struct SystemLaunchExecutor;
 
 impl LaunchExecutor for SystemLaunchExecutor {
@@ -165,6 +169,8 @@ impl ManagedLaunchExecutor for SystemLaunchExecutor {
 
 pub struct SystemProcessInspector;
 
+pub struct SystemProcessTerminator;
+
 impl ProcessInspector for SystemProcessInspector {
     fn inspect(&self, pid: u32) -> Option<ProcessIdentity> {
         let pid = Pid::from_u32(pid);
@@ -182,6 +188,36 @@ impl ProcessInspector for SystemProcessInspector {
         )
         .ok()
     }
+}
+
+impl ProcessTerminator for SystemProcessTerminator {
+    fn terminate(&self, expected: &ProcessIdentity) -> Result<(), AppError> {
+        let observed = SystemProcessInspector
+            .inspect(expected.pid())
+            .ok_or(AppError::ManagedSessionProcessNotFound(expected.pid()))?;
+        if !same_process(&observed, expected) {
+            return Err(AppError::ManagedSessionProcessIdentityMismatch);
+        }
+        let pid = Pid::from_u32(expected.pid());
+        let mut system = System::new();
+        system.refresh_processes(ProcessesToUpdate::Some(&[pid]), false);
+        let process = system
+            .process(pid)
+            .ok_or(AppError::ManagedSessionProcessNotFound(expected.pid()))?;
+        if !process.kill() {
+            return Err(AppError::ManagedSessionProcessTerminationFailed(
+                expected.pid(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn same_process(left: &ProcessIdentity, right: &ProcessIdentity) -> bool {
+    left.pid() == right.pid()
+        && left.created_at() == right.created_at()
+        && left.executable() == right.executable()
+        && left.parent_pid() == right.parent_pid()
 }
 
 pub struct LaunchedProcess {

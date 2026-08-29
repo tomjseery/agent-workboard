@@ -102,6 +102,16 @@ pub enum AppError {
     LaunchLeaseLost,
     #[error("the managed launch token is missing, unknown, or no longer usable")]
     LaunchTokenInvalid,
+    #[error("the requested conversation is not a Workboard-managed session")]
+    ManagedSessionRequired,
+    #[error("the managed session has no exact process identity to close safely")]
+    ManagedSessionProcessUncorrelated,
+    #[error("the managed session process {0} is no longer running")]
+    ManagedSessionProcessNotFound(u32),
+    #[error("the running process no longer matches the managed session identity")]
+    ManagedSessionProcessIdentityMismatch,
+    #[error("the managed session process {0} could not be terminated")]
+    ManagedSessionProcessTerminationFailed(u32),
     #[error("the workflow operation is not authorized by a current managed-session binding")]
     WorkflowOperationUnauthorized,
     #[error("a repository workflow document changed before the checkpoint committed")]
@@ -249,6 +259,15 @@ impl AppError {
             Self::DuplicateUncertain => "duplicate_uncertain",
             Self::LaunchLeaseLost => "launch_lease_lost",
             Self::LaunchTokenInvalid => "launch_token_invalid",
+            Self::ManagedSessionRequired => "managed_session_required",
+            Self::ManagedSessionProcessUncorrelated => "managed_session_process_uncorrelated",
+            Self::ManagedSessionProcessNotFound(_) => "managed_session_process_not_found",
+            Self::ManagedSessionProcessIdentityMismatch => {
+                "managed_session_process_identity_mismatch"
+            }
+            Self::ManagedSessionProcessTerminationFailed(_) => {
+                "managed_session_process_termination_failed"
+            }
             Self::WorkflowOperationUnauthorized => "workflow_operation_unauthorized",
             Self::WorkflowDocumentChanged => "workflow_document_changed",
             Self::InvalidLiveObservation(_) => "invalid_live_observation",
