@@ -24,7 +24,7 @@ use workboard_application::integration::{
 use workboard_application::legacy_import::{
     ImportedSessionCandidate, LegacyImportPreview, snapshot_context_catalogue,
 };
-use workboard_application::native_launch::SystemLaunchExecutor;
+use workboard_application::native_launch::{SystemLaunchExecutor, SystemProcessTerminator};
 use workboard_application::native_sources::RefreshNativeSources;
 use workboard_application::planning_workflow::FeatureProposal;
 use workboard_application::planning_workflow::{CreateFeaturePlanning, planner_bootstrap_prompt};
@@ -286,6 +286,11 @@ enum SessionCommand {
     RemoveFromRestore {
         session: Option<String>,
         #[arg(long, default_value = "removed by user")]
+        reason: String,
+    },
+    Close {
+        session: Option<String>,
+        #[arg(long, default_value = "closed by user")]
         reason: String,
     },
     ImportedCandidates {
@@ -1075,6 +1080,24 @@ fn execute(cli: Cli) -> Result<String, AppError> {
                     "Removed {} from the restore set",
                     session.native.native_id()
                 ),
+            )
+        }
+        Some(Command::Session(SessionArgs {
+            command: SessionCommand::Close { session, reason },
+        })) => {
+            let workspace_id = resolve_workspace(&application, cli.workspace)?;
+            let snapshot = application.snapshot(workspace_id)?;
+            let session = select_session(&snapshot, session.as_deref(), None, cli.json)?.clone();
+            let closed = application.session_launch().close(
+                session.id,
+                &reason,
+                time::OffsetDateTime::now_utc(),
+                &SystemProcessTerminator,
+            )?;
+            output(
+                &closed,
+                cli.json,
+                format!("Closed managed session {}", closed.native_id),
             )
         }
         Some(Command::Session(SessionArgs {
@@ -2425,6 +2448,24 @@ mod tests {
         assert!(matches!(
             arguments.command,
             SessionCommand::RemoveFromRestore { session, reason }
+                if session.as_deref() == Some("thread-one") && reason == "completed"
+        ));
+
+        let cli = Cli::try_parse_from([
+            "workboard",
+            "session",
+            "close",
+            "thread-one",
+            "--reason",
+            "completed",
+        ])
+        .expect("close managed session command");
+        let Some(CliCommand::Session(arguments)) = cli.command else {
+            panic!("expected session command");
+        };
+        assert!(matches!(
+            arguments.command,
+            SessionCommand::Close { session, reason }
                 if session.as_deref() == Some("thread-one") && reason == "completed"
         ));
     }

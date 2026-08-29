@@ -18,7 +18,7 @@ use crate::hooks::{
 use crate::integration_service::record_hook_observation;
 use crate::native_launch::{
     ManagedLaunchExecutor, ManagedLaunchPreview, PrepareManagedLaunch, PreparedManagedLaunch,
-    ResumeContext, prepare_managed_launch, validate_native_source,
+    ProcessTerminator, ResumeContext, prepare_managed_launch, validate_native_source,
 };
 use crate::planning_workflow::activate_planning_for_binding;
 use crate::storage::SqliteStore;
@@ -65,6 +65,13 @@ pub struct ManagedSessionLaunchPreview {
 pub struct ExecutedSessionLaunch {
     pub intent_id: workboard_core::LaunchIntentId,
     pub terminal_process: ProcessIdentity,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ClosedManagedSession {
+    pub session_id: ConversationId,
+    pub native_id: String,
+    pub terminated_process: Option<ProcessIdentity>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -264,6 +271,34 @@ impl<'a> SessionLaunchService<'a> {
         })
     }
 
+    pub fn close(
+        &mut self,
+        session_id: ConversationId,
+        reason: &str,
+        closed_at: OffsetDateTime,
+        terminator: &impl ProcessTerminator,
+    ) -> Result<ClosedManagedSession, AppError> {
+        if reason.trim().is_empty() {
+            return Err(AppError::EmptyReason);
+        }
+        let session = self.managed_session_close_target(session_id)?;
+        if session.managed_until.is_none() && !session.status.indicates_stopped() {
+            let process = session
+                .process
+                .as_ref()
+                .ok_or(AppError::ManagedSessionProcessUncorrelated)?;
+            terminator.terminate(process)?;
+        }
+        self.store.write(|transaction| {
+            close_managed_session(transaction, session_id, closed_at, reason.trim())
+        })?;
+        Ok(ClosedManagedSession {
+            session_id,
+            native_id: session.native_id,
+            terminated_process: session.process,
+        })
+    }
+
     pub fn binding_for_intent(
         &self,
         intent_id: workboard_core::LaunchIntentId,
@@ -417,7 +452,12 @@ impl<'a> SessionLaunchService<'a> {
                 },
             )?;
             if observation.event == NativeHookEventKind::SessionEnd {
-                close_managed_session(transaction, session_id, observation.observed_at)?;
+                close_managed_session(
+                    transaction,
+                    session_id,
+                    observation.observed_at,
+                    "native session ended",
+                )?;
             }
             Ok(session_id)
         })?;
@@ -544,6 +584,71 @@ impl<'a> SessionLaunchService<'a> {
         })
     }
 
+    fn managed_session_close_target(
+        &self,
+        session_id: ConversationId,
+    ) -> Result<ManagedSessionCloseTarget, AppError> {
+        self.store.read(|connection| {
+            let row = connection
+                .query_row(
+                    "SELECT session.native_id, managed.managed_until,
+                            observation.status, observation.pid,
+                            observation.process_created_at, observation.executable,
+                            observation.parent_pid
+                     FROM managed_sessions managed
+                     JOIN native_sessions session ON session.id = managed.session_id
+                     LEFT JOIN live_observations observation ON observation.id = (
+                         SELECT latest.id FROM live_observations latest
+                         WHERE latest.session_id = managed.session_id
+                         ORDER BY latest.observed_at DESC LIMIT 1
+                     )
+                     WHERE managed.session_id = ?1
+                     ORDER BY managed.managed_from DESC LIMIT 1",
+                    [session_id.to_string()],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, Option<String>>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                            row.get::<_, Option<u32>>(3)?,
+                            row.get::<_, Option<String>>(4)?,
+                            row.get::<_, Option<String>>(5)?,
+                            row.get::<_, Option<u32>>(6)?,
+                        ))
+                    },
+                )
+                .optional()?;
+            let Some((native_id, managed_until, status, pid, created_at, executable, parent_pid)) =
+                row
+            else {
+                return Err(AppError::ManagedSessionRequired);
+            };
+            let status = status
+                .as_deref()
+                .map(parse_live_status)
+                .transpose()?
+                .unwrap_or(workboard_core::LiveStatus::Unknown);
+            let process = match (pid, created_at, executable) {
+                (Some(pid), Some(created_at), Some(executable)) => Some(
+                    ProcessIdentity::new(
+                        pid,
+                        parse_timestamp(&created_at)?,
+                        PathBuf::from(executable),
+                        parent_pid,
+                    )
+                    .map_err(|error| AppError::Domain(error.to_string()))?,
+                ),
+                _ => None,
+            };
+            Ok(ManagedSessionCloseTarget {
+                native_id,
+                managed_until,
+                status,
+                process,
+            })
+        })
+    }
+
     fn fail(
         &mut self,
         intent_id: workboard_core::LaunchIntentId,
@@ -557,6 +662,13 @@ impl<'a> SessionLaunchService<'a> {
             Ok(())
         })
     }
+}
+
+struct ManagedSessionCloseTarget {
+    native_id: String,
+    managed_until: Option<String>,
+    status: workboard_core::LiveStatus,
+    process: Option<ProcessIdentity>,
 }
 
 struct LaunchIntentRecord {
@@ -758,6 +870,7 @@ fn close_managed_session(
     transaction: &Transaction<'_>,
     session_id: ConversationId,
     observed_at: OffsetDateTime,
+    reason: &str,
 ) -> Result<(), AppError> {
     let timestamp = timestamp(observed_at);
     transaction.execute(
@@ -765,6 +878,24 @@ fn close_managed_session(
          SET status = 'stopped', managed_until = ?2
          WHERE session_id = ?1 AND managed_until IS NULL",
         params![session_id.to_string(), timestamp],
+    )?;
+    transaction.execute(
+        "UPDATE native_session_associations
+         SET associated_until = ?2
+         WHERE session_id = ?1 AND associated_until IS NULL",
+        params![session_id.to_string(), timestamp],
+    )?;
+    transaction.execute(
+        "UPDATE restore_memberships
+         SET active_until = ?2
+         WHERE session_id = ?1 AND active_until IS NULL",
+        params![session_id.to_string(), timestamp],
+    )?;
+    transaction.execute(
+        "UPDATE restore_entries
+         SET removed_at = ?2, remove_reason = ?3
+         WHERE session_id = ?1 AND removed_at IS NULL",
+        params![session_id.to_string(), timestamp, reason],
     )?;
     Ok(())
 }
@@ -1069,6 +1200,18 @@ fn live_status_name(status: workboard_core::LiveStatus) -> &'static str {
     }
 }
 
+fn parse_live_status(value: &str) -> Result<workboard_core::LiveStatus, AppError> {
+    match value {
+        "active" => Ok(workboard_core::LiveStatus::Active),
+        "idle" => Ok(workboard_core::LiveStatus::Idle),
+        "stopped" => Ok(workboard_core::LiveStatus::Stopped),
+        "unknown" => Ok(workboard_core::LiveStatus::Unknown),
+        "system_error" => Ok(workboard_core::LiveStatus::SystemError),
+        "not_loaded" => Ok(workboard_core::LiveStatus::NotLoaded),
+        _ => Err(AppError::Domain("live status is invalid".to_owned())),
+    }
+}
+
 fn owner_columns(owner: HierarchyOwner) -> (Option<String>, Option<String>, Option<String>) {
     match owner {
         HierarchyOwner::Epic(id) => (Some(id.to_string()), None, None),
@@ -1182,6 +1325,7 @@ fn paths_equal(left: &Path, right: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::fs;
     use std::path::{Path, PathBuf};
 
@@ -1197,7 +1341,7 @@ mod tests {
     use super::{BeginManagedSessionLaunch, ManagedLaunchExecutor, SessionLaunchService};
     use crate::AppError;
     use crate::hooks::HookIngestionMutation;
-    use crate::native_launch::{LaunchedProcess, ResumeContext, ResumeSource};
+    use crate::native_launch::{LaunchedProcess, ProcessTerminator, ResumeContext, ResumeSource};
     use crate::storage::SqliteStore;
 
     struct Fixture {
@@ -1228,6 +1372,26 @@ mod tests {
     }
 
     struct FailingExecutor;
+
+    struct RecordingTerminator {
+        expected: ProcessIdentity,
+        called: Cell<bool>,
+        fail: bool,
+    }
+
+    impl ProcessTerminator for RecordingTerminator {
+        fn terminate(&self, expected: &ProcessIdentity) -> Result<(), AppError> {
+            assert_eq!(expected, &self.expected);
+            self.called.set(true);
+            if self.fail {
+                Err(AppError::ManagedSessionProcessTerminationFailed(
+                    expected.pid(),
+                ))
+            } else {
+                Ok(())
+            }
+        }
+    }
 
     impl ManagedLaunchExecutor for FailingExecutor {
         fn launch(
@@ -1770,7 +1934,160 @@ mod tests {
     }
 
     #[test]
-    fn ongoing_hooks_end_liveness_but_preserve_restore_membership() {
+    fn explicit_close_terminates_exact_process_and_retires_restore_state() {
+        let mut fixture = fixture();
+        let launch_request = request(&fixture, "close-managed");
+        let prepared = SessionLaunchService::new(&mut fixture.store)
+            .begin(launch_request)
+            .expect("begin launch");
+        let mutation = hook(
+            &fixture,
+            Tool::Codex,
+            "thread-close",
+            &fixture.checkout_path,
+            Some(prepared.prepared.launch.launch_token().to_owned()),
+        );
+        let binding = SessionLaunchService::new(&mut fixture.store)
+            .bind_hook(&mutation)
+            .expect("bind managed session");
+        let expected = mutation.process.expect("exact process evidence");
+        let terminator = RecordingTerminator {
+            expected: expected.clone(),
+            called: Cell::new(false),
+            fail: false,
+        };
+
+        let closed = SessionLaunchService::new(&mut fixture.store)
+            .close(
+                binding.session_id,
+                "completed",
+                fixture.observed_at + time::Duration::seconds(3),
+                &terminator,
+            )
+            .expect("close managed session");
+
+        assert!(terminator.called.get());
+        assert_eq!(closed.native_id, "thread-close");
+        assert_eq!(closed.terminated_process, Some(expected));
+        let state = fixture
+            .store
+            .read(|connection| {
+                connection
+                    .query_row(
+                        "SELECT
+                             (SELECT status FROM managed_sessions),
+                             (SELECT managed_until IS NOT NULL FROM managed_sessions),
+                             (SELECT associated_until IS NOT NULL
+                              FROM native_session_associations),
+                             (SELECT active_until IS NOT NULL FROM restore_memberships),
+                             (SELECT removed_at IS NOT NULL FROM restore_entries),
+                             (SELECT remove_reason FROM restore_entries)",
+                        [],
+                        |row| {
+                            Ok((
+                                row.get::<_, String>(0)?,
+                                row.get::<_, i64>(1)?,
+                                row.get::<_, i64>(2)?,
+                                row.get::<_, i64>(3)?,
+                                row.get::<_, i64>(4)?,
+                                row.get::<_, String>(5)?,
+                            ))
+                        },
+                    )
+                    .map_err(Into::into)
+            })
+            .expect("closed managed state");
+        assert_eq!(
+            state,
+            ("stopped".to_owned(), 1, 1, 1, 1, "completed".to_owned())
+        );
+    }
+
+    #[test]
+    fn explicit_close_failure_and_unmanaged_sessions_leave_tracking_unchanged() {
+        let mut fixture = fixture();
+        let launch_request = request(&fixture, "close-failure");
+        let prepared = SessionLaunchService::new(&mut fixture.store)
+            .begin(launch_request)
+            .expect("begin launch");
+        let mutation = hook(
+            &fixture,
+            Tool::Codex,
+            "thread-close-failure",
+            &fixture.checkout_path,
+            Some(prepared.prepared.launch.launch_token().to_owned()),
+        );
+        let binding = SessionLaunchService::new(&mut fixture.store)
+            .bind_hook(&mutation)
+            .expect("bind managed session");
+        let terminator = RecordingTerminator {
+            expected: mutation.process.expect("exact process evidence"),
+            called: Cell::new(false),
+            fail: true,
+        };
+
+        assert!(matches!(
+            SessionLaunchService::new(&mut fixture.store).close(
+                binding.session_id,
+                "completed",
+                fixture.observed_at + time::Duration::seconds(3),
+                &terminator,
+            ),
+            Err(AppError::ManagedSessionProcessTerminationFailed(42))
+        ));
+        let still_current = fixture
+            .store
+            .read(|connection| {
+                connection
+                    .query_row(
+                        "SELECT
+                             (SELECT managed_until IS NULL FROM managed_sessions),
+                             (SELECT associated_until IS NULL
+                              FROM native_session_associations),
+                             (SELECT active_until IS NULL FROM restore_memberships),
+                             (SELECT removed_at IS NULL FROM restore_entries)",
+                        [],
+                        |row| {
+                            Ok((
+                                row.get::<_, i64>(0)?,
+                                row.get::<_, i64>(1)?,
+                                row.get::<_, i64>(2)?,
+                                row.get::<_, i64>(3)?,
+                            ))
+                        },
+                    )
+                    .map_err(Into::into)
+            })
+            .expect("current managed state");
+        assert_eq!(still_current, (1, 1, 1, 1));
+
+        let unmanaged = hook(
+            &fixture,
+            Tool::Codex,
+            "thread-unmanaged-close",
+            &fixture.checkout_path,
+            None,
+        );
+        let unmanaged_id = match SessionLaunchService::new(&mut fixture.store)
+            .ingest_hook(&unmanaged)
+            .expect("observe unmanaged session")
+        {
+            super::HookIngestionOutcome::Observed { session_id, .. } => session_id,
+            super::HookIngestionOutcome::Bound { .. } => panic!("unexpected managed binding"),
+        };
+        assert!(matches!(
+            SessionLaunchService::new(&mut fixture.store).close(
+                unmanaged_id,
+                "completed",
+                fixture.observed_at + time::Duration::seconds(5),
+                &terminator,
+            ),
+            Err(AppError::ManagedSessionRequired)
+        ));
+    }
+
+    #[test]
+    fn session_end_retires_managed_ownership_and_restore_membership() {
         let mut fixture = fixture();
         let launch_request = request(&fixture, "ongoing-hooks");
         let prepared = SessionLaunchService::new(&mut fixture.store)
@@ -1811,6 +2128,8 @@ mod tests {
                              (SELECT status FROM managed_sessions),
                              (SELECT active_until IS NULL FROM restore_memberships),
                              (SELECT removed_at IS NULL FROM restore_entries),
+                             (SELECT associated_until IS NULL
+                              FROM native_session_associations),
                              (SELECT COUNT(*) FROM live_observations)",
                         [],
                         |row| {
@@ -1820,13 +2139,17 @@ mod tests {
                                 row.get::<_, i64>(2)?,
                                 row.get::<_, i64>(3)?,
                                 row.get::<_, i64>(4)?,
+                                row.get::<_, i64>(5)?,
                             ))
                         },
                     )
                     .map_err(Into::into)
             })
             .expect("managed lifecycle state");
-        assert_eq!(state, ("stopped".to_owned(), "stopped".to_owned(), 1, 1, 3));
+        assert_eq!(
+            state,
+            ("stopped".to_owned(), "stopped".to_owned(), 0, 0, 0, 3)
+        );
     }
 
     #[test]
