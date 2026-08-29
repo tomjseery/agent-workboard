@@ -921,7 +921,7 @@ fn hook_arguments(tool: &str, database: &str) -> Vec<String> {
 }
 
 fn shell_command(executable: &str, arguments: &[String], windows: bool) -> String {
-    std::iter::once(executable)
+    let command = std::iter::once(executable)
         .chain(arguments.iter().map(String::as_str))
         .map(|value| {
             if windows {
@@ -931,7 +931,12 @@ fn shell_command(executable: &str, arguments: &[String], windows: bool) -> Strin
             }
         })
         .collect::<Vec<_>>()
-        .join(" ")
+        .join(" ");
+    if windows {
+        format!("& {command}")
+    } else {
+        command
+    }
 }
 
 fn remove_owned(mut value: Value) -> Result<Value, AppError> {
@@ -1477,8 +1482,20 @@ mod tests {
     use super::{
         ADAPTER_VERSION, INTEGRATION_OWNER, IntegrationObservations, IntegrationOperation,
         IntegrationPlan, IntegrationRegistration, IntegrationRequest, IntegrationState,
-        replace_configuration, replace_configuration_with,
+        replace_configuration, replace_configuration_with, shell_command,
     };
+
+    #[test]
+    fn windows_hook_command_invokes_the_quoted_executable() {
+        assert_eq!(
+            shell_command(
+                r"C:\Program Files\Agent Workboard\workboard.exe",
+                &["integration".to_owned(), "ingest-hook".to_owned()],
+                true,
+            ),
+            r#"& "C:\Program Files\Agent Workboard\workboard.exe" "integration" "ingest-hook""#
+        );
+    }
 
     #[test]
     fn claude_install_preserves_unrelated_settings_and_is_idempotent() {
