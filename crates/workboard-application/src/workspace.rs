@@ -117,9 +117,12 @@ impl WorkboardApplication {
         let principal = self
             .workflow_operations()
             .authenticate(workflow_token, observed_at)?;
+        let repository = self.workflow_operations().assigned_repository(&principal)?;
         let snapshot = self.snapshot(principal.workspace_id)?;
         Ok(AssignedHierarchy {
+            schema_version: 1,
             principal,
+            repository,
             snapshot,
         })
     }

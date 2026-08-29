@@ -99,7 +99,7 @@ fn tool_definitions() -> Value {
     json!([
         {
             "name": "hierarchy_read",
-            "description": "Read the exact hierarchy and checkout assigned to this managed session.",
+            "description": "Read the versioned hierarchy, exact checkout, and repository instructions assigned to this managed session.",
             "inputSchema": { "type": "object", "additionalProperties": false }
         },
         {
