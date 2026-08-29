@@ -896,23 +896,23 @@ fn execute(cli: Cli) -> Result<String, AppError> {
                 };
                 *repository_id
             };
-            application
-                .checkout_service()
-                .prepare_work_item(PrepareWorkItemCheckout {
-                    work_item_id: work_item.id,
-                    repository_id,
-                    idempotency_key: format!("{launch_idempotency_key}:checkout"),
-                    observed_at: now,
-                })?;
-            let checkout = application.effective_work_item_checkout(work_item.id)?;
+            let readiness =
+                application
+                    .checkout_service()
+                    .prepare_work_item(PrepareWorkItemCheckout {
+                        work_item_id: work_item.id,
+                        repository_id,
+                        idempotency_key: format!("{launch_idempotency_key}:checkout"),
+                        observed_at: now,
+                    })?;
             let request = BeginManagedSessionLaunch {
                 owner: HierarchyOwner::WorkItem(work_item.id),
                 role: ManagedSessionRole::WorkItemExecution,
                 tool,
                 mode: ManagedLaunchMode::New,
-                checkout_id: checkout.checkout_id,
-                working_directory: checkout.path,
-                title: work_item.title,
+                checkout_id: readiness.checkout_id,
+                working_directory: readiness.path,
+                title: work_item.title.clone(),
                 terminal_window: Some(format!("workboard-feature-{}", work_item.feature_id)),
                 terminal_executable: terminal.unwrap_or_else(default_terminal_executable),
                 native_executable: native.unwrap_or_else(|| default_native_executable(tool)),
@@ -933,7 +933,7 @@ fn execute(cli: Cli) -> Result<String, AppError> {
                 format!(
                     "Launched and bound {} session for {}",
                     tool_title(tool),
-                    checkout.title
+                    work_item.title
                 ),
             )
         }
