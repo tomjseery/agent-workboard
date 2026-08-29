@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -25,8 +26,37 @@ pub struct WorkflowPrincipal {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AssignedHierarchy {
+    pub schema_version: u32,
     pub principal: WorkflowPrincipal,
+    pub repository: AssignedRepository,
     pub snapshot: WorkspaceSnapshot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssignedRepository {
+    pub repository_id: RepositoryId,
+    pub checkout_id: CheckoutId,
+    pub path: PathBuf,
+    pub git_worktree_identity: String,
+    pub branch: Option<String>,
+    pub head: String,
+    pub instructions: Vec<RepositoryInstruction>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RepositoryInstructionKind {
+    Agents,
+    Claude,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepositoryInstruction {
+    pub kind: RepositoryInstructionKind,
+    pub path: PathBuf,
+    pub content_hash: String,
+    pub observed_revision: String,
+    pub required: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -149,6 +179,71 @@ impl<'a> WorkflowOperationService<'a> {
                 session_id: parse_id(&session_id)?,
                 checkout_id: parse_id(&checkout_id)?,
             })
+        })
+    }
+
+    pub fn assigned_repository(
+        &self,
+        principal: &WorkflowPrincipal,
+    ) -> Result<AssignedRepository, AppError> {
+        let row = self.store.read(|connection| {
+            connection
+                .query_row(
+                    "SELECT checkout.repository_id, path.path,
+                            checkout.git_worktree_identity, checkout.branch,
+                            checkout.head, checkout.availability
+                     FROM checkouts checkout
+                     JOIN checkout_paths path
+                       ON path.checkout_id = checkout.id AND path.observed_until IS NULL
+                     WHERE checkout.id = ?1",
+                    [principal.checkout_id.to_string()],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                            row.get::<_, Option<String>>(3)?,
+                            row.get::<_, Option<String>>(4)?,
+                            row.get::<_, String>(5)?,
+                        ))
+                    },
+                )
+                .optional()
+                .map_err(Into::into)
+        })?;
+        let Some((repository_id, path, git_worktree_identity, branch, head, availability)) = row
+        else {
+            return Err(assigned_context_error(
+                "assigned_checkout_missing",
+                "the managed session checkout has no current path",
+            ));
+        };
+        if availability != "available" {
+            return Err(assigned_context_error(
+                "assigned_checkout_unavailable",
+                "the managed session checkout is not available",
+            ));
+        }
+        let repository_id = parse_id(&repository_id)?;
+        let path = PathBuf::from(path);
+        let head = head
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                assigned_context_error(
+                    "assigned_checkout_revision_missing",
+                    "the managed session checkout has no recorded revision",
+                )
+            })?;
+        let root = canonical_checkout_root(&path)?;
+        let instructions = repository_instructions(&root, principal.tool, &head)?;
+        Ok(AssignedRepository {
+            repository_id,
+            checkout_id: principal.checkout_id,
+            path: root,
+            git_worktree_identity,
+            branch,
+            head,
+            instructions,
         })
     }
 
@@ -446,6 +541,89 @@ fn authorize_session_target(
     }
 }
 
+fn canonical_checkout_root(path: &Path) -> Result<PathBuf, AppError> {
+    if !path.is_absolute() || !path.is_dir() {
+        return Err(assigned_context_error(
+            "assigned_checkout_path_invalid",
+            format!(
+                "the managed session checkout path is unavailable: {}",
+                path.display()
+            ),
+        ));
+    }
+    fs::canonicalize(path).map_err(|error| {
+        assigned_context_error(
+            "assigned_checkout_path_invalid",
+            format!("failed to resolve {}: {error}", path.display()),
+        )
+    })
+}
+
+fn repository_instructions(
+    root: &Path,
+    tool: Tool,
+    observed_revision: &str,
+) -> Result<Vec<RepositoryInstruction>, AppError> {
+    let (name, kind) = match tool {
+        Tool::Claude => ("CLAUDE.md", RepositoryInstructionKind::Claude),
+        Tool::Codex => ("AGENTS.md", RepositoryInstructionKind::Agents),
+    };
+    let candidate = root.join(name);
+    if !candidate.exists() {
+        return Ok(Vec::new());
+    }
+    let metadata = fs::symlink_metadata(&candidate).map_err(|error| {
+        assigned_context_error(
+            "repository_instruction_invalid",
+            format!("failed to inspect {}: {error}", candidate.display()),
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(assigned_context_error(
+            "repository_instruction_invalid",
+            format!(
+                "repository instruction is not a regular file: {}",
+                candidate.display()
+            ),
+        ));
+    }
+    let path = fs::canonicalize(&candidate).map_err(|error| {
+        assigned_context_error(
+            "repository_instruction_invalid",
+            format!("failed to resolve {}: {error}", candidate.display()),
+        )
+    })?;
+    if !path.starts_with(root) {
+        return Err(assigned_context_error(
+            "repository_instruction_escape",
+            format!(
+                "repository instruction escapes the checkout: {}",
+                path.display()
+            ),
+        ));
+    }
+    let content = fs::read(&path).map_err(|error| {
+        assigned_context_error(
+            "repository_instruction_invalid",
+            format!("failed to read {}: {error}", path.display()),
+        )
+    })?;
+    Ok(vec![RepositoryInstruction {
+        kind,
+        path,
+        content_hash: format!("{:x}", Sha256::digest(content)),
+        observed_revision: observed_revision.to_owned(),
+        required: true,
+    }])
+}
+
+fn assigned_context_error(code: impl Into<String>, message: impl Into<String>) -> AppError {
+    AppError::External {
+        code: code.into(),
+        message: message.into(),
+    }
+}
+
 fn read_managed_session_request(
     store: &SqliteStore,
     request: &RequestManagedSession,
@@ -672,6 +850,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use rusqlite::params;
     use tempfile::TempDir;
     use time::OffsetDateTime;
@@ -682,8 +862,8 @@ mod tests {
     };
 
     use super::{
-        CheckpointWorkItem, RequestManagedSession, WorkflowOperationService, timestamp, token_hash,
-        work_item_bootstrap_prompt,
+        CheckpointWorkItem, RepositoryInstructionKind, RequestManagedSession,
+        WorkflowOperationService, timestamp, token_hash, work_item_bootstrap_prompt,
     };
     use crate::AppError;
     use crate::storage::SqliteStore;
@@ -693,6 +873,7 @@ mod tests {
         store: SqliteStore,
         work_item_id: WorkItemId,
         repository_id: RepositoryId,
+        checkout_path: PathBuf,
         at: OffsetDateTime,
         token: String,
     }
@@ -701,6 +882,10 @@ mod tests {
         let directory = TempDir::new().expect("temporary directory");
         let checkout_path = directory.path().join("checkout");
         std::fs::create_dir(&checkout_path).expect("checkout path");
+        std::fs::write(checkout_path.join("AGENTS.md"), "# Codex instructions\n")
+            .expect("Codex instructions");
+        std::fs::write(checkout_path.join("CLAUDE.md"), "# Claude instructions\n")
+            .expect("Claude instructions");
         let mut store =
             SqliteStore::open(directory.path().join("workboard.sqlite")).expect("open store");
         let workspace_id = WorkspaceId::generate();
@@ -769,9 +954,10 @@ mod tests {
                 )?;
                 transaction.execute(
                     "INSERT INTO checkouts (
-                         id, repository_id, git_worktree_identity, branch, availability, created_at
+                         id, repository_id, git_worktree_identity, branch, head,
+                         availability, created_at
                      ) VALUES (?1, ?2, 'feature-checkout', 'feature/availability',
-                               'available', ?3)",
+                               'fixture-head', 'available', ?3)",
                     params![checkout_id.to_string(), repository_id.to_string(), now],
                 )?;
                 transaction.execute(
@@ -850,6 +1036,7 @@ mod tests {
             store,
             work_item_id,
             repository_id,
+            checkout_path,
             at,
             token,
         }
@@ -866,6 +1053,22 @@ mod tests {
             HierarchyOwner::WorkItem(fixture.work_item_id)
         );
         assert_eq!(principal.role, ManagedSessionRole::WorkItemExecution);
+        let assigned = WorkflowOperationService::new(&mut fixture.store)
+            .assigned_repository(&principal)
+            .expect("read assigned repository");
+        assert_eq!(assigned.repository_id, fixture.repository_id);
+        assert_eq!(assigned.head, "fixture-head");
+        assert_eq!(assigned.instructions.len(), 1);
+        assert_eq!(
+            assigned.instructions[0].kind,
+            RepositoryInstructionKind::Agents
+        );
+        assert_eq!(
+            assigned.instructions[0].path,
+            std::fs::canonicalize(fixture.checkout_path.join("AGENTS.md"))
+                .expect("canonical instruction path")
+        );
+        assert!(assigned.instructions[0].required);
         assert!(matches!(
             WorkflowOperationService::new(&mut fixture.store)
                 .authenticate("wrong", fixture.at + time::Duration::minutes(3)),
