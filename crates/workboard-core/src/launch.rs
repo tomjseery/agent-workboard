@@ -195,6 +195,8 @@ impl ManagedLaunchSpec {
         let mut command = Command::new(self.terminal.executable());
         command
             .args(self.terminal.arguments())
+            .env_remove("NO_COLOR")
+            .env_remove("TERM")
             .current_dir(&self.working_directory)
             .env(WORKBOARD_LAUNCH_TOKEN_ENV, &self.launch_token);
         if let Some(token) = &self.workflow_token {
@@ -450,6 +452,16 @@ mod tests {
                 .find(|(name, _)| *name == std::ffi::OsStr::new(WORKBOARD_WORKFLOW_TOKEN_ENV))
                 .and_then(|(_, value)| value),
             Some(std::ffi::OsStr::new("workflow-token"))
+        );
+        assert!(
+            command.get_envs().any(|(name, value)| {
+                name == std::ffi::OsStr::new("NO_COLOR") && value.is_none()
+            })
+        );
+        assert!(
+            command
+                .get_envs()
+                .any(|(name, value)| name == std::ffi::OsStr::new("TERM") && value.is_none())
         );
 
         let resumed = ManagedLaunchSpec::new(ManagedLaunchRequest {

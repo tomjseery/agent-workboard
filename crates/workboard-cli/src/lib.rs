@@ -2027,10 +2027,38 @@ fn default_terminal_executable() -> PathBuf {
     PathBuf::new()
 }
 
+#[cfg(windows)]
+fn codex_app_executable(local_app_data: &Path) -> Option<PathBuf> {
+    let bin = local_app_data.join("OpenAI").join("Codex").join("bin");
+    fs::read_dir(bin)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path().join("codex.exe"))
+        .filter(|path| path.is_file())
+        .filter_map(|path| {
+            let modified = path.metadata().ok()?.modified().ok()?;
+            Some((modified, path))
+        })
+        .max_by_key(|(modified, _)| *modified)
+        .map(|(_, path)| path)
+}
+
+#[cfg(windows)]
+fn default_codex_executable() -> PathBuf {
+    std::env::var_os("LOCALAPPDATA")
+        .and_then(|local_app_data| codex_app_executable(Path::new(&local_app_data)))
+        .unwrap_or_else(|| PathBuf::from("codex"))
+}
+
+#[cfg(not(windows))]
+fn default_codex_executable() -> PathBuf {
+    PathBuf::from("codex")
+}
+
 fn default_native_executable(tool: Tool) -> PathBuf {
     match tool {
         Tool::Claude => PathBuf::from("claude"),
-        Tool::Codex => PathBuf::from("codex"),
+        Tool::Codex => default_codex_executable(),
     }
 }
 
@@ -2259,6 +2287,7 @@ fn markdown_title(body: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::process::Command;
 
     use clap::Parser;
@@ -2267,13 +2296,31 @@ mod tests {
     use crate::selector::SelectionCandidate;
 
     use super::{
-        Cli, Command as CliCommand, SessionCommand, execute_from, select_candidate, slugify,
+        Cli, Command as CliCommand, SessionCommand, codex_app_executable, execute_from,
+        select_candidate, slugify,
     };
 
     #[test]
     fn derives_safe_slugs() {
         assert_eq!(slugify("Venue Availability API"), "venue-availability-api");
         assert_eq!(slugify("  Mixed___punctuation  "), "mixed-punctuation");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn resolves_the_codex_app_managed_cli() {
+        let directory = TempDir::new().expect("temporary local app data");
+        let executable = directory
+            .path()
+            .join("OpenAI")
+            .join("Codex")
+            .join("bin")
+            .join("current")
+            .join("codex.exe");
+        fs::create_dir_all(executable.parent().expect("Codex bin directory"))
+            .expect("create Codex bin directory");
+        fs::write(&executable, []).expect("create Codex executable");
+        assert_eq!(codex_app_executable(directory.path()), Some(executable));
     }
 
     #[test]
