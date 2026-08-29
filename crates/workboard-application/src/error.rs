@@ -82,6 +82,8 @@ pub enum AppError {
     RecreateCheckoutPathExists(PathBuf),
     #[error("the checkout recreation path has no existing parent directory: {0}")]
     RecreateCheckoutParentMissing(PathBuf),
+    #[error("checkout reconciliation failed: {message}")]
+    CheckoutReconciliation { code: String, message: String },
     #[error("no current checkout is available; pass --worktree or recreate the checkout")]
     ResumeCheckoutRequired,
     #[error("the conversation is not resumable: {0}")]
@@ -237,6 +239,7 @@ impl AppError {
             Self::ResumeCheckoutNotScanned => "resume_checkout_not_scanned",
             Self::RecreateCheckoutPathExists(_) => "recreate_checkout_path_exists",
             Self::RecreateCheckoutParentMissing(_) => "recreate_checkout_parent_missing",
+            Self::CheckoutReconciliation { code, .. } => code,
             Self::ResumeCheckoutRequired => "resume_checkout_required",
             Self::ConversationNotResumable(_) => "conversation_not_resumable",
             Self::NativeExecutableUnavailable(_) => "native_executable_unavailable",

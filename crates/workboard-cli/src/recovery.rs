@@ -254,6 +254,22 @@ fn recover_entry(
         }
         RecoveryDisposition::ReadyPresent => {}
     }
+    if let Err(error) = application
+        .checkout_service()
+        .reconcile_registered_checkout(entry.checkout_id, now)
+    {
+        let code = error.code().to_owned();
+        return record(
+            application,
+            attempt_id,
+            entry,
+            RecoveryOutcomeStatus::Failed,
+            None,
+            Some(&code),
+            &error.to_string(),
+            results,
+        );
+    }
     let context = if replacing {
         None
     } else {

@@ -115,6 +115,7 @@ impl<'a> SessionLaunchService<'a> {
             ));
         }
         validate_owner_checkout(self.store, request.owner, request.checkout_id)?;
+        validate_checkout_cwd(self.store, request.checkout_id, &request.working_directory)?;
         if let ManagedLaunchMode::Resume(native_id) = &request.mode {
             reject_confirmed_live(self.store, request.tool, native_id, request.created_at)?;
         }
@@ -1648,6 +1649,29 @@ mod tests {
             1
         );
         assert_ne!(prepared.intent_id, prepared_expired.intent_id);
+    }
+
+    #[test]
+    fn wrong_requested_cwd_creates_no_launch_intent() {
+        let mut fixture = fixture();
+        let mut request = request(&fixture, "wrong-requested-cwd");
+        request.working_directory = fixture.checkout_path.join("other");
+
+        assert!(matches!(
+            SessionLaunchService::new(&mut fixture.store).begin(request),
+            Err(AppError::CallerIdentityMismatch)
+        ));
+        let intents = fixture
+            .store
+            .read(|connection| {
+                connection
+                    .query_row("SELECT COUNT(*) FROM launch_intents", [], |row| {
+                        row.get::<_, i64>(0)
+                    })
+                    .map_err(Into::into)
+            })
+            .expect("launch intent count");
+        assert_eq!(intents, 0);
     }
 
     #[test]
