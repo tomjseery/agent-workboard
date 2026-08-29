@@ -134,7 +134,6 @@ fn tool_definitions() -> Value {
                 "required": ["workItemId", "nextAction", "summary", "idempotencyKey"],
                 "properties": {
                     "workItemId": { "type": "string", "format": "uuid" },
-                    "repositoryId": { "type": "string", "format": "uuid" },
                     "nextAction": {
                         "type": "string",
                         "enum": ["actionable", "blocked", "paused", "review", "delivery"]
@@ -153,6 +152,7 @@ fn tool_definitions() -> Value {
                 "required": ["workItemId", "tool", "idempotencyKey"],
                 "properties": {
                     "workItemId": { "type": "string", "format": "uuid" },
+                    "repositoryId": { "type": "string", "format": "uuid" },
                     "tool": { "type": "string", "enum": ["claude", "codex"] },
                     "idempotencyKey": { "type": "string", "minLength": 1 },
                     "terminal": { "type": "string" },
@@ -266,6 +266,33 @@ mod tests {
                 "work_checkpoint",
                 "session_request"
             ]
+        );
+    }
+
+    #[test]
+    fn session_request_advertises_repository_selection() {
+        let tools = tool_definitions();
+        let session_request = tools
+            .as_array()
+            .expect("tool array")
+            .iter()
+            .find(|tool| tool["name"] == "session_request")
+            .expect("session request tool");
+        assert!(
+            session_request["inputSchema"]["properties"]
+                .get("repositoryId")
+                .is_some()
+        );
+        let checkpoint = tools
+            .as_array()
+            .expect("tool array")
+            .iter()
+            .find(|tool| tool["name"] == "work_checkpoint")
+            .expect("checkpoint tool");
+        assert!(
+            checkpoint["inputSchema"]["properties"]
+                .get("repositoryId")
+                .is_none()
         );
     }
 
