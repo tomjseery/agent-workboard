@@ -1,11 +1,12 @@
 use std::collections::{HashMap, HashSet};
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, MAIN_DB, OpenFlags, OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tempfile::TempDir;
 use time::OffsetDateTime;
 use workboard_core::{
     AssociationIntervalId, CheckoutId, CheckoutPathId, ConversationId, ImportBatchId, RepositoryId,
@@ -74,6 +75,7 @@ pub struct LegacyImportOutcome {
     pub session_sources: usize,
     pub live_observations: usize,
     pub adopted_sessions: usize,
+    pub reconciled_session_candidates: usize,
     pub already_applied: bool,
 }
 
@@ -95,6 +97,11 @@ pub struct ImportedSessionCandidate {
     pub last_prompt_preview: Option<String>,
     pub last_activity_at: Option<String>,
     pub observed_cwd: Option<PathBuf>,
+}
+
+struct SelectedLegacyCandidate<'a> {
+    source: &'a LegacySessionCandidatePreview,
+    controls: &'a LegacySessionCandidatePreview,
 }
 
 pub fn snapshot_context_catalogue(
@@ -131,13 +138,7 @@ pub fn snapshot_context_catalogue(
 pub fn preview_context_catalogue(path: &Path) -> Result<LegacyImportPreview, AppError> {
     validate_source_database(path)?;
     let connection = open_read_only(path)?;
-    let mut statement = connection.prepare(
-        "SELECT name FROM sqlite_master
-         WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
-    )?;
-    let tables = statement
-        .query_map([], |row| row.get::<_, String>(0))?
-        .collect::<Result<Vec<_>, _>>()?;
+    let tables = legacy_tables(&connection)?;
     let repositories = count_if_present(&connection, &tables, "repositories")?;
     let native_sessions =
         count_first_present(&connection, &tables, &["conversations", "native_sessions"])?;
@@ -170,6 +171,17 @@ pub fn preview_context_catalogue(path: &Path) -> Result<LegacyImportPreview, App
     })
 }
 
+fn legacy_tables(connection: &Connection) -> Result<Vec<String>, AppError> {
+    let mut statement = connection.prepare(
+        "SELECT name FROM sqlite_master
+         WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+    )?;
+    statement
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
 fn validate_source_database(path: &Path) -> Result<(), AppError> {
     if !path.is_absolute() || !path.is_file() {
         return Err(AppError::Domain(format!(
@@ -186,6 +198,65 @@ fn open_read_only(path: &Path) -> Result<Connection, AppError> {
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .map_err(Into::into)
+}
+
+struct VerifiedLegacySnapshot {
+    connection: Connection,
+    _directory: TempDir,
+}
+
+fn verified_legacy_snapshot(
+    path: &Path,
+    expected_hash: &str,
+) -> Result<VerifiedLegacySnapshot, AppError> {
+    validate_source_database(path)?;
+    let directory = tempfile::tempdir().map_err(|source| AppError::StorageIo {
+        operation: "creating a verified legacy snapshot directory",
+        path: std::env::temp_dir(),
+        source,
+    })?;
+    let snapshot = directory.path().join("catalogue.sqlite");
+    let mut source = File::open(path).map_err(|source| AppError::StorageIo {
+        operation: "opening the reviewed legacy snapshot",
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let mut destination = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&snapshot)
+        .map_err(|source| AppError::StorageIo {
+            operation: "creating the pinned legacy snapshot",
+            path: snapshot.clone(),
+            source,
+        })?;
+    std::io::copy(&mut source, &mut destination).map_err(|source| AppError::StorageIo {
+        operation: "copying the reviewed legacy snapshot",
+        path: snapshot.clone(),
+        source,
+    })?;
+    destination
+        .sync_all()
+        .map_err(|source| AppError::StorageIo {
+            operation: "flushing the pinned legacy snapshot",
+            path: snapshot.clone(),
+            source,
+        })?;
+    drop(destination);
+    if hash_file(&snapshot)? != expected_hash {
+        return Err(AppError::WorkflowDocumentChanged);
+    }
+    let connection = open_read_only(&snapshot)?;
+    let integrity: String = connection.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+    if integrity != "ok" {
+        return Err(AppError::Domain(format!(
+            "legacy snapshot integrity check failed: {integrity}"
+        )));
+    }
+    Ok(VerifiedLegacySnapshot {
+        connection,
+        _directory: directory,
+    })
 }
 
 fn legacy_repositories(
@@ -317,7 +388,7 @@ fn legacy_session_candidates(
                 .parse()
                 .unwrap_or_else(|_| ConversationId::generate());
             Ok(LegacySessionCandidatePreview {
-                selected: true,
+                selected: false,
                 source_conversation_id,
                 destination_session_id,
                 tool,
@@ -358,12 +429,55 @@ impl WorkboardApplication {
         preview: &LegacyImportPreview,
     ) -> Result<LegacyImportOutcome, AppError> {
         validate_legacy_preview(preview)?;
-        if hash_file(&preview.source)? != preview.source_hash {
-            return Err(AppError::WorkflowDocumentChanged);
-        }
         let preview_hash = hash_bytes(&serde_json::to_vec(preview)?);
-        if let Some(outcome) = self.existing_legacy_import(&preview_hash)? {
-            self.enrich_legacy_candidates(workspace_id, repository_id, outcome.import_id, preview)?;
+        if let Some(mut outcome) =
+            self.existing_legacy_import(workspace_id, repository_id, &preview_hash)?
+        {
+            if let Ok(snapshot) = verified_legacy_snapshot(&preview.source, &preview.source_hash) {
+                let source = &snapshot.connection;
+                let tables = legacy_tables(source)?;
+                let target_common_directory = self.store.read(|connection| {
+                    Ok(connection.query_row(
+                        "SELECT git_common_directory FROM repositories
+                         WHERE id = ?1 AND workspace_id = ?2 AND is_planning_store = 0",
+                        params![repository_id.to_string(), workspace_id.to_string()],
+                        |row| row.get::<_, String>(0),
+                    )?)
+                })?;
+                let legacy_repository_inventory = legacy_repositories(source, &tables)?;
+                let legacy_repository = legacy_repository_inventory
+                    .iter()
+                    .find(|repository| {
+                        paths_equal(
+                            &repository.common_directory,
+                            Path::new(&target_common_directory),
+                        )
+                    })
+                    .ok_or_else(|| {
+                        AppError::Domain(
+                            "no legacy repository has the registered Git common directory"
+                                .to_owned(),
+                        )
+                    })?;
+                let repository_evidence = LegacyRepositoryEvidence::read(source, &tables)?;
+                let current_candidates = legacy_session_candidates(source, &tables)?;
+                outcome.reconciled_session_candidates = self.reconcile_legacy_candidates(
+                    workspace_id,
+                    repository_id,
+                    outcome.import_id,
+                    &legacy_repository.source_id,
+                    &current_candidates,
+                    &repository_evidence,
+                )?;
+                self.enrich_legacy_candidates(
+                    workspace_id,
+                    repository_id,
+                    outcome.import_id,
+                    preview,
+                    source,
+                    &tables,
+                )?;
+            }
             return Ok(outcome);
         }
         let target_common_directory = self.store.read(|connection| {
@@ -381,8 +495,11 @@ impl WorkboardApplication {
                     )
                 })
         })?;
-        let legacy_repository = preview
-            .repository_inventory
+        let snapshot = verified_legacy_snapshot(&preview.source, &preview.source_hash)?;
+        let source = &snapshot.connection;
+        let tables = legacy_tables(source)?;
+        let legacy_repository_inventory = legacy_repositories(source, &tables)?;
+        let legacy_repository = legacy_repository_inventory
             .iter()
             .find(|repository| {
                 paths_equal(
@@ -395,44 +512,99 @@ impl WorkboardApplication {
                     "no legacy repository has the registered Git common directory".to_owned(),
                 )
             })?;
+        let repository_evidence = LegacyRepositoryEvidence::read(source, &tables)?;
+        let current_candidates = legacy_session_candidates(source, &tables)?;
+        let current_by_source = current_candidates
+            .iter()
+            .map(|candidate| (candidate.source_conversation_id.as_str(), candidate))
+            .collect::<HashMap<_, _>>();
         let selected = preview
             .session_candidates
             .iter()
             .filter(|candidate| candidate.selected)
-            .map(|candidate| (candidate.source_conversation_id.as_str(), candidate))
-            .collect::<HashMap<_, _>>();
+            .map(|controls| {
+                let source = current_by_source
+                    .get(controls.source_conversation_id.as_str())
+                    .copied()
+                    .ok_or_else(|| {
+                        AppError::Domain(format!(
+                            "selected legacy session is absent from the verified snapshot: {}",
+                            controls.source_conversation_id
+                        ))
+                    })?;
+                let mut expected = source.clone();
+                expected.selected = controls.selected;
+                expected.destination_session_id = controls.destination_session_id;
+                expected.adopt_work_item_id = controls.adopt_work_item_id;
+                if &expected != controls {
+                    return Err(AppError::Domain(format!(
+                        "selected legacy session identity differs from the verified snapshot: {}",
+                        controls.source_conversation_id
+                    )));
+                }
+                Ok(SelectedLegacyCandidate { source, controls })
+            })
+            .collect::<Result<Vec<_>, AppError>>()?;
         if selected.is_empty() {
             return Err(AppError::Domain(
                 "legacy import selects no native sessions".to_owned(),
             ));
         }
+        validate_repository_selection(
+            selected.iter().map(|candidate| candidate.source),
+            &legacy_repository.source_id,
+            &repository_evidence,
+        )?;
         let mut destination_sessions = HashMap::new();
-        let mut destination_session_ids = HashSet::new();
-        for candidate in selected.values() {
-            if !destination_session_ids.insert(candidate.destination_session_id) {
+        let mut proposed_destination_ids = HashSet::new();
+        let mut resolved_destination_ids = HashSet::new();
+        for candidate in &selected {
+            if !proposed_destination_ids.insert(candidate.controls.destination_session_id) {
                 return Err(AppError::Domain(
                     "legacy preview contains a duplicate destination session ID".to_owned(),
                 ));
             }
-            let existing = self.store.read(|connection| {
-                connection
+            let (existing_native, existing_destination) = self.store.read(|connection| {
+                let native = connection
                     .query_row(
                         "SELECT id FROM native_sessions WHERE provider = ?1 AND native_id = ?2",
-                        params![tool_name(candidate.tool), candidate.native_id],
+                        params![tool_name(candidate.source.tool), candidate.source.native_id],
                         |row| row.get::<_, String>(0),
                     )
-                    .optional()
-                    .map_err(Into::into)
+                    .optional()?;
+                let destination = connection
+                    .query_row(
+                        "SELECT provider, native_id FROM native_sessions WHERE id = ?1",
+                        [candidate.controls.destination_session_id.to_string()],
+                        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                    )
+                    .optional()?;
+                Ok((native, destination))
             })?;
-            let destination = existing
+            if existing_destination
+                .as_ref()
+                .is_some_and(|(provider, native_id)| {
+                    provider != tool_name(candidate.source.tool)
+                        || native_id != &candidate.source.native_id
+                })
+            {
+                return Err(AppError::IdempotencyConflict);
+            }
+            let destination = existing_native
                 .as_deref()
                 .map(parse_id)
                 .transpose()?
-                .unwrap_or(candidate.destination_session_id);
-            destination_sessions.insert(candidate.source_conversation_id.clone(), destination);
+                .unwrap_or(candidate.controls.destination_session_id);
+            if !resolved_destination_ids.insert(destination) {
+                return Err(AppError::IdempotencyConflict);
+            }
+            destination_sessions
+                .insert(candidate.source.source_conversation_id.clone(), destination);
         }
-        self.validate_candidate_adoptions(repository_id, selected.values().copied())?;
-        let source = open_read_only(&preview.source)?;
+        self.validate_candidate_adoptions(
+            repository_id,
+            selected.iter().map(|candidate| candidate.controls),
+        )?;
         source.execute_batch("BEGIN")?;
         let import_id = ImportBatchId::generate();
         let imported_at = OffsetDateTime::now_utc().unix_timestamp_nanos().to_string();
@@ -446,19 +618,20 @@ impl WorkboardApplication {
         self.store.write(|transaction| {
             transaction.execute(
                 "INSERT INTO import_batches (
-                     id, workspace_id, kind, source_path, source_head, preview_hash,
-                     planning_commit, imported_at
-                 ) VALUES (?1, ?2, 'context_catalogue', ?3, NULL, ?4, NULL, ?5)",
+                     id, workspace_id, repository_id, kind, source_path, source_head,
+                     preview_hash, planning_commit, imported_at
+                 ) VALUES (?1, ?2, ?3, 'context_catalogue', ?4, NULL, ?5, NULL, ?6)",
                 params![
                     import_id.to_string(),
                     workspace_id.to_string(),
+                    repository_id.to_string(),
                     path_text(&preview.source)?,
                     preview_hash,
                     imported_at,
                 ],
             )?;
             import_repository_history(
-                &source,
+                source,
                 transaction,
                 import_id,
                 &legacy_repository_id,
@@ -466,7 +639,7 @@ impl WorkboardApplication {
                 &imported_at,
             )?;
             import_repository_remotes(
-                &source,
+                source,
                 transaction,
                 import_id,
                 &legacy_repository_id,
@@ -542,31 +715,34 @@ impl WorkboardApplication {
                     }),
                 )?;
             }
-            import_checkout_paths(&source, transaction, import_id, &checkout_map)?;
-            for candidate in selected.values() {
-                let session_id = destination_sessions[&candidate.source_conversation_id];
+            import_checkout_paths(source, transaction, import_id, &checkout_map, &imported_at)?;
+            for candidate in &selected {
+                let source_candidate = candidate.source;
+                let controls = candidate.controls;
+                let session_id = destination_sessions[&source_candidate.source_conversation_id];
                 let inserted = transaction.execute(
-                    "INSERT OR IGNORE INTO native_sessions (id, provider, native_id, discovered_at)
-                     VALUES (?1, ?2, ?3, ?4)",
+                    "INSERT INTO native_sessions (id, provider, native_id, discovered_at)
+                     VALUES (?1, ?2, ?3, ?4)
+                     ON CONFLICT(provider, native_id) DO NOTHING",
                     params![
                         session_id.to_string(),
-                        tool_name(candidate.tool),
-                        candidate.native_id,
-                        candidate.discovered_at,
+                        tool_name(source_candidate.tool),
+                        source_candidate.native_id,
+                        source_candidate.discovered_at,
                     ],
                 )?;
                 imported_sessions += inserted;
-                let checkout_id = candidate
+                let checkout_id = source_candidate
                     .source_worktree_id
                     .as_ref()
                     .and_then(|source_id| checkout_map.get(source_id))
                     .copied();
-                let status = if candidate.adopt_work_item_id.is_some() {
+                let status = if controls.adopt_work_item_id.is_some() {
                     "confirmed"
                 } else {
                     "unassigned"
                 };
-                let observed_cwd = candidate
+                let observed_cwd = source_candidate
                     .observed_cwd
                     .as_deref()
                     .map(path_text)
@@ -588,20 +764,20 @@ impl WorkboardApplication {
                         session_id.to_string(),
                         repository_id.to_string(),
                         checkout_id.map(|id| id.to_string()),
-                        candidate.legacy_workstream_id,
-                        candidate.legacy_workstream_title,
-                        candidate.authority,
-                        candidate.confidence,
+                        source_candidate.legacy_workstream_id,
+                        source_candidate.legacy_workstream_title,
+                        source_candidate.authority,
+                        source_candidate.confidence,
                         status,
                         imported_at,
-                        candidate.native_title,
-                        candidate.first_prompt_preview,
-                        candidate.last_prompt_preview,
-                        candidate.last_activity_at,
+                        source_candidate.native_title,
+                        source_candidate.first_prompt_preview,
+                        source_candidate.last_prompt_preview,
+                        source_candidate.last_activity_at,
                         observed_cwd,
                     ],
                 )?;
-                if let Some(work_item_id) = candidate.adopt_work_item_id {
+                if let Some(work_item_id) = controls.adopt_work_item_id {
                     transaction.execute(
                         "INSERT INTO native_session_associations (
                              id, session_id, work_item_id, role, associated_from
@@ -622,7 +798,7 @@ impl WorkboardApplication {
                      ) VALUES (?1, ?2, ?3, 'session_candidate', ?4, NULL)",
                     params![
                         import_id.to_string(),
-                        candidate.source_conversation_id,
+                        source_candidate.source_conversation_id,
                         preview.source_hash,
                         session_id.to_string(),
                     ],
@@ -631,23 +807,23 @@ impl WorkboardApplication {
                     transaction,
                     import_id,
                     "conversations",
-                    &candidate.source_conversation_id,
+                    &source_candidate.source_conversation_id,
                     "native_session",
                     &session_id.to_string(),
                     &serde_json::json!({
-                        "id": candidate.source_conversation_id,
-                        "tool": tool_name(candidate.tool),
-                        "nativeId": candidate.native_id,
-                        "createdAt": candidate.discovered_at,
+                        "id": source_candidate.source_conversation_id,
+                        "tool": tool_name(source_candidate.tool),
+                        "nativeId": source_candidate.native_id,
+                        "createdAt": source_candidate.discovered_at,
                     }),
                 )?;
             }
             imported_sources =
-                import_session_sources(&source, transaction, import_id, &destination_sessions)?;
+                import_session_sources(source, transaction, import_id, &destination_sessions)?;
             imported_live =
-                import_live_observations(&source, transaction, import_id, &destination_sessions)?;
+                import_live_observations(source, transaction, import_id, &destination_sessions)?;
             import_context_evidence(
-                &source,
+                source,
                 transaction,
                 import_id,
                 &destination_sessions,
@@ -656,7 +832,14 @@ impl WorkboardApplication {
             Ok(())
         })?;
         source.execute_batch("COMMIT")?;
-        self.enrich_legacy_candidates(workspace_id, repository_id, import_id, preview)?;
+        self.enrich_legacy_candidates(
+            workspace_id,
+            repository_id,
+            import_id,
+            preview,
+            source,
+            &tables,
+        )?;
         Ok(LegacyImportOutcome {
             import_id,
             preview_hash,
@@ -666,7 +849,87 @@ impl WorkboardApplication {
             session_sources: imported_sources,
             live_observations: imported_live,
             adopted_sessions,
+            reconciled_session_candidates: 0,
             already_applied: false,
+        })
+    }
+
+    fn reconcile_legacy_candidates(
+        &mut self,
+        workspace_id: WorkspaceId,
+        repository_id: RepositoryId,
+        import_id: ImportBatchId,
+        source_repository_id: &str,
+        candidates: &[LegacySessionCandidatePreview],
+        repository_evidence: &LegacyRepositoryEvidence,
+    ) -> Result<usize, AppError> {
+        let mismatched_sources = candidates
+            .iter()
+            .filter(|candidate| {
+                repository_evidence.matches_repository(candidate, source_repository_id)
+                    == Some(false)
+            })
+            .map(|candidate| candidate.source_conversation_id.as_str())
+            .collect::<HashSet<_>>();
+        if mismatched_sources.is_empty() {
+            return Ok(0);
+        }
+        let sessions = self.store.read(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT source_path, destination_id FROM import_source_destinations
+                 WHERE import_id = ?1 AND destination_kind = 'session_candidate'",
+            )?;
+            statement
+                .query_map([import_id.to_string()], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .filter_map(|row| match row {
+                    Ok((source, destination)) if mismatched_sources.contains(source.as_str()) => {
+                        Some(Ok(destination))
+                    }
+                    Ok(_) => None,
+                    Err(error) => Some(Err(error)),
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(Into::into)
+        })?;
+        self.store.write(|transaction| {
+            let mut reconciled = 0_usize;
+            for session_id in sessions {
+                let confirmed: i64 = transaction.query_row(
+                    "SELECT EXISTS (
+                         SELECT 1 FROM imported_session_candidates candidate
+                         LEFT JOIN native_session_associations association
+                           ON association.session_id = candidate.session_id
+                          AND association.associated_until IS NULL
+                         WHERE candidate.workspace_id = ?1 AND candidate.session_id = ?2
+                           AND candidate.repository_id = ?3
+                           AND (candidate.status = 'confirmed' OR association.id IS NOT NULL)
+                     )",
+                    params![
+                        workspace_id.to_string(),
+                        session_id,
+                        repository_id.to_string(),
+                    ],
+                    |row| row.get(0),
+                )?;
+                if confirmed != 0 {
+                    return Err(AppError::Domain(
+                        "a confirmed imported session belongs to another repository".to_owned(),
+                    ));
+                }
+                reconciled += transaction.execute(
+                    "DELETE FROM imported_session_candidates
+                     WHERE workspace_id = ?1 AND session_id = ?2 AND repository_id = ?3
+                       AND status IN ('unassigned', 'ignored')",
+                    params![
+                        workspace_id.to_string(),
+                        session_id,
+                        repository_id.to_string(),
+                    ],
+                )?;
+            }
+            Ok(reconciled)
         })
     }
 
@@ -825,6 +1088,8 @@ impl WorkboardApplication {
         repository_id: RepositoryId,
         import_id: ImportBatchId,
         preview: &LegacyImportPreview,
+        source: &Connection,
+        tables: &[String],
     ) -> Result<(), AppError> {
         let selected = preview
             .session_candidates
@@ -832,8 +1097,7 @@ impl WorkboardApplication {
             .filter(|candidate| candidate.selected)
             .map(|candidate| candidate.source_conversation_id.as_str())
             .collect::<HashSet<_>>();
-        let source = open_read_only(&preview.source)?;
-        let candidates = legacy_session_candidates(&source, &preview.tables)?
+        let candidates = legacy_session_candidates(source, tables)?
             .into_iter()
             .filter(|candidate| selected.contains(candidate.source_conversation_id.as_str()))
             .collect::<Vec<_>>();
@@ -864,8 +1128,8 @@ impl WorkboardApplication {
                 .map(|(checkout_id, path)| Ok((parse_id(&checkout_id)?, PathBuf::from(path))))
                 .collect::<Result<Vec<_>, AppError>>()
         })?;
-        let summaries = legacy_summary_records(&source, &preview.tables, &selected)?;
-        let cwd_observations = legacy_cwd_records(&source, &preview.tables, &selected)?;
+        let summaries = legacy_summary_records(source, tables, &selected)?;
+        let cwd_observations = legacy_cwd_records(source, tables, &selected)?;
         self.store.write(|transaction| {
             for candidate in &candidates {
                 let Some(destination) = destinations.get(&candidate.source_conversation_id) else {
@@ -974,14 +1238,22 @@ impl WorkboardApplication {
 
     fn existing_legacy_import(
         &self,
+        workspace_id: WorkspaceId,
+        repository_id: RepositoryId,
         preview_hash: &str,
     ) -> Result<Option<LegacyImportOutcome>, AppError> {
         self.store.read(|connection| {
             let id = connection
                 .query_row(
-                    "SELECT id FROM import_batches
-                     WHERE preview_hash = ?1 AND kind = 'context_catalogue'",
-                    [preview_hash],
+                    "SELECT batch.id FROM import_batches batch
+                     WHERE batch.preview_hash = ?1 AND batch.kind = 'context_catalogue'
+                       AND batch.workspace_id = ?2
+                       AND batch.repository_id = ?3",
+                    params![
+                        preview_hash,
+                        workspace_id.to_string(),
+                        repository_id.to_string(),
+                    ],
                     |row| row.get::<_, String>(0),
                 )
                 .optional()?;
@@ -1014,6 +1286,7 @@ impl WorkboardApplication {
                     adopted_sessions: usize::try_from(adopted).map_err(|_| {
                         AppError::Domain("invalid adopted session count".to_owned())
                     })?,
+                    reconciled_session_candidates: 0,
                     already_applied: true,
                 })
             })
@@ -1175,6 +1448,7 @@ fn import_checkout_paths(
     transaction: &Transaction<'_>,
     import_id: ImportBatchId,
     checkout_map: &HashMap<String, CheckoutId>,
+    imported_at: &str,
 ) -> Result<(), AppError> {
     let mut statement = source.prepare(
         "SELECT id, worktree_id, path, started_at, ended_at, last_verified_at
@@ -1212,7 +1486,25 @@ fn import_checkout_paths(
                 .map(|(id, _)| id.clone())
                 .unwrap_or_default()
         } else if ended_at.is_none() && current.is_some() {
-            checkout_id.to_string()
+            if imported_at <= started_at.as_str() {
+                return Err(AppError::Domain(
+                    "legacy checkout path starts after the import timestamp".to_owned(),
+                ));
+            }
+            let path_id = CheckoutPathId::generate();
+            transaction.execute(
+                "INSERT INTO checkout_paths (
+                     id, checkout_id, path, observed_from, observed_until
+                 ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    path_id.to_string(),
+                    checkout_id.to_string(),
+                    path,
+                    started_at,
+                    imported_at,
+                ],
+            )?;
+            path_id.to_string()
         } else {
             let path_id = CheckoutPathId::generate();
             transaction.execute(
@@ -1711,9 +2003,124 @@ fn record_legacy_row(
     Ok(())
 }
 
+struct LegacyRepositoryEvidence {
+    worktree_repositories: HashMap<String, String>,
+    repository_roots: Vec<(String, PathBuf)>,
+}
+
+impl LegacyRepositoryEvidence {
+    fn read(connection: &Connection, tables: &[String]) -> Result<Self, AppError> {
+        let mut worktree_repositories = HashMap::new();
+        let mut repository_roots = Vec::new();
+        if tables
+            .iter()
+            .any(|table| table == "repository_path_intervals")
+        {
+            let mut statement =
+                connection.prepare("SELECT repository_id, path FROM repository_path_intervals")?;
+            for row in statement.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    PathBuf::from(row.get::<_, String>(1)?),
+                ))
+            })? {
+                repository_roots.push(row?);
+            }
+        }
+        if tables.iter().any(|table| table == "worktrees") {
+            let mut statement =
+                connection.prepare("SELECT id, repository_id, path FROM worktrees")?;
+            for row in statement.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    PathBuf::from(row.get::<_, String>(2)?),
+                ))
+            })? {
+                let (worktree_id, repository_id, path) = row?;
+                worktree_repositories.insert(worktree_id, repository_id.clone());
+                repository_roots.push((repository_id, path));
+            }
+        }
+        if tables
+            .iter()
+            .any(|table| table == "worktree_path_intervals")
+            && tables.iter().any(|table| table == "worktrees")
+        {
+            let mut statement = connection.prepare(
+                "SELECT worktree.repository_id, path.path
+                 FROM worktree_path_intervals path
+                 JOIN worktrees worktree ON worktree.id = path.worktree_id",
+            )?;
+            for row in statement.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    PathBuf::from(row.get::<_, String>(1)?),
+                ))
+            })? {
+                repository_roots.push(row?);
+            }
+        }
+        repository_roots.sort_by_key(|root| std::cmp::Reverse(root.1.as_os_str().len()));
+        Ok(Self {
+            worktree_repositories,
+            repository_roots,
+        })
+    }
+
+    fn matches_repository(
+        &self,
+        candidate: &LegacySessionCandidatePreview,
+        repository_id: &str,
+    ) -> Option<bool> {
+        if let Some(candidate_repository) = candidate.source_repository_id.as_deref() {
+            return Some(candidate_repository == repository_id);
+        }
+        if let Some(candidate_repository) = candidate
+            .source_worktree_id
+            .as_ref()
+            .and_then(|worktree| self.worktree_repositories.get(worktree))
+        {
+            return Some(candidate_repository == repository_id);
+        }
+        let cwd = candidate.observed_cwd.as_deref()?;
+        if !cwd.is_absolute() {
+            return None;
+        }
+        let mut target_roots = self
+            .repository_roots
+            .iter()
+            .filter(|(candidate_repository, _)| candidate_repository == repository_id)
+            .peekable();
+        target_roots.peek()?;
+        Some(target_roots.any(|(_, root)| paths_equal(cwd, root) || path_is_within(cwd, root)))
+    }
+}
+
+fn validate_repository_selection<'a>(
+    candidates: impl Iterator<Item = &'a LegacySessionCandidatePreview>,
+    repository_id: &str,
+    evidence: &LegacyRepositoryEvidence,
+) -> Result<(), AppError> {
+    let mismatches = candidates
+        .filter(|candidate| evidence.matches_repository(candidate, repository_id) == Some(false))
+        .map(|candidate| candidate.source_conversation_id.as_str())
+        .take(5)
+        .collect::<Vec<_>>();
+    if mismatches.is_empty() {
+        return Ok(());
+    }
+    Err(AppError::Domain(format!(
+        "selected legacy sessions belong to another repository: {}",
+        mismatches.join(", ")
+    )))
+}
+
 fn validate_legacy_preview(preview: &LegacyImportPreview) -> Result<(), AppError> {
-    validate_source_database(&preview.source)?;
-    if preview.source_hash.len() != 64 || preview.repository_inventory.is_empty() {
+    if !preview.source.is_absolute()
+        || preview.source_hash.len() != 64
+        || preview.repository_inventory.is_empty()
+    {
         return Err(AppError::Domain(
             "legacy import preview is invalid".to_owned(),
         ));
@@ -1905,9 +2312,12 @@ mod tests {
     use sha2::{Digest, Sha256};
     use tempfile::TempDir;
     use time::OffsetDateTime;
-    use workboard_core::{FeatureId, Slug, WorkItemId};
+    use workboard_core::{CheckoutId, CheckoutPathId, FeatureId, ImportBatchId, Slug, WorkItemId};
 
-    use super::{preview_context_catalogue, snapshot_context_catalogue};
+    use super::{
+        hash_bytes, legacy_session_candidates, legacy_tables, preview_context_catalogue,
+        snapshot_context_catalogue, verified_legacy_snapshot,
+    };
     use crate::workspace::{
         CreateEpic, InitialiseWorkspace, RegisterRepository, WorkboardApplication,
     };
@@ -1946,9 +2356,39 @@ mod tests {
         assert_eq!(preview.association_events, 1);
         assert_eq!(preview.checkouts, 1);
         assert_eq!(preview.session_candidates.len(), 2);
+        assert!(
+            preview
+                .session_candidates
+                .iter()
+                .all(|candidate| !candidate.selected)
+        );
         assert_eq!(before, after);
         assert!(!path.with_extension("sqlite-wal").exists());
         assert!(!path.with_extension("sqlite-shm").exists());
+    }
+
+    #[test]
+    fn verified_snapshot_remains_pinned_after_the_source_path_changes() {
+        let directory = TempDir::new().expect("temporary directory");
+        let source_repository = create_repository(directory.path(), "source");
+        let common_directory = source_repository
+            .join(".git")
+            .canonicalize()
+            .expect("canonical source Git directory");
+        let legacy = directory.path().join("legacy.sqlite");
+        create_legacy_database(&legacy, &source_repository, &common_directory);
+        let preview = preview_context_catalogue(&legacy).expect("preview catalogue");
+        let snapshot =
+            verified_legacy_snapshot(&legacy, &preview.source_hash).expect("verify snapshot");
+        fs::remove_file(&legacy).expect("remove source database");
+        fs::write(&legacy, b"replacement").expect("replace source path");
+
+        let tables = legacy_tables(&snapshot.connection).expect("read snapshot tables");
+        let candidates = legacy_session_candidates(&snapshot.connection, &tables)
+            .expect("read snapshot candidates");
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].native_id, "native-session");
     }
 
     #[test]
@@ -1983,7 +2423,8 @@ mod tests {
         let legacy = directory.path().join("legacy.sqlite");
         create_legacy_database(&legacy, &source_repository, &common_directory);
         let backup = directory.path().join("backup/catalogue.sqlite");
-        let preview = snapshot_context_catalogue(&legacy, &backup).expect("snapshot catalogue");
+        let mut preview = snapshot_context_catalogue(&legacy, &backup).expect("snapshot catalogue");
+        preview.session_candidates[0].selected = true;
         let database = directory.path().join("workboard.sqlite");
         let planning_store = directory.path().join("planning-store");
         let mut application = WorkboardApplication::open(&database).expect("open Workboard");
@@ -2098,6 +2539,547 @@ mod tests {
             .imported_session_candidates(workspace.workspace.id)
             .expect("list adopted candidate");
         assert_eq!(adopted[0].status, "confirmed");
+    }
+
+    #[test]
+    fn apply_rejects_sessions_owned_by_another_repository() {
+        let directory = TempDir::new().expect("temporary directory");
+        let source_repository = create_repository(directory.path(), "source");
+        let other_repository = create_repository(directory.path(), "other");
+        let source_common = source_repository
+            .join(".git")
+            .canonicalize()
+            .expect("canonical source Git directory");
+        let other_common = other_repository
+            .join(".git")
+            .canonicalize()
+            .expect("canonical other Git directory");
+        let legacy = directory.path().join("legacy.sqlite");
+        create_legacy_database(&legacy, &source_repository, &source_common);
+        add_other_legacy_repository(&legacy, &other_repository, &other_common);
+        let backup = directory.path().join("backup/catalogue.sqlite");
+        let mut preview = snapshot_context_catalogue(&legacy, &backup).expect("snapshot catalogue");
+        for candidate in &mut preview.session_candidates {
+            candidate.selected = true;
+        }
+        let mut application = WorkboardApplication::open(directory.path().join("workboard.sqlite"))
+            .expect("open Workboard");
+        let workspace = application
+            .initialise_workspace(InitialiseWorkspace {
+                slug: Slug::new("demo").expect("workspace slug"),
+                title: "Demo".to_owned(),
+                planning_store_path: directory.path().join("planning-store"),
+            })
+            .expect("initialise workspace");
+        let repository = application
+            .register_repository(RegisterRepository {
+                workspace_id: workspace.workspace.id,
+                slug: Slug::new("source").expect("repository slug"),
+                title: "Source".to_owned(),
+                path: source_repository,
+            })
+            .expect("register repository");
+
+        let error = application
+            .apply_context_catalogue_import(workspace.workspace.id, repository.id, &preview)
+            .expect_err("reject mixed repository import");
+
+        assert!(
+            error
+                .to_string()
+                .contains("selected legacy sessions belong to another repository")
+        );
+        assert!(
+            application
+                .imported_session_candidates(workspace.workspace.id)
+                .expect("list candidates")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn apply_rejects_edited_session_identity() {
+        let directory = TempDir::new().expect("temporary directory");
+        let source_repository = create_repository(directory.path(), "source");
+        let common_directory = source_repository
+            .join(".git")
+            .canonicalize()
+            .expect("canonical source Git directory");
+        let legacy = directory.path().join("legacy.sqlite");
+        create_legacy_database(&legacy, &source_repository, &common_directory);
+        let backup = directory.path().join("backup/catalogue.sqlite");
+        let mut preview = snapshot_context_catalogue(&legacy, &backup).expect("snapshot catalogue");
+        preview.session_candidates[0].selected = true;
+        preview.session_candidates[0].native_id = "forged-native-session".to_owned();
+        let mut application = WorkboardApplication::open(directory.path().join("workboard.sqlite"))
+            .expect("open Workboard");
+        let workspace = application
+            .initialise_workspace(InitialiseWorkspace {
+                slug: Slug::new("demo").expect("workspace slug"),
+                title: "Demo".to_owned(),
+                planning_store_path: directory.path().join("planning-store"),
+            })
+            .expect("initialise workspace");
+        let repository = application
+            .register_repository(RegisterRepository {
+                workspace_id: workspace.workspace.id,
+                slug: Slug::new("source").expect("repository slug"),
+                title: "Source".to_owned(),
+                path: source_repository,
+            })
+            .expect("register repository");
+
+        let error = application
+            .apply_context_catalogue_import(workspace.workspace.id, repository.id, &preview)
+            .expect_err("reject edited identity");
+
+        assert!(error.to_string().contains("identity differs"));
+        assert!(
+            application
+                .imported_session_candidates(workspace.workspace.id)
+                .expect("list candidates")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn apply_rejects_a_destination_id_owned_by_another_session() {
+        let directory = TempDir::new().expect("temporary directory");
+        let source_repository = create_repository(directory.path(), "source");
+        let common_directory = source_repository
+            .join(".git")
+            .canonicalize()
+            .expect("canonical source Git directory");
+        let legacy = directory.path().join("legacy.sqlite");
+        create_legacy_database(&legacy, &source_repository, &common_directory);
+        let backup = directory.path().join("backup/catalogue.sqlite");
+        let mut preview = snapshot_context_catalogue(&legacy, &backup).expect("snapshot catalogue");
+        preview.session_candidates[0].selected = true;
+        let destination = preview.session_candidates[0].destination_session_id;
+        let mut application = WorkboardApplication::open(directory.path().join("workboard.sqlite"))
+            .expect("open Workboard");
+        let workspace = application
+            .initialise_workspace(InitialiseWorkspace {
+                slug: Slug::new("demo").expect("workspace slug"),
+                title: "Demo".to_owned(),
+                planning_store_path: directory.path().join("planning-store"),
+            })
+            .expect("initialise workspace");
+        let repository = application
+            .register_repository(RegisterRepository {
+                workspace_id: workspace.workspace.id,
+                slug: Slug::new("source").expect("repository slug"),
+                title: "Source".to_owned(),
+                path: source_repository,
+            })
+            .expect("register repository");
+        application
+            .store
+            .write(|transaction| {
+                transaction.execute(
+                    "INSERT INTO native_sessions (id, provider, native_id, discovered_at)
+                     VALUES (?1, 'codex', 'unrelated-session', '1')",
+                    [destination.to_string()],
+                )?;
+                Ok(())
+            })
+            .expect("seed destination collision");
+
+        let error = application
+            .apply_context_catalogue_import(workspace.workspace.id, repository.id, &preview)
+            .expect_err("reject destination collision");
+
+        assert!(matches!(error, crate::AppError::IdempotencyConflict));
+        assert!(
+            application
+                .imported_session_candidates(workspace.workspace.id)
+                .expect("list candidates")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn legacy_replay_is_scoped_and_survives_source_retirement() {
+        let directory = TempDir::new().expect("temporary directory");
+        let source_repository = create_repository(directory.path(), "source");
+        let other_repository = create_repository(directory.path(), "other");
+        let common_directory = source_repository
+            .join(".git")
+            .canonicalize()
+            .expect("canonical source Git directory");
+        let legacy = directory.path().join("legacy.sqlite");
+        create_legacy_database(&legacy, &source_repository, &common_directory);
+        let backup = directory.path().join("backup/catalogue.sqlite");
+        let mut preview = snapshot_context_catalogue(&legacy, &backup).expect("snapshot catalogue");
+        preview.session_candidates[0].selected = true;
+        let mut application = WorkboardApplication::open(directory.path().join("workboard.sqlite"))
+            .expect("open Workboard");
+        let workspace = application
+            .initialise_workspace(InitialiseWorkspace {
+                slug: Slug::new("demo").expect("workspace slug"),
+                title: "Demo".to_owned(),
+                planning_store_path: directory.path().join("planning-store"),
+            })
+            .expect("initialise workspace");
+        let repository = application
+            .register_repository(RegisterRepository {
+                workspace_id: workspace.workspace.id,
+                slug: Slug::new("source").expect("repository slug"),
+                title: "Source".to_owned(),
+                path: source_repository,
+            })
+            .expect("register source repository");
+        let other = application
+            .register_repository(RegisterRepository {
+                workspace_id: workspace.workspace.id,
+                slug: Slug::new("other").expect("repository slug"),
+                title: "Other".to_owned(),
+                path: other_repository,
+            })
+            .expect("register other repository");
+        let first = application
+            .apply_context_catalogue_import(workspace.workspace.id, repository.id, &preview)
+            .expect("apply import");
+        fs::rename(&backup, directory.path().join("retired-catalogue.sqlite"))
+            .expect("retire legacy snapshot");
+
+        let replay = application
+            .apply_context_catalogue_import(workspace.workspace.id, repository.id, &preview)
+            .expect("replay import");
+        let other_target =
+            application.apply_context_catalogue_import(workspace.workspace.id, other.id, &preview);
+
+        assert!(replay.already_applied);
+        assert_eq!(replay.import_id, first.import_id);
+        assert!(other_target.is_err());
+    }
+
+    #[test]
+    fn import_preserves_a_conflicting_legacy_checkout_path_as_history() {
+        let directory = TempDir::new().expect("temporary directory");
+        let source_repository = create_repository(directory.path(), "source");
+        let legacy_repository_path = directory.path().join("historical-source");
+        let common_directory = source_repository
+            .join(".git")
+            .canonicalize()
+            .expect("canonical source Git directory");
+        let legacy = directory.path().join("legacy.sqlite");
+        create_legacy_database(&legacy, &legacy_repository_path, &common_directory);
+        let backup = directory.path().join("backup/catalogue.sqlite");
+        let mut preview = snapshot_context_catalogue(&legacy, &backup).expect("snapshot catalogue");
+        preview.session_candidates[0].selected = true;
+        let mut application = WorkboardApplication::open(directory.path().join("workboard.sqlite"))
+            .expect("open Workboard");
+        let workspace = application
+            .initialise_workspace(InitialiseWorkspace {
+                slug: Slug::new("demo").expect("workspace slug"),
+                title: "Demo".to_owned(),
+                planning_store_path: directory.path().join("planning-store"),
+            })
+            .expect("initialise workspace");
+        let repository = application
+            .register_repository(RegisterRepository {
+                workspace_id: workspace.workspace.id,
+                slug: Slug::new("source").expect("repository slug"),
+                title: "Source".to_owned(),
+                path: source_repository.clone(),
+            })
+            .expect("register repository");
+        let checkout_id = CheckoutId::generate();
+        let current_path_id = CheckoutPathId::generate();
+        application
+            .store
+            .write(|transaction| {
+                transaction.execute(
+                    "INSERT INTO checkouts (
+                         id, repository_id, git_worktree_identity, branch, head,
+                         availability, created_at
+                     ) VALUES (?1, ?2, ?3, 'main', 'abc123', 'available', '200')",
+                    params![
+                        checkout_id.to_string(),
+                        repository.id.to_string(),
+                        text_path(&common_directory),
+                    ],
+                )?;
+                transaction.execute(
+                    "INSERT INTO checkout_paths (
+                         id, checkout_id, path, observed_from, observed_until
+                     ) VALUES (?1, ?2, ?3, '200', NULL)",
+                    params![
+                        current_path_id.to_string(),
+                        checkout_id.to_string(),
+                        text_path(&source_repository),
+                    ],
+                )?;
+                Ok(())
+            })
+            .expect("seed current checkout path");
+
+        let outcome = application
+            .apply_context_catalogue_import(workspace.workspace.id, repository.id, &preview)
+            .expect("import legacy checkout history");
+
+        let (paths, destination_id) = application
+            .store
+            .read(|connection| {
+                let mut statement = connection.prepare(
+                    "SELECT id, path, observed_until FROM checkout_paths
+                     WHERE checkout_id = ?1 ORDER BY observed_from",
+                )?;
+                let paths = statement
+                    .query_map([checkout_id.to_string()], |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                        ))
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                let destination_id = connection.query_row(
+                    "SELECT destination_id FROM legacy_import_records
+                     WHERE import_id = ?1 AND source_table = 'worktree_path_intervals'
+                       AND source_key = '1'",
+                    [outcome.import_id.to_string()],
+                    |row| row.get::<_, String>(0),
+                )?;
+                Ok((paths, destination_id))
+            })
+            .expect("read checkout history");
+        let historical = paths
+            .iter()
+            .find(|(_, path, _)| path == &text_path(&legacy_repository_path))
+            .expect("historical legacy path");
+
+        assert_eq!(paths.len(), 2);
+        assert!(historical.2.is_some());
+        assert_eq!(destination_id, historical.0);
+        assert!(
+            paths
+                .iter()
+                .any(|(id, path, until)| id == &current_path_id.to_string()
+                    && path == &text_path(&source_repository)
+                    && until.is_none())
+        );
+    }
+
+    #[test]
+    fn reapplying_an_older_import_removes_misassigned_candidates() {
+        let directory = TempDir::new().expect("temporary directory");
+        let source_repository = create_repository(directory.path(), "source");
+        let other_repository = create_repository(directory.path(), "other");
+        let source_common = source_repository
+            .join(".git")
+            .canonicalize()
+            .expect("canonical source Git directory");
+        let other_common = other_repository
+            .join(".git")
+            .canonicalize()
+            .expect("canonical other Git directory");
+        let legacy = directory.path().join("legacy.sqlite");
+        create_legacy_database(&legacy, &source_repository, &source_common);
+        add_other_legacy_repository(&legacy, &other_repository, &other_common);
+        let connection = Connection::open(&legacy).expect("open legacy database");
+        connection
+            .execute(
+                "DELETE FROM conversation_context_intervals
+                 WHERE conversation_id = '55555555-5555-4555-8555-555555555555'",
+                [],
+            )
+            .expect("remove explicit other repository evidence");
+        drop(connection);
+        let backup = directory.path().join("backup/catalogue.sqlite");
+        let mut preview = snapshot_context_catalogue(&legacy, &backup).expect("snapshot catalogue");
+        for candidate in &mut preview.session_candidates {
+            candidate.selected = true;
+            if candidate.native_id == "other-native-session" {
+                candidate.source_repository_id = None;
+                candidate.source_worktree_id = None;
+                candidate.observed_cwd = None;
+            }
+        }
+        let mut application = WorkboardApplication::open(directory.path().join("workboard.sqlite"))
+            .expect("open Workboard");
+        let workspace = application
+            .initialise_workspace(InitialiseWorkspace {
+                slug: Slug::new("demo").expect("workspace slug"),
+                title: "Demo".to_owned(),
+                planning_store_path: directory.path().join("planning-store"),
+            })
+            .expect("initialise workspace");
+        let repository = application
+            .register_repository(RegisterRepository {
+                workspace_id: workspace.workspace.id,
+                slug: Slug::new("source").expect("repository slug"),
+                title: "Source".to_owned(),
+                path: source_repository,
+            })
+            .expect("register repository");
+        let other = preview
+            .session_candidates
+            .iter()
+            .find(|candidate| candidate.native_id == "other-native-session")
+            .expect("other repository candidate");
+        let import_id = ImportBatchId::generate();
+        let preview_hash = hash_bytes(&serde_json::to_vec(&preview).expect("serialize preview"));
+        application
+            .store
+            .write(|transaction| {
+                transaction.execute(
+                    "INSERT INTO native_sessions (id, provider, native_id, discovered_at)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![
+                        other.destination_session_id.to_string(),
+                        "claude",
+                        other.native_id,
+                        other.discovered_at,
+                    ],
+                )?;
+                transaction.execute(
+                    "INSERT INTO import_batches (
+                         id, workspace_id, repository_id, kind, source_path, source_head,
+                         preview_hash, planning_commit, imported_at
+                     ) VALUES (?1, ?2, ?3, 'context_catalogue', ?4, NULL, ?5, NULL, '1')",
+                    params![
+                        import_id.to_string(),
+                        workspace.workspace.id.to_string(),
+                        repository.id.to_string(),
+                        preview.source.to_string_lossy(),
+                        preview_hash,
+                    ],
+                )?;
+                transaction.execute(
+                    "INSERT INTO import_source_destinations (
+                         import_id, source_path, source_hash, destination_kind,
+                         destination_id, document_id
+                     ) VALUES (?1, ?2, ?3, 'session_candidate', ?4, NULL)",
+                    params![
+                        import_id.to_string(),
+                        other.source_conversation_id,
+                        preview.source_hash,
+                        other.destination_session_id.to_string(),
+                    ],
+                )?;
+                transaction.execute(
+                    "INSERT INTO legacy_import_records (
+                         import_id, source_table, source_key, destination_kind,
+                         destination_id, payload_json
+                     ) VALUES (?1, 'repositories', 'repo', 'repository', ?2, '{}')",
+                    params![import_id.to_string(), repository.id.to_string()],
+                )?;
+                transaction.execute(
+                    "INSERT INTO imported_session_candidates (
+                         workspace_id, session_id, repository_id, checkout_id,
+                         legacy_workstream_id, legacy_workstream_title, authority,
+                         confidence, status, imported_at
+                     ) VALUES (?1, ?2, ?3, NULL, NULL, NULL, NULL, NULL, 'unassigned', '1')",
+                    params![
+                        workspace.workspace.id.to_string(),
+                        other.destination_session_id.to_string(),
+                        repository.id.to_string(),
+                    ],
+                )?;
+                Ok(())
+            })
+            .expect("seed older import");
+
+        let outcome = application
+            .apply_context_catalogue_import(workspace.workspace.id, repository.id, &preview)
+            .expect("reconcile older import");
+
+        assert!(outcome.already_applied);
+        assert_eq!(outcome.reconciled_session_candidates, 1);
+        assert!(
+            application
+                .imported_session_candidates(workspace.workspace.id)
+                .expect("list candidates")
+                .is_empty()
+        );
+    }
+
+    fn create_repository(parent: &Path, name: &str) -> std::path::PathBuf {
+        let repository = parent.join(name);
+        fs::create_dir_all(&repository).expect("create repository");
+        successful(
+            Command::new("git")
+                .arg("init")
+                .args(["-b", "main"])
+                .arg(&repository),
+        );
+        fs::write(repository.join("README.md"), format!("# {name}\n")).expect("write repository");
+        successful(
+            Command::new("git")
+                .arg("-C")
+                .arg(&repository)
+                .args(["add", "."]),
+        );
+        successful(
+            Command::new("git")
+                .arg("-C")
+                .arg(&repository)
+                .args(["-c", "user.name=Test", "-c", "user.email=test@example.com"])
+                .args(["commit", "-m", "Seed"]),
+        );
+        repository
+    }
+
+    fn add_other_legacy_repository(path: &Path, repository: &Path, common_directory: &Path) {
+        let connection = Connection::open(path).expect("open legacy database");
+        let repository_text = text_path(repository);
+        let common_text = text_path(common_directory);
+        connection
+            .execute(
+                "INSERT INTO repositories VALUES ('other', ?1, '100', 'Other', '200', 1)",
+                [common_text.as_str()],
+            )
+            .expect("insert other repository");
+        connection
+            .execute(
+                "INSERT INTO repository_path_intervals
+                 VALUES (2, 'other', ?1, '100', NULL, '200')",
+                [repository_text.as_str()],
+            )
+            .expect("insert other repository path");
+        connection
+            .execute(
+                "INSERT INTO worktrees VALUES (
+                     '44444444-4444-4444-8444-444444444444', 'other', ?1, ?2,
+                     'refs/heads/main', 'def456', '200', 1
+                 )",
+                params![common_text, repository_text],
+            )
+            .expect("insert other worktree");
+        connection
+            .execute(
+                "INSERT INTO worktree_path_intervals VALUES (
+                     2, '44444444-4444-4444-8444-444444444444', ?1, '100', NULL, '200'
+                 )",
+                [repository_text.as_str()],
+            )
+            .expect("insert other worktree path");
+        connection
+            .execute_batch(
+                "INSERT INTO conversations VALUES (
+                     '55555555-5555-4555-8555-555555555555',
+                     'claude', 'other-native-session', '100', '250'
+                 );
+                 INSERT INTO workstreams VALUES ('other-workstream', 'other', 'Other');
+                 INSERT INTO association_events VALUES ('other-event', 1);
+                 INSERT INTO conversation_context_intervals VALUES (
+                     2, '55555555-5555-4555-8555-555555555555', 'other',
+                     'other-workstream', '44444444-4444-4444-8444-444444444444',
+                     '100', NULL, 'explicit', 'confirmed', 'other-event'
+                 );",
+            )
+            .expect("insert other session");
+        connection
+            .execute(
+                "INSERT INTO conversation_cwd_observations VALUES (
+                     '55555555-5555-4555-8555-555555555555', ?1, '240',
+                     'C:/transcripts/other-session.jsonl'
+                 )",
+                [repository_text.as_str()],
+            )
+            .expect("insert other CWD observation");
     }
 
     fn create_legacy_database(path: &Path, repository: &Path, common_directory: &Path) {

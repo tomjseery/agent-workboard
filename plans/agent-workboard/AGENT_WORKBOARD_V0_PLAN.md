@@ -560,6 +560,8 @@ provider-neutral core/adapters/tests commit without changing, cleaning, or delet
 
 ### Phase 1 — freeze, scaffold, and salvage the proven foundation
 
+Status: complete.
+
 - Inventory the committed and uncommitted active legacy worktree and produce an exact keep/redesign/drop map.
 - Create the independent `agent-workboard` Git repository, Rust workspace, `workboard` binary, licence, readme,
   formatting/lint/test baseline, and Windows-first development scripts.
@@ -579,6 +581,8 @@ management, SQLite/daemon primitives, and typed Rust errors without depending on
 
 ### Phase 2 — establish the Workboard domain and external planning store
 
+Status: complete.
+
 - Implement Workspace, Repository, Epic, Feature, Work item, Markdown document, checkout history, native
   session association, workflow run/event, operation intent, launch intent, restore membership, and terminal
   layout identities.
@@ -597,6 +601,8 @@ bodies remain in Git while SQLite exposes identity, status, path, hash, and oper
 
 ### Phase 3 — ship the terminal board and searchable selectors
 
+Status: complete.
+
 - Make bare `workboard` open the Rust TUI.
 - Add Workspace/repository navigation, Epic/Feature hierarchy, Feature-grouped Kanban, Work-item details,
   associated session lists, current/historical checkout display, warnings, and keyboard-first fuzzy search.
@@ -613,6 +619,8 @@ can consume the same snapshots and operations without parsing terminal output.
 
 ### Phase 4 — launch and bind new native sessions from birth
 
+Status: complete.
+
 - Implement Claude and Codex new-session launch capabilities in addition to existing exact resume.
 - Complete launch-token propagation, supported hook/app-server correlation, process identity, expiry,
   duplicate protection, reconciliation health, and managed restore membership.
@@ -628,6 +636,8 @@ Consumption contract: a successful launch returns a confirmed `(hierarchy owner,
 checkout, workflow role, restore membership)` binding; failure returns one repairable typed state.
 
 ### Phase 5 — deliver AI-authored Feature planning
+
+Status: complete.
 
 - Implement `workboard feature create` and `epic continue` preflight, selectors, Feature worktree preparation,
   planner launch, generic bootstrap prompt, proposal workflow, approval, validation, document publication,
@@ -648,6 +658,8 @@ Work-item documents plus confirmed application identities and a selectable first
 
 ### Phase 6 — recover managed working sets
 
+Status: complete.
+
 - Persist logical Windows Terminal grouping for every managed session and active work set.
 - Implement `workboard recover`, `--since yesterday`, interactive selection, dry-run, one-Feature-per-window,
   one-session-per-tab launch plans, duplicate skipping, and remove-from-restore behavior.
@@ -664,6 +676,8 @@ Consumption contract: recovery emits a complete preview and either restores each
 the intended checkout exactly once or returns a per-entry typed conflict with no silent omission.
 
 ### Phase 7 — import Concertable and retire progress-ledger orchestration
+
+Status: implementation and review complete; external parity acceptance pending.
 
 - Import Concertable roadmaps as Epics, existing plans as candidate Features, plan phases as proposed Work
   items, and durable progress facts into the appropriate Work-item documents through an editable preview.
