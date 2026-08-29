@@ -58,6 +58,16 @@ pub trait GitWorktreeCreator {
         create_branch: bool,
         start_point: &str,
     ) -> Result<ResolvedWorktree, AppError>;
+
+    fn materialize(
+        &self,
+        repository: &Path,
+        target: &Path,
+        branch: &str,
+        start_point: &str,
+    ) -> Result<ResolvedWorktree, AppError> {
+        self.recreate(repository, target, branch, true, start_point)
+    }
 }
 
 pub struct GitCli;
@@ -173,6 +183,27 @@ impl GitWorktreeCreator for GitCli {
         }
         successful_text(command.output().map_err(AppError::GitIo)?)?;
         self.resolve(&target)
+    }
+
+    fn materialize(
+        &self,
+        repository: &Path,
+        target: &Path,
+        branch: &str,
+        start_point: &str,
+    ) -> Result<ResolvedWorktree, AppError> {
+        remove_empty_target(target)?;
+        let full_branch = format!("refs/heads/{branch}");
+        let discovered = self.discover(repository)?;
+        if discovered
+            .branches
+            .iter()
+            .any(|candidate| candidate.full_name == full_branch)
+        {
+            self.restore_missing_worktree(repository, target, branch)
+        } else {
+            self.recreate(repository, target, branch, true, start_point)
+        }
     }
 }
 
@@ -424,6 +455,25 @@ fn path_text(path: &Path) -> Result<&str, AppError> {
         .ok_or_else(|| AppError::GitPathEncoding(path.to_path_buf()))
 }
 
+fn remove_empty_target(target: &Path) -> Result<(), AppError> {
+    if !target.exists() {
+        return Ok(());
+    }
+    if !target.is_dir() {
+        return Err(AppError::RecreateCheckoutPathExists(target.to_owned()));
+    }
+    let mut entries = std::fs::read_dir(target).map_err(AppError::GitIo)?;
+    if entries
+        .next()
+        .transpose()
+        .map_err(AppError::GitIo)?
+        .is_some()
+    {
+        return Err(AppError::RecreateCheckoutPathExists(target.to_owned()));
+    }
+    std::fs::remove_dir(target).map_err(AppError::GitIo)
+}
+
 #[cfg(windows)]
 fn git_compatible_path(path: &Path) -> PathBuf {
     let value = path.as_os_str().to_string_lossy();
@@ -463,7 +513,11 @@ fn paths_equal(left: &Path, right: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_worktrees, redact_remote_url};
+    use std::fs;
+
+    use tempfile::TempDir;
+
+    use super::{parse_worktrees, redact_remote_url, remove_empty_target};
 
     #[test]
     fn parses_porcelain_worktrees_with_detached_head() {
@@ -488,5 +542,20 @@ mod tests {
             redact_remote_url("git@example.invalid:team/repo.git"),
             "example.invalid:team/repo.git"
         );
+    }
+
+    #[test]
+    fn removes_only_a_truly_empty_materialization_target() {
+        let directory = TempDir::new().expect("temporary directory");
+        let empty = directory.path().join("empty");
+        fs::create_dir(&empty).expect("empty target");
+        remove_empty_target(&empty).expect("remove empty target");
+        assert!(!empty.exists());
+
+        let occupied = directory.path().join("occupied");
+        fs::create_dir(&occupied).expect("occupied target");
+        fs::write(occupied.join("file.txt"), "occupied").expect("occupied file");
+        assert!(remove_empty_target(&occupied).is_err());
+        assert!(occupied.is_dir());
     }
 }

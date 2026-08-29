@@ -247,6 +247,65 @@ pub enum CheckoutAvailability {
     Replaced,
 }
 
+pub const CHECKOUT_READINESS_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckoutPurpose {
+    FeatureIntegration,
+    WorkItemWrite,
+    WriterSession,
+    ReadOnlyShared,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckoutAccessMode {
+    WriteIsolated,
+    ReadOnlyShared,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckoutEvidenceKind {
+    IntentRecorded,
+    Materialized,
+    Restored,
+    GitResolved,
+    IdentityVerified,
+    AvailabilityCorrected,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CheckoutReconciliationEvidence {
+    pub kind: CheckoutEvidenceKind,
+    pub observed_at: OffsetDateTime,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CheckoutReadiness {
+    pub schema_version: u32,
+    pub repository_id: RepositoryId,
+    pub checkout_id: CheckoutId,
+    pub checkout_path_id: CheckoutPathId,
+    pub purpose: CheckoutPurpose,
+    pub access_mode: CheckoutAccessMode,
+    pub owner: HierarchyOwner,
+    pub session_id: Option<ConversationId>,
+    pub parent_feature_checkout_id: Option<CheckoutId>,
+    pub base_revision: String,
+    pub source_revision: String,
+    pub path: PathBuf,
+    pub git_worktree_identity: PathBuf,
+    pub branch: Option<String>,
+    pub head: String,
+    pub availability: CheckoutAvailability,
+    pub isolation_generation: u64,
+    pub reconciliation_generation: u64,
+    pub evidence: Vec<CheckoutReconciliationEvidence>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Checkout {
     pub id: CheckoutId,

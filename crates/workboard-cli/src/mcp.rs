@@ -134,6 +134,7 @@ fn tool_definitions() -> Value {
                 "required": ["workItemId", "nextAction", "summary", "idempotencyKey"],
                 "properties": {
                     "workItemId": { "type": "string", "format": "uuid" },
+                    "repositoryId": { "type": "string", "format": "uuid" },
                     "nextAction": {
                         "type": "string",
                         "enum": ["actionable", "blocked", "paused", "review", "delivery"]

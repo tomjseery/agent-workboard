@@ -14,8 +14,10 @@ pub use association::{
 };
 pub use conversation::{ConversationRef, ConversationRefError, Tool};
 pub use hierarchy::{
-    Checkout, CheckoutAvailability, CheckoutPathInterval, DocumentRevision, EffectiveCheckout,
-    Epic, Feature, HierarchyOwner, LaunchIntent, MarkdownDocument, NameError, NativeSession,
+    CHECKOUT_READINESS_SCHEMA_VERSION, Checkout, CheckoutAccessMode, CheckoutAvailability,
+    CheckoutEvidenceKind, CheckoutPathInterval, CheckoutPurpose, CheckoutReadiness,
+    CheckoutReconciliationEvidence, DocumentRevision, EffectiveCheckout, Epic, Feature,
+    HierarchyOwner, LaunchIntent, MarkdownDocument, NameError, NativeSession,
     NativeSessionAssociation, OperationIntent, Repository, RepositoryPath, RepositoryRemote,
     RestoreMembership, Slug, TerminalLayout, TerminalTab, WorkItem, WorkItemKey, WorkItemStatus,
     WorkflowEvent, WorkflowRun, Workspace, WorkspaceSnapshot,

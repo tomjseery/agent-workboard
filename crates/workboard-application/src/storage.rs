@@ -11,7 +11,7 @@ use workboard_core::{ConversationId, LaunchLeaseId};
 
 use crate::AppError;
 
-const CURRENT_SCHEMA_VERSION: i64 = 13;
+const CURRENT_SCHEMA_VERSION: i64 = 14;
 const FOUNDATION_SCHEMA_CHECKSUM: &str = "agent-workboard-foundation-v1";
 const LAUNCH_LEASE_SCHEMA_CHECKSUM: &str = "agent-workboard-launch-leases-v1";
 const WORKBOARD_DOMAIN_SCHEMA_CHECKSUM: &str = "agent-workboard-domain-v1";
@@ -26,6 +26,7 @@ const LEGACY_IMPORT_SCHEMA_CHECKSUM: &str = "agent-workboard-legacy-import-v1";
 const LEGACY_IMPORT_RECORD_SCHEMA_CHECKSUM: &str = "agent-workboard-legacy-import-record-v1";
 const LEGACY_CANDIDATE_METADATA_SCHEMA_CHECKSUM: &str =
     "agent-workboard-legacy-candidate-metadata-v1";
+const CHECKOUT_READINESS_SCHEMA_CHECKSUM: &str = "agent-workboard-checkout-readiness-v1";
 
 pub struct SqliteStore {
     path: PathBuf,
@@ -898,6 +899,74 @@ fn migrate(connection: &Connection) -> Result<(), AppError> {
          ALTER TABLE imported_session_candidates ADD COLUMN last_prompt_preview TEXT;
          ALTER TABLE imported_session_candidates ADD COLUMN last_activity_at TEXT;
          ALTER TABLE imported_session_candidates ADD COLUMN observed_cwd TEXT;",
+    )?;
+    apply_migration(
+        connection,
+        14,
+        CHECKOUT_READINESS_SCHEMA_CHECKSUM,
+        "CREATE TABLE checkout_readiness (
+             checkout_id TEXT PRIMARY KEY REFERENCES checkouts(id) ON DELETE RESTRICT,
+             schema_version INTEGER NOT NULL CHECK (schema_version > 0),
+             repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE RESTRICT,
+             checkout_path_id TEXT NOT NULL REFERENCES checkout_paths(id) ON DELETE RESTRICT,
+             purpose TEXT NOT NULL CHECK (
+                 purpose IN ('feature_integration', 'work_item_write', 'writer_session', 'read_only_shared')
+             ),
+             access_mode TEXT NOT NULL CHECK (
+                 access_mode IN ('write_isolated', 'read_only_shared')
+             ),
+             owner_kind TEXT NOT NULL CHECK (owner_kind IN ('epic', 'feature', 'work_item')),
+             owner_id TEXT NOT NULL CHECK (owner_id <> ''),
+             session_id TEXT REFERENCES native_sessions(id) ON DELETE RESTRICT,
+             session_key TEXT NOT NULL,
+             parent_feature_checkout_id TEXT REFERENCES checkouts(id) ON DELETE RESTRICT,
+             base_revision TEXT NOT NULL CHECK (base_revision <> ''),
+             source_revision TEXT NOT NULL CHECK (source_revision <> ''),
+             path TEXT NOT NULL CHECK (path <> ''),
+             git_worktree_identity TEXT NOT NULL CHECK (git_worktree_identity <> ''),
+             branch TEXT,
+             head TEXT NOT NULL CHECK (head <> ''),
+             availability TEXT NOT NULL CHECK (
+                 availability IN ('available', 'missing', 'deleted', 'replaced')
+             ),
+             isolation_generation INTEGER NOT NULL CHECK (isolation_generation > 0),
+             reconciliation_generation INTEGER NOT NULL CHECK (reconciliation_generation > 0),
+             evidence_json TEXT NOT NULL CHECK (evidence_json <> ''),
+             observed_at TEXT NOT NULL,
+             UNIQUE (repository_id, purpose, owner_kind, owner_id, session_key),
+             UNIQUE (repository_id, path),
+             UNIQUE (repository_id, branch),
+             CHECK (
+                 (purpose = 'feature_integration' AND owner_kind = 'feature'
+                     AND access_mode = 'write_isolated' AND session_id IS NULL) OR
+                 (purpose = 'work_item_write' AND owner_kind = 'work_item'
+                     AND access_mode = 'write_isolated' AND session_id IS NULL) OR
+                 (purpose = 'writer_session' AND owner_kind = 'work_item'
+                     AND access_mode = 'write_isolated' AND session_id IS NOT NULL) OR
+                 (purpose = 'read_only_shared' AND access_mode = 'read_only_shared')
+             ),
+             CHECK (
+                 (session_id IS NULL AND session_key = '') OR
+                 (session_id IS NOT NULL AND session_key = session_id)
+             )
+         );
+         CREATE TABLE checkout_reconciliation_events (
+             checkout_id TEXT NOT NULL REFERENCES checkout_readiness(checkout_id) ON DELETE RESTRICT,
+             generation INTEGER NOT NULL CHECK (generation > 0),
+             availability TEXT NOT NULL CHECK (
+                 availability IN ('available', 'missing', 'deleted', 'replaced')
+             ),
+             head TEXT NOT NULL,
+             evidence_json TEXT NOT NULL CHECK (evidence_json <> ''),
+             observed_at TEXT NOT NULL,
+             PRIMARY KEY (checkout_id, generation)
+         );
+         ALTER TABLE managed_session_requests
+             ADD COLUMN checkout_id TEXT REFERENCES checkouts(id) ON DELETE RESTRICT;
+         ALTER TABLE managed_session_requests
+             ADD COLUMN readiness_generation INTEGER;
+         ALTER TABLE managed_session_requests
+             ADD COLUMN repository_id TEXT REFERENCES repositories(id) ON DELETE RESTRICT;",
     )?;
     Ok(())
 }

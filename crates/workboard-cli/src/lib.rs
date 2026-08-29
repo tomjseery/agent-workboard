@@ -10,7 +10,9 @@ use directories::{ProjectDirs, UserDirs};
 use serde::Serialize;
 use workboard_application::AppError;
 use workboard_application::caller::{CallerIdentityProvider, EnvironmentCallerIdentity};
-use workboard_application::checkout::{AdoptFeatureCheckout, PrepareFeatureCheckout};
+use workboard_application::checkout::{
+    AdoptFeatureCheckout, PrepareFeatureCheckout, PrepareWorkItemCheckout,
+};
 use workboard_application::concertable_import::{
     ConcertableImportPreview, preview_concertable_plans,
 };
@@ -236,6 +238,8 @@ enum WorkCommand {
     },
     Start {
         work_item: Option<String>,
+        #[arg(long)]
+        repository: Option<String>,
         #[arg(long, value_enum, default_value = "codex")]
         tool: ToolArg,
         #[arg(long)]
@@ -350,6 +354,7 @@ struct WorkItemCheckpointRequest {
 #[serde(rename_all = "camelCase")]
 struct ManagedSessionRequest {
     work_item_id: WorkItemId,
+    repository_id: Option<workboard_core::RepositoryId>,
     tool: Tool,
     idempotency_key: String,
     terminal: Option<PathBuf>,
@@ -854,6 +859,7 @@ fn execute(cli: Cli) -> Result<String, AppError> {
             command:
                 WorkCommand::Start {
                     work_item,
+                    repository,
                     tool,
                     terminal,
                     native,
@@ -864,19 +870,41 @@ fn execute(cli: Cli) -> Result<String, AppError> {
             let workspace_id = resolve_workspace(&application, cli.workspace)?;
             let snapshot = application.snapshot(workspace_id)?;
             let work_item = select_work_item(&snapshot, work_item.as_deref(), cli.json)?.clone();
-            let checkout = match checkout {
-                Some(query) => {
-                    let selected = select_checkout(&snapshot, &query, &work_item, cli.json)?;
-                    application.override_work_item_checkout(
-                        work_item.id,
-                        selected.id,
-                        time::OffsetDateTime::now_utc(),
-                    )?
-                }
-                None => application.effective_work_item_checkout(work_item.id)?,
-            };
             let tool = Tool::from(tool);
             let now = time::OffsetDateTime::now_utc();
+            let launch_idempotency_key = idempotency_key.unwrap_or_else(new_idempotency_key);
+            if checkout.is_some() {
+                return Err(AppError::CheckoutReconciliation {
+                    code: "explicit_write_checkout_unsupported".to_owned(),
+                    message: "write-capable Work-item launches use a derived isolated checkout"
+                        .to_owned(),
+                });
+            }
+            let repository_id = if let Some(query) = repository {
+                let repository = select_repository(&snapshot, Some(&query), cli.json)?;
+                if !work_item.repository_ids.contains(&repository.id) {
+                    return Err(AppError::WorkItemRepositoryMismatch);
+                }
+                repository.id
+            } else {
+                let [repository_id] = work_item.repository_ids.as_slice() else {
+                    return Err(AppError::CheckoutReconciliation {
+                        code: "launch_repository_selection_required".to_owned(),
+                        message: "the Work item targets multiple repositories; select the launch repository"
+                            .to_owned(),
+                    });
+                };
+                *repository_id
+            };
+            application
+                .checkout_service()
+                .prepare_work_item(PrepareWorkItemCheckout {
+                    work_item_id: work_item.id,
+                    repository_id,
+                    idempotency_key: format!("{launch_idempotency_key}:checkout"),
+                    observed_at: now,
+                })?;
+            let checkout = application.effective_work_item_checkout(work_item.id)?;
             let request = BeginManagedSessionLaunch {
                 owner: HierarchyOwner::WorkItem(work_item.id),
                 role: ManagedSessionRole::WorkItemExecution,
@@ -888,7 +916,7 @@ fn execute(cli: Cli) -> Result<String, AppError> {
                 terminal_window: Some(format!("workboard-feature-{}", work_item.feature_id)),
                 terminal_executable: terminal.unwrap_or_else(default_terminal_executable),
                 native_executable: native.unwrap_or_else(|| default_native_executable(tool)),
-                idempotency_key: idempotency_key.unwrap_or_else(new_idempotency_key),
+                idempotency_key: launch_idempotency_key,
                 created_at: now,
                 expires_at: now + time::Duration::minutes(2),
                 resume_context: None,
@@ -948,13 +976,16 @@ fn execute(cli: Cli) -> Result<String, AppError> {
             let session =
                 select_session(&snapshot, session.as_deref(), requested_tool, cli.json)?.clone();
             let target = application.managed_session_target(session.id)?;
+            let now = time::OffsetDateTime::now_utc();
+            application
+                .checkout_service()
+                .reconcile_registered_checkout(target.checkout.checkout_id, now)?;
             let terminal_window = terminal_window_key(&snapshot, target.owner);
             let context = application.native_sources().resume_context(
                 session.id,
                 target.checkout.path.clone(),
                 target.checkout.title.clone(),
             )?;
-            let now = time::OffsetDateTime::now_utc();
             let request = BeginManagedSessionLaunch {
                 owner: target.owner,
                 role: target.role,
@@ -993,6 +1024,25 @@ fn execute(cli: Cli) -> Result<String, AppError> {
             let snapshot = application.snapshot(workspace_id)?;
             let work_item = select_work_item(&snapshot, work_item.as_deref(), cli.json)?.clone();
             let checkout = application.effective_work_item_checkout(work_item.id)?;
+            let readiness = application
+                .checkout_service()
+                .readiness_for_checkout(checkout.checkout_id)?
+                .ok_or_else(|| AppError::CheckoutReconciliation {
+                    code: "work_item_checkout_not_isolated".to_owned(),
+                    message: "the Work item has no isolated checkout readiness record".to_owned(),
+                })?;
+            if readiness.owner != HierarchyOwner::WorkItem(work_item.id) {
+                return Err(AppError::CheckoutReconciliation {
+                    code: "checkout_owner_mismatch".to_owned(),
+                    message: "the isolated checkout belongs to a different Work item".to_owned(),
+                });
+            }
+            application
+                .checkout_service()
+                .reconcile_registered_checkout(
+                    checkout.checkout_id,
+                    time::OffsetDateTime::now_utc(),
+                )?;
             let caller = EnvironmentCallerIdentity.identify(tool.map(Tool::from))?;
             let binding = application.session_launch().adopt_observed(
                 HierarchyOwner::WorkItem(work_item.id),
@@ -1823,42 +1873,6 @@ fn select_session<'a>(
         .ok_or(AppError::ConversationNotFound)
 }
 
-fn select_checkout<'a>(
-    snapshot: &'a workboard_core::WorkspaceSnapshot,
-    query: &str,
-    work_item: &WorkItem,
-    structured: bool,
-) -> Result<&'a Checkout, AppError> {
-    let candidates = snapshot
-        .checkouts
-        .iter()
-        .filter(|checkout| {
-            checkout.availability == CheckoutAvailability::Available
-                && work_item.repository_ids.contains(&checkout.repository_id)
-        })
-        .map(|checkout| {
-            let path = checkout
-                .paths
-                .iter()
-                .find(|path| path.observed_until.is_none())
-                .map(|path| path.path.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            SelectionCandidate {
-                id: checkout.id.to_string(),
-                key: checkout.branch.clone(),
-                label: path,
-                metadata: checkout.head.clone().unwrap_or_default(),
-            }
-        })
-        .collect();
-    let candidate = select_candidate("checkout", Some(query), candidates, structured)?;
-    snapshot
-        .checkouts
-        .iter()
-        .find(|checkout| checkout.id.to_string() == candidate.id)
-        .ok_or(AppError::ResumeCheckoutRequired)
-}
-
 fn select_available_checkout<'a>(
     snapshot: &'a workboard_core::WorkspaceSnapshot,
     query: &str,
@@ -2145,6 +2159,28 @@ fn execute_managed_session_request(
 ) -> Result<serde_json::Value, AppError> {
     ensure_integration(application, request.tool, now)?;
     let hierarchy = application.assigned_hierarchy(workflow_token, now)?;
+    let work_item = hierarchy
+        .snapshot
+        .work_items
+        .iter()
+        .find(|item| item.id == request.work_item_id)
+        .ok_or(AppError::WorkItemNotFound)?;
+    let repository_id = if let Some(repository_id) = request.repository_id {
+        if !work_item.repository_ids.contains(&repository_id) {
+            return Err(AppError::WorkItemRepositoryMismatch);
+        }
+        repository_id
+    } else {
+        let [repository_id] = work_item.repository_ids.as_slice() else {
+            return Err(AppError::CheckoutReconciliation {
+                code: "launch_repository_selection_required".to_owned(),
+                message:
+                    "the Work item targets multiple repositories; select the launch repository"
+                        .to_owned(),
+            });
+        };
+        *repository_id
+    };
     let terminal_window = terminal_window_key(
         &hierarchy.snapshot,
         HierarchyOwner::WorkItem(request.work_item_id),
@@ -2154,18 +2190,41 @@ fn execute_managed_session_request(
     let native = request
         .native
         .unwrap_or_else(|| default_native_executable(request.tool));
-    let requested = application.workflow_operations().request_session(
-        workflow_token,
-        RequestManagedSession {
-            work_item_id: request.work_item_id,
-            tool: request.tool,
-            idempotency_key,
-            requested_at: now,
-        },
-    )?;
-    if requested.status == "bound" {
-        return serde_json::to_value(&requested).map_err(Into::into);
+    let operation_request = RequestManagedSession {
+        work_item_id: request.work_item_id,
+        repository_id,
+        tool: request.tool,
+        idempotency_key,
+        requested_at: now,
+    };
+    if let Some(existing) = application
+        .workflow_operations()
+        .existing_session_request(workflow_token, &operation_request)?
+    {
+        if existing.status == "bound" {
+            return serde_json::to_value(&existing).map_err(Into::into);
+        }
+        if existing.status != "pending" {
+            return Err(AppError::External {
+                code: "session_request_in_progress".to_owned(),
+                message: format!(
+                    "managed session request {} is {}",
+                    existing.request_id, existing.status
+                ),
+            });
+        }
     }
+    application
+        .checkout_service()
+        .prepare_work_item(PrepareWorkItemCheckout {
+            work_item_id: request.work_item_id,
+            repository_id,
+            idempotency_key: format!("{}:checkout", operation_request.idempotency_key),
+            observed_at: now,
+        })?;
+    let requested = application
+        .workflow_operations()
+        .request_session(workflow_token, operation_request)?;
     if requested.status != "pending" {
         return Err(AppError::External {
             code: "session_request_in_progress".to_owned(),

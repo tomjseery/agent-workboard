@@ -6,8 +6,8 @@ use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 use workboard_core::{
     CheckoutId, ConversationId, HierarchyOwner, ManagedSessionRequestId, ManagedSessionRole,
-    NextActionKind, Tool, WorkItemCheckpointId, WorkItemId, WorkItemStatus, WorkspaceId,
-    WorkspaceSnapshot,
+    NextActionKind, RepositoryId, Tool, WorkItemCheckpointId, WorkItemId, WorkItemStatus,
+    WorkspaceId, WorkspaceSnapshot,
 };
 
 use crate::AppError;
@@ -49,6 +49,7 @@ pub struct WorkItemCheckpointOutcome {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RequestManagedSession {
     pub work_item_id: WorkItemId,
+    pub repository_id: RepositoryId,
     pub tool: Tool,
     pub idempotency_key: String,
     pub requested_at: OffsetDateTime,
@@ -58,10 +59,12 @@ pub struct RequestManagedSession {
 pub struct ManagedSessionRequestOutcome {
     pub request_id: ManagedSessionRequestId,
     pub work_item_id: WorkItemId,
+    pub repository_id: RepositoryId,
     pub tool: Tool,
     pub checkout_id: CheckoutId,
     pub working_directory: PathBuf,
     pub title: String,
+    pub readiness_generation: Option<u64>,
     pub status: String,
 }
 
@@ -243,35 +246,17 @@ impl<'a> WorkflowOperationService<'a> {
     ) -> Result<ManagedSessionRequestOutcome, AppError> {
         validate_idempotency_key(&request.idempotency_key)?;
         let principal = self.authenticate(workflow_token, request.requested_at)?;
-        let target_allowed = self.store.read(|connection| {
-            let allowed = match principal.owner {
-                HierarchyOwner::Epic(epic_id) => connection.query_row(
-                    "SELECT EXISTS (
-                         SELECT 1 FROM work_items item
-                         JOIN features feature ON feature.id = item.feature_id
-                         WHERE item.id = ?1 AND feature.epic_id = ?2
-                     )",
-                    params![request.work_item_id.to_string(), epic_id.to_string()],
-                    |row| row.get::<_, i64>(0),
-                )?,
-                HierarchyOwner::Feature(feature_id) => connection.query_row(
-                    "SELECT EXISTS (
-                         SELECT 1 FROM work_items WHERE id = ?1 AND feature_id = ?2
-                     )",
-                    params![request.work_item_id.to_string(), feature_id.to_string()],
-                    |row| row.get::<_, i64>(0),
-                )?,
-                HierarchyOwner::WorkItem(work_item_id) => {
-                    i64::from(work_item_id == request.work_item_id)
-                }
-            };
-            Ok(allowed != 0)
-        })?;
-        if !target_allowed {
-            return Err(AppError::WorkflowOperationUnauthorized);
+        authorize_session_target(
+            self.store,
+            principal.owner,
+            request.work_item_id,
+            request.repository_id,
+        )?;
+        if let Some(existing) = read_managed_session_request(self.store, &request)? {
+            return Ok(existing);
         }
-        let (checkout_id, working_directory, title) =
-            effective_checkout(self.store, request.work_item_id)?;
+        let (checkout_id, working_directory, title, readiness_generation) =
+            effective_checkout(self.store, request.work_item_id, request.repository_id)?;
         self.store.write(|transaction| {
             if let Some((id, work_item_id, provider, status)) = transaction
                 .query_row(
@@ -297,19 +282,22 @@ impl<'a> WorkflowOperationService<'a> {
                 return Ok(ManagedSessionRequestOutcome {
                     request_id: parse_id(&id)?,
                     work_item_id: request.work_item_id,
+                    repository_id: request.repository_id,
                     tool: request.tool,
                     checkout_id,
                     working_directory,
                     title,
+                    readiness_generation,
                     status,
                 });
             }
             let request_id = ManagedSessionRequestId::generate();
             transaction.execute(
                 "INSERT INTO managed_session_requests (
-                     id, requesting_session_id, work_item_id, provider,
-                     idempotency_key, status, requested_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, 'pending', ?6)",
+                 id, requesting_session_id, work_item_id, provider,
+                     idempotency_key, status, requested_at, checkout_id,
+                     readiness_generation, repository_id
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, 'pending', ?6, ?7, ?8, ?9)",
                 params![
                     request_id.to_string(),
                     principal.session_id.to_string(),
@@ -317,18 +305,42 @@ impl<'a> WorkflowOperationService<'a> {
                     tool_name(request.tool),
                     request.idempotency_key,
                     timestamp(request.requested_at),
+                    checkout_id.to_string(),
+                    readiness_generation
+                        .map(i64::try_from)
+                        .transpose()
+                        .map_err(|error| AppError::Domain(error.to_string()))?,
+                    request.repository_id.to_string(),
                 ],
             )?;
             Ok(ManagedSessionRequestOutcome {
                 request_id,
                 work_item_id: request.work_item_id,
+                repository_id: request.repository_id,
                 tool: request.tool,
                 checkout_id,
                 working_directory,
                 title,
+                readiness_generation,
                 status: "pending".to_owned(),
             })
         })
+    }
+
+    pub fn existing_session_request(
+        &self,
+        workflow_token: &str,
+        request: &RequestManagedSession,
+    ) -> Result<Option<ManagedSessionRequestOutcome>, AppError> {
+        validate_idempotency_key(&request.idempotency_key)?;
+        let principal = self.authenticate(workflow_token, request.requested_at)?;
+        authorize_session_target(
+            self.store,
+            principal.owner,
+            request.work_item_id,
+            request.repository_id,
+        )?;
+        read_managed_session_request(self.store, request)
     }
 
     pub fn record_session_launch(
@@ -372,34 +384,165 @@ impl<'a> WorkflowOperationService<'a> {
     }
 }
 
+fn authorize_session_target(
+    store: &SqliteStore,
+    owner: HierarchyOwner,
+    work_item_id: WorkItemId,
+    repository_id: RepositoryId,
+) -> Result<(), AppError> {
+    let allowed = store.read(|connection| {
+        let allowed = match owner {
+            HierarchyOwner::Epic(epic_id) => connection.query_row(
+                "SELECT EXISTS (
+                     SELECT 1 FROM work_items item
+                     JOIN features feature ON feature.id = item.feature_id
+                     WHERE item.id = ?1 AND feature.epic_id = ?2
+                 )",
+                params![work_item_id.to_string(), epic_id.to_string()],
+                |row| row.get::<_, i64>(0),
+            )?,
+            HierarchyOwner::Feature(feature_id) => connection.query_row(
+                "SELECT EXISTS (
+                     SELECT 1 FROM work_items WHERE id = ?1 AND feature_id = ?2
+                 )",
+                params![work_item_id.to_string(), feature_id.to_string()],
+                |row| row.get::<_, i64>(0),
+            )?,
+            HierarchyOwner::WorkItem(owner_work_item_id) => {
+                i64::from(owner_work_item_id == work_item_id)
+            }
+        };
+        let repository_allowed = connection.query_row(
+            "SELECT EXISTS (
+                 SELECT 1 FROM work_item_repositories
+                 WHERE work_item_id = ?1 AND repository_id = ?2
+             )",
+            params![work_item_id.to_string(), repository_id.to_string()],
+            |row| row.get::<_, i64>(0),
+        )?;
+        Ok(allowed != 0 && repository_allowed != 0)
+    })?;
+    if allowed {
+        Ok(())
+    } else {
+        Err(AppError::WorkflowOperationUnauthorized)
+    }
+}
+
+fn read_managed_session_request(
+    store: &SqliteStore,
+    request: &RequestManagedSession,
+) -> Result<Option<ManagedSessionRequestOutcome>, AppError> {
+    store.read(|connection| {
+        let row = connection
+            .query_row(
+                "SELECT request.id, request.work_item_id, request.provider, request.status,
+                        request.repository_id, checkout.id, path.path, item.title,
+                        COALESCE(readiness.reconciliation_generation,
+                                 request.readiness_generation)
+                 FROM managed_session_requests request
+                 JOIN work_items item ON item.id = request.work_item_id
+                 JOIN checkouts checkout
+                   ON checkout.id = request.checkout_id AND checkout.availability = 'available'
+                 JOIN checkout_paths path
+                   ON path.checkout_id = checkout.id AND path.observed_until IS NULL
+                 LEFT JOIN checkout_readiness readiness ON readiness.checkout_id = checkout.id
+                 WHERE request.idempotency_key = ?1",
+                [request.idempotency_key.as_str()],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, String>(7)?,
+                        row.get::<_, Option<i64>>(8)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((
+            request_id,
+            work_item_id,
+            provider,
+            status,
+            repository_id,
+            checkout_id,
+            path,
+            title,
+            readiness_generation,
+        )) = row
+        else {
+            return Ok(None);
+        };
+        if parse_id::<WorkItemId>(&work_item_id)? != request.work_item_id
+            || parse_id::<RepositoryId>(&repository_id)? != request.repository_id
+            || parse_tool(&provider)? != request.tool
+        {
+            return Err(AppError::IdempotencyConflict);
+        }
+        Ok(Some(ManagedSessionRequestOutcome {
+            request_id: parse_id(&request_id)?,
+            work_item_id: request.work_item_id,
+            repository_id: request.repository_id,
+            tool: request.tool,
+            checkout_id: parse_id(&checkout_id)?,
+            working_directory: PathBuf::from(path),
+            title,
+            readiness_generation: readiness_generation
+                .map(u64::try_from)
+                .transpose()
+                .map_err(|error| AppError::Domain(error.to_string()))?,
+            status,
+        }))
+    })
+}
+
 fn effective_checkout(
     store: &SqliteStore,
     work_item_id: WorkItemId,
-) -> Result<(CheckoutId, PathBuf, String), AppError> {
+    repository_id: RepositoryId,
+) -> Result<(CheckoutId, PathBuf, String, Option<u64>), AppError> {
     store.read(|connection| {
         let mut statement = connection.prepare(
-            "SELECT checkout.id, path.path, item.title
+            "SELECT checkout.id, path.path, item.title, readiness.reconciliation_generation
              FROM effective_work_item_checkouts effective
              JOIN checkouts checkout
                ON checkout.id = effective.checkout_id AND checkout.availability = 'available'
              JOIN checkout_paths path
                ON path.checkout_id = checkout.id AND path.observed_until IS NULL
              JOIN work_items item ON item.id = effective.work_item_id
-             WHERE effective.work_item_id = ?1",
+             LEFT JOIN checkout_readiness readiness ON readiness.checkout_id = checkout.id
+             WHERE effective.work_item_id = ?1 AND effective.repository_id = ?2",
         )?;
         let rows = statement
-            .query_map([work_item_id.to_string()], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            })?
+            .query_map(
+                params![work_item_id.to_string(), repository_id.to_string()],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<i64>>(3)?,
+                    ))
+                },
+            )?
             .collect::<Result<Vec<_>, _>>()?;
-        let [(checkout_id, path, title)] = rows.as_slice() else {
+        let [(checkout_id, path, title, readiness_generation)] = rows.as_slice() else {
             return Err(AppError::ResumeCheckoutRequired);
         };
-        Ok((parse_id(checkout_id)?, PathBuf::from(path), title.clone()))
+        Ok((
+            parse_id(checkout_id)?,
+            PathBuf::from(path),
+            title.clone(),
+            readiness_generation
+                .map(u64::try_from)
+                .transpose()
+                .map_err(|error| AppError::Domain(error.to_string()))?,
+        ))
     })
 }
 
@@ -533,6 +676,7 @@ mod tests {
         _directory: TempDir,
         store: SqliteStore,
         work_item_id: WorkItemId,
+        repository_id: RepositoryId,
         at: OffsetDateTime,
         token: String,
     }
@@ -689,6 +833,7 @@ mod tests {
             _directory: directory,
             store,
             work_item_id,
+            repository_id,
             at,
             token,
         }
@@ -729,6 +874,7 @@ mod tests {
 
         let request = RequestManagedSession {
             work_item_id: fixture.work_item_id,
+            repository_id: fixture.repository_id,
             tool: Tool::Claude,
             idempotency_key: "request-review-session".to_owned(),
             requested_at: fixture.at + time::Duration::minutes(5),
