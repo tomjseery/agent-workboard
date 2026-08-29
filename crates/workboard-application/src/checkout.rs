@@ -111,22 +111,40 @@ impl<'a> CheckoutService<'a> {
                     (resolved, CheckoutEvidenceKind::Restored)
                 }
                 Err(error) => {
-                    return Err(checkout_conflict(
+                    let error = checkout_conflict(
                         "checkout_target_occupied",
                         format!(
                             "the derived checkout target is occupied and did not resolve: {error}"
                         ),
-                    ));
+                    );
+                    if let Some(readiness) = current.as_ref() {
+                        record_unavailable(
+                            self.store,
+                            readiness,
+                            request.observed_at,
+                            error.to_string(),
+                        )?;
+                    }
+                    return Err(error);
                 }
             }
         } else if context.target.exists() {
-            return Err(checkout_conflict(
+            let error = checkout_conflict(
                 "checkout_target_occupied",
                 format!(
                     "the derived checkout target is not a directory: {}",
                     context.target.display()
                 ),
-            ));
+            );
+            if let Some(readiness) = current.as_ref() {
+                record_unavailable(
+                    self.store,
+                    readiness,
+                    request.observed_at,
+                    error.to_string(),
+                )?;
+            }
+            return Err(error);
         } else {
             ensure_target_parent(&context.target)?;
             let resolved = git.materialize(
@@ -2082,6 +2100,61 @@ mod tests {
             .expect("corrected availability");
 
         assert_eq!(error.code(), "checkout_identity_drift");
+        assert_eq!(availability, "missing");
+    }
+
+    #[test]
+    fn corrects_false_availability_when_recorded_target_becomes_occupied() {
+        let mut fixture = fixture();
+        let feature_git = fake_git(&fixture);
+        let feature_request = request(&fixture, "feature-checkout");
+        CheckoutService::new(&mut fixture.store)
+            .prepare_feature_with(feature_request, &feature_git)
+            .expect("prepare Feature checkout");
+        let work_item_id = seed_work_item(&mut fixture);
+        let git = work_item_git(&fixture, work_item_id, ".git-worktrees-work-item");
+        let readiness = CheckoutService::new(&mut fixture.store)
+            .prepare_work_item_with(
+                PrepareWorkItemCheckout {
+                    work_item_id,
+                    repository_id: fixture.repository_id,
+                    idempotency_key: "work-item-checkout".to_owned(),
+                    observed_at: fixture.observed_at,
+                },
+                &git,
+            )
+            .expect("prepare Work-item checkout");
+        fs::remove_dir_all(&readiness.path).expect("remove derived target fixture");
+        fs::create_dir_all(&readiness.path).expect("restore occupied target directory");
+        fs::write(readiness.path.join("occupied.txt"), "occupied").expect("occupied marker");
+        let mut unavailable_git = work_item_git(&fixture, work_item_id, ".git-worktrees-work-item");
+        unavailable_git.child_resolves = false;
+
+        let error = CheckoutService::new(&mut fixture.store)
+            .prepare_work_item_with(
+                PrepareWorkItemCheckout {
+                    work_item_id,
+                    repository_id: fixture.repository_id,
+                    idempotency_key: "work-item-checkout-reconcile".to_owned(),
+                    observed_at: fixture.observed_at + time::Duration::seconds(1),
+                },
+                &unavailable_git,
+            )
+            .expect_err("occupied recorded target must fail closed");
+        let availability = fixture
+            .store
+            .read(|connection| {
+                connection
+                    .query_row(
+                        "SELECT availability FROM checkouts WHERE id = ?1",
+                        [readiness.checkout_id.to_string()],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .map_err(Into::into)
+            })
+            .expect("corrected availability");
+
+        assert_eq!(error.code(), "checkout_target_occupied");
         assert_eq!(availability, "missing");
     }
 
