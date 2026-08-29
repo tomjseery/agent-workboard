@@ -53,8 +53,10 @@ workboard import context-catalogue apply C:\migration\catalogue.json --repositor
 ```
 
 The import preserves repository and worktree history, native session identity, transcript source locations and
-snapshots, live observations, and raw reconstruction evidence. It does not modify a transcript. Sessions with
-no reviewed Work-item destination remain visible for explicit resolution:
+snapshots, live observations, and raw reconstruction evidence. It does not modify a transcript. Session
+candidates are unselected by default, and apply rejects selected sessions whose repository evidence belongs
+to another repository. Reapplying an older preview reconciles unconfirmed candidates that an earlier import
+misassigned. Sessions with no reviewed Work-item destination remain visible for explicit resolution:
 
 ```powershell
 workboard session imported-candidates [phrase]
