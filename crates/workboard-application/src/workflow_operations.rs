@@ -258,9 +258,16 @@ impl<'a> WorkflowOperationService<'a> {
         let (checkout_id, working_directory, title, readiness_generation) =
             effective_checkout(self.store, request.work_item_id, request.repository_id)?;
         self.store.write(|transaction| {
-            if let Some((id, work_item_id, provider, status)) = transaction
+            if let Some((
+                id,
+                work_item_id,
+                provider,
+                status,
+                stored_repository_id,
+                stored_checkout_id,
+            )) = transaction
                 .query_row(
-                    "SELECT id, work_item_id, provider, status
+                    "SELECT id, work_item_id, provider, status, repository_id, checkout_id
                      FROM managed_session_requests WHERE idempotency_key = ?1",
                     [request.idempotency_key.as_str()],
                     |row| {
@@ -269,22 +276,32 @@ impl<'a> WorkflowOperationService<'a> {
                             row.get::<_, String>(1)?,
                             row.get::<_, String>(2)?,
                             row.get::<_, String>(3)?,
+                            row.get::<_, Option<String>>(4)?,
+                            row.get::<_, Option<String>>(5)?,
                         ))
                     },
                 )
                 .optional()?
             {
+                let stored_repository_id = stored_repository_id
+                    .ok_or(AppError::IdempotencyConflict)
+                    .and_then(|id| parse_id::<RepositoryId>(&id))?;
+                let stored_checkout_id = stored_checkout_id
+                    .ok_or(AppError::IdempotencyConflict)
+                    .and_then(|id| parse_id::<CheckoutId>(&id))?;
                 if parse_id::<WorkItemId>(&work_item_id)? != request.work_item_id
                     || parse_tool(&provider)? != request.tool
+                    || stored_repository_id != request.repository_id
+                    || stored_checkout_id != checkout_id
                 {
                     return Err(AppError::IdempotencyConflict);
                 }
                 return Ok(ManagedSessionRequestOutcome {
                     request_id: parse_id(&id)?,
                     work_item_id: request.work_item_id,
-                    repository_id: request.repository_id,
+                    repository_id: stored_repository_id,
                     tool: request.tool,
-                    checkout_id,
+                    checkout_id: stored_checkout_id,
                     working_directory,
                     title,
                     readiness_generation,
@@ -442,8 +459,7 @@ fn read_managed_session_request(
                                  request.readiness_generation)
                  FROM managed_session_requests request
                  JOIN work_items item ON item.id = request.work_item_id
-                 JOIN checkouts checkout
-                   ON checkout.id = request.checkout_id AND checkout.availability = 'available'
+                 JOIN checkouts checkout ON checkout.id = request.checkout_id
                  JOIN checkout_paths path
                    ON path.checkout_id = checkout.id AND path.observed_until IS NULL
                  LEFT JOIN checkout_readiness readiness ON readiness.checkout_id = checkout.id
@@ -882,11 +898,97 @@ mod tests {
         let first = WorkflowOperationService::new(&mut fixture.store)
             .request_session(&fixture.token, request.clone())
             .expect("request session");
+        fixture
+            .store
+            .write(|transaction| {
+                transaction.execute(
+                    "UPDATE checkouts SET availability = 'missing' WHERE id = ?1",
+                    [first.checkout_id.to_string()],
+                )?;
+                Ok(())
+            })
+            .expect("mark requested checkout missing");
         let repeated = WorkflowOperationService::new(&mut fixture.store)
-            .request_session(&fixture.token, request)
-            .expect("repeat session request");
+            .request_session(&fixture.token, request.clone())
+            .expect("repeat session request with missing checkout");
         assert_eq!(first, repeated);
         assert_eq!(first.status, "pending");
+
+        let other_repository_id = RepositoryId::generate();
+        let other_checkout_id = CheckoutId::generate();
+        let other_checkout_path = fixture._directory.path().join("other-checkout");
+        std::fs::create_dir(&other_checkout_path).expect("other checkout path");
+        fixture
+            .store
+            .write(|transaction| {
+                transaction.execute(
+                    "INSERT INTO repositories (
+                         id, workspace_id, slug, title, git_common_directory,
+                         default_branch, is_planning_store, created_at
+                     ) SELECT ?1, workspace_id, 'other-code', 'Other Code',
+                              'other.git', 'main', 0, ?3
+                       FROM repositories WHERE id = ?2",
+                    params![
+                        other_repository_id.to_string(),
+                        fixture.repository_id.to_string(),
+                        timestamp(fixture.at),
+                    ],
+                )?;
+                transaction.execute(
+                    "INSERT INTO work_item_repositories (work_item_id, repository_id)
+                     VALUES (?1, ?2)",
+                    params![
+                        fixture.work_item_id.to_string(),
+                        other_repository_id.to_string(),
+                    ],
+                )?;
+                transaction.execute(
+                    "INSERT INTO checkouts (
+                         id, repository_id, git_worktree_identity, branch, availability, created_at
+                     ) VALUES (?1, ?2, 'other-feature-checkout', 'feature/other',
+                               'available', ?3)",
+                    params![
+                        other_checkout_id.to_string(),
+                        other_repository_id.to_string(),
+                        timestamp(fixture.at),
+                    ],
+                )?;
+                transaction.execute(
+                    "INSERT INTO checkout_paths (
+                         id, checkout_id, path, observed_from, observed_until
+                     ) VALUES (?1, ?2, ?3, ?4, NULL)",
+                    params![
+                        CheckoutPathId::generate().to_string(),
+                        other_checkout_id.to_string(),
+                        other_checkout_path.to_string_lossy(),
+                        timestamp(fixture.at),
+                    ],
+                )?;
+                transaction.execute(
+                    "INSERT INTO feature_checkouts (
+                         feature_id, repository_id, checkout_id, assigned_at
+                     ) SELECT feature_id, ?2, ?3, ?4
+                       FROM work_items WHERE id = ?1",
+                    params![
+                        fixture.work_item_id.to_string(),
+                        other_repository_id.to_string(),
+                        other_checkout_id.to_string(),
+                        timestamp(fixture.at),
+                    ],
+                )?;
+                Ok(())
+            })
+            .expect("seed another repository checkout");
+        assert!(matches!(
+            WorkflowOperationService::new(&mut fixture.store).request_session(
+                &fixture.token,
+                RequestManagedSession {
+                    repository_id: other_repository_id,
+                    ..request
+                }
+            ),
+            Err(AppError::IdempotencyConflict)
+        ));
         assert!(matches!(
             WorkflowOperationService::new(&mut fixture.store)
                 .authenticate(&fixture.token, fixture.at + time::Duration::hours(13),),
