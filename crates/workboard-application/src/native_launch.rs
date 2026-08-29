@@ -408,18 +408,26 @@ pub(crate) fn validate_native_source(
 
 fn resolve_executable(requested: &Path) -> Option<PathBuf> {
     if requested.is_absolute() || requested.components().count() > 1 {
-        return canonical_file(requested);
+        return canonical_executable_file(requested);
     }
     let search_path = env::var_os("PATH")?;
+    let directories = env::split_paths(&search_path).collect::<Vec<_>>();
+    resolve_executable_from_directories(requested, &directories)
+}
+
+fn resolve_executable_from_directories(
+    requested: &Path,
+    directories: &[PathBuf],
+) -> Option<PathBuf> {
     let extensions = executable_extensions(requested);
-    for directory in env::split_paths(&search_path) {
+    for directory in directories {
         for extension in &extensions {
             let candidate = directory.join(format!(
                 "{}{}",
                 requested.to_string_lossy(),
                 extension.to_string_lossy()
             ));
-            if let Some(path) = canonical_file(&candidate) {
+            if let Some(path) = canonical_executable_file(&candidate) {
                 return Some(path);
             }
         }
@@ -437,20 +445,22 @@ fn executable_extensions(requested: &Path) -> Vec<OsString> {
     }
     #[cfg(windows)]
     {
-        let configured = env::var_os("PATHEXT").unwrap_or_else(|| OsString::from(".EXE;.COM"));
-        let mut extensions = configured
-            .to_string_lossy()
-            .split(';')
-            .filter(|value| !value.is_empty())
-            .map(OsString::from)
-            .collect::<Vec<_>>();
-        extensions.insert(0, OsString::new());
-        extensions
+        vec![OsString::from(".exe"), OsString::from(".com")]
     }
     #[cfg(not(windows))]
     {
         vec![OsString::new()]
     }
+}
+
+fn canonical_executable_file(path: &Path) -> Option<PathBuf> {
+    #[cfg(windows)]
+    if !path.extension().is_some_and(|extension| {
+        extension.eq_ignore_ascii_case("exe") || extension.eq_ignore_ascii_case("com")
+    }) {
+        return None;
+    }
+    canonical_file(path)
 }
 
 fn canonical_file(path: &Path) -> Option<PathBuf> {
@@ -484,7 +494,9 @@ mod tests {
     use workboard_core::{ConversationLifecycle, ConversationRef, ProcessIdentity, Tool};
     use workboard_native::NativeAdapter;
 
-    use super::{LiveState, ResumeContext, ResumeSource, prepare_resume};
+    use super::{
+        LiveState, ResumeContext, ResumeSource, prepare_resume, resolve_executable_from_directories,
+    };
 
     #[derive(Clone)]
     struct FakeProcess {
@@ -526,6 +538,28 @@ mod tests {
         ));
         assert!(!find_process(&processes, 81, new_time, "C:/fake/codex.exe"));
         assert!(find_process(&processes, 81, new_time, "C:/fake/claude.exe"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn executable_resolution_skips_nvm_shims_for_a_real_executable() {
+        let directory = TempDir::new().expect("temporary directory");
+        let nvm = directory.path().join("nvm");
+        let native = directory.path().join("native");
+        fs::create_dir_all(&nvm).expect("nvm directory");
+        fs::create_dir_all(&native).expect("native directory");
+        fs::write(nvm.join("claude"), []).expect("extensionless nvm shim");
+        fs::write(nvm.join("claude.cmd"), []).expect("nvm command shim");
+        fs::write(native.join("claude.exe"), []).expect("native executable");
+
+        let resolved =
+            resolve_executable_from_directories(Path::new("claude"), &[nvm, native.clone()])
+                .expect("native executable should resolve");
+
+        assert_eq!(
+            resolved,
+            fs::canonicalize(native.join("claude.exe")).expect("canonical native executable")
+        );
     }
 
     #[test]
