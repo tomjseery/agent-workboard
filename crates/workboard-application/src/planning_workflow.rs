@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use rusqlite::{OptionalExtension, Transaction, params};
@@ -459,7 +459,7 @@ impl<'a> PlanningWorkflowService<'a> {
                 &stored[0],
                 &at,
             )?;
-            for item in &publication.proposal.work_items {
+            for (proposal_order, item) in publication.proposal.work_items.iter().enumerate() {
                 let key = WorkItemKey::new(format!(
                     "{}/{}/{}",
                     publication.epic_slug, publication.draft.slug, item.proposal.slug
@@ -467,8 +467,9 @@ impl<'a> PlanningWorkflowService<'a> {
                 .map_err(|error| AppError::Domain(error.to_string()))?;
                 transaction.execute(
                     "INSERT INTO work_items (
-                         id, feature_id, key, slug, title, status, created_at
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, 'ready', ?6)",
+                         id, feature_id, key, slug, title, status, created_at,
+                         proposal_order
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, 'ready', ?6, ?7)",
                     params![
                         item.work_item_id.to_string(),
                         feature_id.to_string(),
@@ -476,6 +477,8 @@ impl<'a> PlanningWorkflowService<'a> {
                         item.proposal.slug.as_str(),
                         item.proposal.title,
                         at,
+                        i64::try_from(proposal_order)
+                            .map_err(|error| AppError::Domain(error.to_string()))?,
                     ],
                 )?;
                 for repository_id in &item.proposal.repository_ids {
@@ -483,6 +486,33 @@ impl<'a> PlanningWorkflowService<'a> {
                         "INSERT INTO work_item_repositories (work_item_id, repository_id)
                          VALUES (?1, ?2)",
                         params![item.work_item_id.to_string(), repository_id.to_string()],
+                    )?;
+                }
+            }
+            for item in &publication.proposal.work_items {
+                for (dependency_order, dependency) in item.proposal.dependencies.iter().enumerate()
+                {
+                    let dependency_id = publication
+                        .proposal
+                        .work_items
+                        .iter()
+                        .find(|candidate| &candidate.proposal.slug == dependency)
+                        .map(|candidate| candidate.work_item_id)
+                        .ok_or_else(|| {
+                            AppError::PlanningDocumentInvalid(format!(
+                                "Work-item dependency {dependency} is missing"
+                            ))
+                        })?;
+                    transaction.execute(
+                        "INSERT INTO work_item_dependencies (
+                             work_item_id, dependency_work_item_id, dependency_order
+                         ) VALUES (?1, ?2, ?3)",
+                        params![
+                            item.work_item_id.to_string(),
+                            dependency_id.to_string(),
+                            i64::try_from(dependency_order)
+                                .map_err(|error| AppError::Domain(error.to_string()))?,
+                        ],
                     )?;
                 }
             }
@@ -1166,7 +1196,13 @@ fn validate_proposal(proposal: &FeatureProposal) -> Result<(), AppError> {
                 "Work-item dependency is missing or self-referential".to_owned(),
             ));
         }
+        if item.dependencies.iter().collect::<HashSet<_>>().len() != item.dependencies.len() {
+            return Err(AppError::PlanningDocumentInvalid(
+                "Work-item dependencies must be unique".to_owned(),
+            ));
+        }
     }
+    validate_dependency_graph(proposal)?;
     if proposal
         .first_work_item_slug
         .as_ref()
@@ -1176,6 +1212,42 @@ fn validate_proposal(proposal: &FeatureProposal) -> Result<(), AppError> {
             "first Work item does not exist in the proposal".to_owned(),
         ));
     }
+    Ok(())
+}
+
+fn validate_dependency_graph(proposal: &FeatureProposal) -> Result<(), AppError> {
+    let graph = proposal
+        .work_items
+        .iter()
+        .map(|item| (item.slug.clone(), item.dependencies.clone()))
+        .collect::<HashMap<_, _>>();
+    let mut visiting = HashSet::new();
+    let mut visited = HashSet::new();
+    for slug in graph.keys() {
+        visit_dependency(slug, &graph, &mut visiting, &mut visited)?;
+    }
+    Ok(())
+}
+
+fn visit_dependency(
+    slug: &Slug,
+    graph: &HashMap<Slug, Vec<Slug>>,
+    visiting: &mut HashSet<Slug>,
+    visited: &mut HashSet<Slug>,
+) -> Result<(), AppError> {
+    if visited.contains(slug) {
+        return Ok(());
+    }
+    if !visiting.insert(slug.clone()) {
+        return Err(AppError::PlanningDocumentInvalid(
+            "Work-item dependencies must be acyclic".to_owned(),
+        ));
+    }
+    for dependency in graph.get(slug).into_iter().flatten() {
+        visit_dependency(dependency, graph, visiting, visited)?;
+    }
+    visiting.remove(slug);
+    visited.insert(slug.clone());
     Ok(())
 }
 
@@ -1655,6 +1727,23 @@ mod tests {
                 .count(),
             2
         );
+        let dependencies = fixture
+            .app
+            .store
+            .read(|connection| {
+                connection
+                    .query_row(
+                        "SELECT item.proposal_order, dependency.proposal_order
+                     FROM work_item_dependencies edge
+                     JOIN work_items item ON item.id = edge.work_item_id
+                     JOIN work_items dependency ON dependency.id = edge.dependency_work_item_id",
+                        [],
+                        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+                    )
+                    .map_err(Into::into)
+            })
+            .expect("published dependency");
+        assert_eq!(dependencies, (1, 0));
         let published_count = git(
             &fixture.planning_store,
             &["rev-list", "--count", &published.commit],
@@ -1761,6 +1850,33 @@ mod tests {
                 &active.workflow_token,
                 invalid,
                 "invalid-proposal",
+                fixture.at + time::Duration::minutes(3),
+            ),
+            Err(AppError::PlanningDocumentInvalid(_))
+        ));
+        let mut cyclic = proposal(&active, fixture.repository_id);
+        cyclic.work_items[0].dependencies = vec![cyclic.work_items[1].slug.clone()];
+        assert!(matches!(
+            fixture.app.planning_workflows().submit_proposal(
+                active.draft.feature_id,
+                &active.workflow_token,
+                cyclic,
+                "cyclic-proposal",
+                fixture.at + time::Duration::minutes(3),
+            ),
+            Err(AppError::PlanningDocumentInvalid(_))
+        ));
+        let mut duplicate = proposal(&active, fixture.repository_id);
+        let duplicate_dependency = duplicate.work_items[0].slug.clone();
+        duplicate.work_items[1]
+            .dependencies
+            .push(duplicate_dependency);
+        assert!(matches!(
+            fixture.app.planning_workflows().submit_proposal(
+                active.draft.feature_id,
+                &active.workflow_token,
+                duplicate,
+                "duplicate-dependency-proposal",
                 fixture.at + time::Duration::minutes(3),
             ),
             Err(AppError::PlanningDocumentInvalid(_))
