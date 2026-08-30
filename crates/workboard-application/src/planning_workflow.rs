@@ -1026,9 +1026,9 @@ fn insert_document(
     let (feature_id, work_item_id, kind) = match owner {
         HierarchyOwner::Feature(id) => (Some(id.to_string()), None, "feature"),
         HierarchyOwner::WorkItem(id) => (None, Some(id.to_string()), "work_item"),
-        HierarchyOwner::Epic(_) => {
+        HierarchyOwner::Epic(_) | HierarchyOwner::Workspace(_) => {
             return Err(AppError::Domain(
-                "Feature publication cannot create an Epic document".to_owned(),
+                "Feature publication cannot create an Epic or workspace document".to_owned(),
             ));
         }
     };
@@ -1287,6 +1287,28 @@ mod tests {
         at: OffsetDateTime,
     }
 
+    fn planning_capability_fixture(
+        fixture: &Fixture,
+    ) -> crate::session_launch::CapabilityLaunchInputs {
+        let root = fixture._directory.path();
+        let provider_home = root.join("provider-home");
+        std::fs::create_dir_all(&provider_home).expect("provider home");
+        std::fs::write(provider_home.join("auth.json"), b"{}").expect("provider credential");
+        std::fs::write(provider_home.join(".credentials.json"), b"{}")
+            .expect("provider credential");
+        let executable = root.join("workboard.exe");
+        if !executable.exists() {
+            std::fs::write(&executable, b"").expect("executable fixture");
+        }
+        crate::session_launch::CapabilityLaunchInputs {
+            bundle_parent: root.join("managed-sessions"),
+            provider_home,
+            workboard_executable: executable,
+            database: fixture.app.database_path().to_path_buf(),
+            repository: "fixture".to_owned(),
+        }
+    }
+
     struct ActivePlanning {
         draft: super::FeaturePlanningDraft,
         workflow_token: String,
@@ -1432,6 +1454,7 @@ mod tests {
                 fixture.at + time::Duration::seconds(1),
             )
             .expect("mark planning launch pending");
+        let capability = planning_capability_fixture(fixture);
         let prepared = fixture
             .app
             .session_launch()
@@ -1451,6 +1474,7 @@ mod tests {
                 expires_at: fixture.at + time::Duration::minutes(2),
                 resume_context: None,
                 initial_prompt: Some(super::planner_bootstrap_prompt(&draft)),
+                capability,
             })
             .expect("prepare planner launch");
         let launch_token = prepared.prepared.launch.launch_token().to_owned();

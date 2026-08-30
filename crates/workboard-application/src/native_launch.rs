@@ -99,6 +99,7 @@ pub struct PrepareManagedLaunch {
     pub native: PathBuf,
     pub launch_token: String,
     pub workflow_token: Option<String>,
+    pub capability_environment: Vec<(String, String)>,
     pub initial_prompt: Option<String>,
 }
 
@@ -276,6 +277,7 @@ pub fn prepare_managed_launch(
         terminal_window: request.terminal_window,
         launch_token: request.launch_token,
         workflow_token: request.workflow_token,
+        capability_environment: request.capability_environment,
         initial_prompt: request.initial_prompt,
     })
     .map_err(|error| AppError::Domain(error.to_string()))?;

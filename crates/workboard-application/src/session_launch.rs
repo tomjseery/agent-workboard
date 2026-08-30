@@ -12,6 +12,9 @@ use workboard_core::{
 };
 
 use crate::AppError;
+use crate::capability_bundle::{
+    BundleContext, PrepareCapabilityBundle, PreparedCapabilityBundle, prepare_bundle, retire_bundle,
+};
 use crate::hooks::{
     HOOK_OBSERVATION_TTL_SECONDS, HookIngestionMutation, NativeHookEventKind, parse_hook,
 };
@@ -22,6 +25,15 @@ use crate::native_launch::{
 };
 use crate::planning_workflow::activate_planning_for_binding;
 use crate::storage::SqliteStore;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapabilityLaunchInputs {
+    pub bundle_parent: PathBuf,
+    pub provider_home: PathBuf,
+    pub workboard_executable: PathBuf,
+    pub database: PathBuf,
+    pub repository: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BeginManagedSessionLaunch {
@@ -40,6 +52,7 @@ pub struct BeginManagedSessionLaunch {
     pub expires_at: OffsetDateTime,
     pub resume_context: Option<ResumeContext>,
     pub initial_prompt: Option<String>,
+    pub capability: CapabilityLaunchInputs,
 }
 
 pub struct PreparedSessionLaunch {
@@ -49,6 +62,7 @@ pub struct PreparedSessionLaunch {
     pub tool: Tool,
     pub checkout_id: CheckoutId,
     pub prepared: PreparedManagedLaunch,
+    pub bundle: PreparedCapabilityBundle,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -163,7 +177,21 @@ impl<'a> SessionLaunchService<'a> {
         }
         let token = Uuid::new_v4().to_string();
         let workflow_token = Uuid::new_v4().to_string();
-        let prepared = prepare_managed_launch(PrepareManagedLaunch {
+        let intent_id = workboard_core::LaunchIntentId::generate();
+        let bundle = prepare_bundle(&PrepareCapabilityBundle {
+            root: request.capability.bundle_parent.join(intent_id.to_string()),
+            provider_home: request.capability.provider_home.clone(),
+            context: BundleContext {
+                tool: request.tool,
+                role: request.role,
+                owner: request.owner,
+                repository: request.capability.repository.clone(),
+                checkout: request.working_directory.clone(),
+                workboard_executable: request.capability.workboard_executable.clone(),
+                database: request.capability.database.clone(),
+            },
+        })?;
+        let prepared = match prepare_managed_launch(PrepareManagedLaunch {
             tool: request.tool,
             mode: request.mode.clone(),
             working_directory: request.working_directory.clone(),
@@ -173,12 +201,18 @@ impl<'a> SessionLaunchService<'a> {
             native: request.native_executable.clone(),
             launch_token: token.clone(),
             workflow_token: Some(workflow_token.clone()),
+            capability_environment: bundle.environment.clone(),
             initial_prompt: request.initial_prompt.clone(),
-        })?;
-        let intent_id = workboard_core::LaunchIntentId::generate();
+        }) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                retire_bundle(&bundle.root)?;
+                return Err(error);
+            }
+        };
         let launch_token_hash = token_hash(&token);
         let workflow_token_hash = token_hash(&workflow_token);
-        self.store.write(|transaction| {
+        if let Err(error) = self.store.write(|transaction| {
             insert_launch_intent(
                 transaction,
                 intent_id,
@@ -186,8 +220,12 @@ impl<'a> SessionLaunchService<'a> {
                 expected_native_id.as_deref(),
                 &launch_token_hash,
                 &workflow_token_hash,
+                Some(&bundle),
             )
-        })?;
+        }) {
+            retire_bundle(&bundle.root)?;
+            return Err(error);
+        }
         Ok(PreparedSessionLaunch {
             intent_id,
             owner: request.owner,
@@ -195,6 +233,7 @@ impl<'a> SessionLaunchService<'a> {
             tool: request.tool,
             checkout_id: request.checkout_id,
             prepared,
+            bundle,
         })
     }
 
@@ -218,6 +257,7 @@ impl<'a> SessionLaunchService<'a> {
             Ok(launched) => launched,
             Err(error) => {
                 self.fail(prepared.intent_id, &error.to_string())?;
+                retire_bundle(&prepared.bundle.root)?;
                 return Err(error);
             }
         };
@@ -292,6 +332,9 @@ impl<'a> SessionLaunchService<'a> {
         self.store.write(|transaction| {
             close_managed_session(transaction, session_id, closed_at, reason.trim())
         })?;
+        if let Some(root) = &session.bundle_root {
+            retire_bundle(root)?;
+        }
         Ok(ClosedManagedSession {
             session_id,
             native_id: session.native_id,
@@ -306,9 +349,10 @@ impl<'a> SessionLaunchService<'a> {
         self.store.read(|connection| {
             let row = connection
                 .query_row(
-                    "SELECT intent.epic_id, intent.feature_id, intent.work_item_id,
-                            managed.role, intent.provider, session.native_id,
-                            session.id, managed.checkout_id, membership.id
+                    "SELECT intent.workspace_id, intent.epic_id, intent.feature_id,
+                            intent.work_item_id, managed.role, intent.provider,
+                            session.native_id, session.id, managed.checkout_id,
+                            membership.id
                      FROM launch_intents intent
                      JOIN managed_sessions managed ON managed.launch_intent_id = intent.id
                      JOIN native_sessions session ON session.id = managed.session_id
@@ -321,18 +365,20 @@ impl<'a> SessionLaunchService<'a> {
                             row.get::<_, Option<String>>(0)?,
                             row.get::<_, Option<String>>(1)?,
                             row.get::<_, Option<String>>(2)?,
-                            row.get::<_, String>(3)?,
+                            row.get::<_, Option<String>>(3)?,
                             row.get::<_, String>(4)?,
                             row.get::<_, String>(5)?,
                             row.get::<_, String>(6)?,
                             row.get::<_, String>(7)?,
-                            row.get::<_, Option<String>>(8)?,
+                            row.get::<_, String>(8)?,
+                            row.get::<_, Option<String>>(9)?,
                         ))
                     },
                 )
                 .optional()?;
             row.map(
                 |(
+                    workspace_id,
                     epic_id,
                     feature_id,
                     work_item_id,
@@ -345,7 +391,7 @@ impl<'a> SessionLaunchService<'a> {
                 )| {
                     Ok(ConfirmedSessionBinding {
                         intent_id: Some(intent_id),
-                        owner: parse_owner(epic_id, feature_id, work_item_id)?,
+                        owner: parse_owner(workspace_id, epic_id, feature_id, work_item_id)?,
                         role: parse_role(&role)?,
                         tool: parse_tool(&tool)?,
                         native_id,
@@ -594,9 +640,10 @@ impl<'a> SessionLaunchService<'a> {
                     "SELECT session.native_id, managed.managed_until,
                             observation.status, observation.pid,
                             observation.process_created_at, observation.executable,
-                            observation.parent_pid
+                            observation.parent_pid, intent.capability_bundle_root
                      FROM managed_sessions managed
                      JOIN native_sessions session ON session.id = managed.session_id
+                     LEFT JOIN launch_intents intent ON intent.id = managed.launch_intent_id
                      LEFT JOIN live_observations observation ON observation.id = (
                          SELECT latest.id FROM live_observations latest
                          WHERE latest.session_id = managed.session_id
@@ -614,12 +661,21 @@ impl<'a> SessionLaunchService<'a> {
                             row.get::<_, Option<String>>(4)?,
                             row.get::<_, Option<String>>(5)?,
                             row.get::<_, Option<u32>>(6)?,
+                            row.get::<_, Option<String>>(7)?,
                         ))
                     },
                 )
                 .optional()?;
-            let Some((native_id, managed_until, status, pid, created_at, executable, parent_pid)) =
-                row
+            let Some((
+                native_id,
+                managed_until,
+                status,
+                pid,
+                created_at,
+                executable,
+                parent_pid,
+                bundle_root,
+            )) = row
             else {
                 return Err(AppError::ManagedSessionRequired);
             };
@@ -645,6 +701,7 @@ impl<'a> SessionLaunchService<'a> {
                 managed_until,
                 status,
                 process,
+                bundle_root: bundle_root.map(PathBuf::from),
             })
         })
     }
@@ -669,6 +726,7 @@ struct ManagedSessionCloseTarget {
     managed_until: Option<String>,
     status: workboard_core::LiveStatus,
     process: Option<ProcessIdentity>,
+    bundle_root: Option<PathBuf>,
 }
 
 struct LaunchIntentRecord {
@@ -689,8 +747,8 @@ fn read_launch_intent(
     store.read(|connection| {
         let row = connection
             .query_row(
-                "SELECT id, epic_id, feature_id, work_item_id, role, provider,
-                        checkout_id, status, expires_at, expected_native_id
+                "SELECT id, workspace_id, epic_id, feature_id, work_item_id, role,
+                        provider, checkout_id, status, expires_at, expected_native_id
                  FROM launch_intents WHERE token_hash = ?1",
                 [token_hash],
                 |row| {
@@ -699,12 +757,13 @@ fn read_launch_intent(
                         row.get::<_, Option<String>>(1)?,
                         row.get::<_, Option<String>>(2)?,
                         row.get::<_, Option<String>>(3)?,
-                        row.get::<_, String>(4)?,
+                        row.get::<_, Option<String>>(4)?,
                         row.get::<_, String>(5)?,
                         row.get::<_, String>(6)?,
                         row.get::<_, String>(7)?,
                         row.get::<_, String>(8)?,
-                        row.get::<_, Option<String>>(9)?,
+                        row.get::<_, String>(9)?,
+                        row.get::<_, Option<String>>(10)?,
                     ))
                 },
             )
@@ -712,6 +771,7 @@ fn read_launch_intent(
         row.map(
             |(
                 id,
+                workspace_id,
                 epic_id,
                 feature_id,
                 work_item_id,
@@ -724,7 +784,7 @@ fn read_launch_intent(
             )| {
                 Ok(LaunchIntentRecord {
                     id: parse_id(&id)?,
-                    owner: parse_owner(epic_id, feature_id, work_item_id)?,
+                    owner: parse_owner(workspace_id, epic_id, feature_id, work_item_id)?,
                     role: parse_role(&role)?,
                     tool: parse_tool(&tool)?,
                     checkout_id: parse_id(&checkout_id)?,
@@ -756,7 +816,7 @@ fn bind_transaction(
     let session_id = ensure_native_session(transaction, tool, native_id, observed_at)?;
     let current_owner = transaction
         .query_row(
-            "SELECT epic_id, feature_id, work_item_id
+            "SELECT workspace_id, epic_id, feature_id, work_item_id
              FROM native_session_associations
              WHERE session_id = ?1 AND associated_until IS NULL",
             [session_id.to_string()],
@@ -765,12 +825,13 @@ fn bind_transaction(
                     row.get::<_, Option<String>>(0)?,
                     row.get::<_, Option<String>>(1)?,
                     row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
                 ))
             },
         )
         .optional()?;
-    if let Some((epic_id, feature_id, work_item_id)) = current_owner {
-        if parse_owner(epic_id, feature_id, work_item_id)? != owner {
+    if let Some((workspace_id, epic_id, feature_id, work_item_id)) = current_owner {
+        if parse_owner(workspace_id, epic_id, feature_id, work_item_id)? != owner {
             return Err(AppError::ConversationAlreadyAssigned);
         }
     } else {
@@ -907,20 +968,23 @@ fn insert_launch_intent(
     expected_native_id: Option<&str>,
     token_hash: &str,
     workflow_token_hash: &str,
+    bundle: Option<&PreparedCapabilityBundle>,
 ) -> Result<(), AppError> {
-    let (epic_id, feature_id, work_item_id) = owner_columns(request.owner);
+    let (workspace_id, epic_id, feature_id, work_item_id) = owner_columns(request.owner);
     transaction.execute(
         "INSERT INTO launch_intents (
-             id, epic_id, feature_id, work_item_id, checkout_id, provider,
-             idempotency_key, token_hash, status, created_at, expires_at, role,
-             expected_native_id, workflow_token_hash, workflow_token_expires_at,
-             terminal_window
+             id, workspace_id, epic_id, feature_id, work_item_id, checkout_id,
+             provider, idempotency_key, token_hash, status, created_at, expires_at,
+             role, expected_native_id, workflow_token_hash,
+             workflow_token_expires_at, terminal_window, capability_bundle_root,
+             capability_bundle_digest, capability_bundle_version
          ) VALUES (
-             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending', ?9, ?10, ?11, ?12,
-             ?13, ?14, ?15
+             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'pending', ?10, ?11, ?12, ?13,
+             ?14, ?15, ?16, ?17, ?18, ?19
          )",
         params![
             intent_id.to_string(),
+            workspace_id,
             epic_id,
             feature_id,
             work_item_id,
@@ -935,6 +999,9 @@ fn insert_launch_intent(
             workflow_token_hash,
             timestamp(request.created_at + time::Duration::hours(12)),
             request.terminal_window,
+            bundle.map(|bundle| path_text(&bundle.root)).transpose()?,
+            bundle.map(|bundle| bundle.digest.as_str()),
+            bundle.map(|bundle| bundle.version),
         ],
     )?;
     Ok(())
@@ -971,6 +1038,17 @@ fn validate_owner_checkout(
                      WHERE epic.id = ?1 AND checkout.id = ?2
                  )",
                 params![epic_id.to_string(), checkout_id.to_string()],
+                |row| row.get::<_, i64>(0),
+            )?,
+            HierarchyOwner::Workspace(workspace_id) => connection.query_row(
+                "SELECT EXISTS (
+                     SELECT 1 FROM repositories repository
+                     JOIN checkouts checkout ON checkout.repository_id = repository.id
+                     WHERE repository.workspace_id = ?1
+                       AND repository.is_planning_store = 0
+                       AND checkout.id = ?2
+                 )",
+                params![workspace_id.to_string(), checkout_id.to_string()],
                 |row| row.get::<_, i64>(0),
             )?,
         };
@@ -1047,14 +1125,16 @@ fn insert_association(
     role: ManagedSessionRole,
     observed_at: OffsetDateTime,
 ) -> Result<(), AppError> {
-    let (epic_id, feature_id, work_item_id) = owner_columns(owner);
+    let (workspace_id, epic_id, feature_id, work_item_id) = owner_columns(owner);
     transaction.execute(
         "INSERT INTO native_session_associations (
-             id, session_id, epic_id, feature_id, work_item_id, role, associated_from
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+             id, session_id, workspace_id, epic_id, feature_id, work_item_id, role,
+             associated_from
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
             AssociationIntervalId::generate().to_string(),
             session_id.to_string(),
+            workspace_id,
             epic_id,
             feature_id,
             work_item_id,
@@ -1072,7 +1152,7 @@ fn ensure_restore_membership(
     observed_at: OffsetDateTime,
 ) -> Result<Option<RestoreMembershipId>, AppError> {
     let feature_id = match owner {
-        HierarchyOwner::Epic(_) => None,
+        HierarchyOwner::Epic(_) | HierarchyOwner::Workspace(_) => None,
         HierarchyOwner::Feature(feature_id) => Some(feature_id),
         HierarchyOwner::WorkItem(work_item_id) => transaction
             .query_row(
@@ -1121,12 +1201,13 @@ fn ensure_restore_entry(
     owner: HierarchyOwner,
     observed_at: OffsetDateTime,
 ) -> Result<(), AppError> {
-    let (epic_id, feature_id, work_item_id) = owner_columns(owner);
+    let (workspace_id, epic_id, feature_id, work_item_id) = owner_columns(owner);
     transaction.execute(
         "INSERT INTO restore_entries (
-             session_id, epic_id, feature_id, work_item_id, added_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5)
+             session_id, workspace_id, epic_id, feature_id, work_item_id, added_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
          ON CONFLICT(session_id) DO UPDATE SET
+             workspace_id = excluded.workspace_id,
              epic_id = excluded.epic_id,
              feature_id = excluded.feature_id,
              work_item_id = excluded.work_item_id,
@@ -1134,6 +1215,7 @@ fn ensure_restore_entry(
              remove_reason = NULL",
         params![
             session_id.to_string(),
+            workspace_id,
             epic_id,
             feature_id,
             work_item_id,
@@ -1212,23 +1294,33 @@ fn parse_live_status(value: &str) -> Result<workboard_core::LiveStatus, AppError
     }
 }
 
-fn owner_columns(owner: HierarchyOwner) -> (Option<String>, Option<String>, Option<String>) {
+type OwnerColumns = (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
+fn owner_columns(owner: HierarchyOwner) -> OwnerColumns {
     match owner {
-        HierarchyOwner::Epic(id) => (Some(id.to_string()), None, None),
-        HierarchyOwner::Feature(id) => (None, Some(id.to_string()), None),
-        HierarchyOwner::WorkItem(id) => (None, None, Some(id.to_string())),
+        HierarchyOwner::Workspace(id) => (Some(id.to_string()), None, None, None),
+        HierarchyOwner::Epic(id) => (None, Some(id.to_string()), None, None),
+        HierarchyOwner::Feature(id) => (None, None, Some(id.to_string()), None),
+        HierarchyOwner::WorkItem(id) => (None, None, None, Some(id.to_string())),
     }
 }
 
 fn parse_owner(
+    workspace_id: Option<String>,
     epic_id: Option<String>,
     feature_id: Option<String>,
     work_item_id: Option<String>,
 ) -> Result<HierarchyOwner, AppError> {
-    match (epic_id, feature_id, work_item_id) {
-        (Some(id), None, None) => Ok(HierarchyOwner::Epic(parse_id(&id)?)),
-        (None, Some(id), None) => Ok(HierarchyOwner::Feature(parse_id(&id)?)),
-        (None, None, Some(id)) => Ok(HierarchyOwner::WorkItem(parse_id(&id)?)),
+    match (workspace_id, epic_id, feature_id, work_item_id) {
+        (Some(id), None, None, None) => Ok(HierarchyOwner::Workspace(parse_id(&id)?)),
+        (None, Some(id), None, None) => Ok(HierarchyOwner::Epic(parse_id(&id)?)),
+        (None, None, Some(id), None) => Ok(HierarchyOwner::Feature(parse_id(&id)?)),
+        (None, None, None, Some(id)) => Ok(HierarchyOwner::WorkItem(parse_id(&id)?)),
         _ => Err(AppError::Domain(
             "launch intent owner is invalid".to_owned(),
         )),
@@ -1338,7 +1430,10 @@ mod tests {
         ManagedSessionRole, ProcessIdentity, RepositoryId, Tool, WorkItemId, WorkspaceId,
     };
 
-    use super::{BeginManagedSessionLaunch, ManagedLaunchExecutor, SessionLaunchService};
+    use super::{
+        BeginManagedSessionLaunch, CapabilityLaunchInputs, ManagedLaunchExecutor,
+        SessionLaunchService,
+    };
     use crate::AppError;
     use crate::hooks::HookIngestionMutation;
     use crate::native_launch::{LaunchedProcess, ProcessTerminator, ResumeContext, ResumeSource};
@@ -1347,6 +1442,7 @@ mod tests {
     struct Fixture {
         _directory: TempDir,
         store: SqliteStore,
+        workspace_id: WorkspaceId,
         work_item_id: WorkItemId,
         checkout_id: CheckoutId,
         checkout_path: PathBuf,
@@ -1403,6 +1499,173 @@ mod tests {
                 message: "fake terminal rejected launch".to_owned(),
             })
         }
+    }
+
+    #[test]
+    fn a_managed_launch_injects_only_its_role_bundle_and_never_the_provider_home() {
+        let mut fixture = fixture();
+        let request = request(&fixture, "bundle-injection");
+        let provider_home = request.capability.provider_home.clone();
+        let prepared = SessionLaunchService::new(&mut fixture.store)
+            .begin(request)
+            .expect("begin launch");
+
+        let skills = prepared.bundle.root.join("skills");
+        assert!(
+            skills
+                .join("workboard-checkpoint")
+                .join("SKILL.md")
+                .is_file()
+        );
+        assert!(skills.join("workboard-recovery").join("SKILL.md").is_file());
+        assert!(!skills.join("workboard-epic-proposal").exists());
+        assert!(!skills.join("workboard-publication").exists());
+
+        assert!(!provider_home.join("skills").exists());
+        assert!(!provider_home.join("settings.json").exists());
+        assert!(!provider_home.join("hooks.json").exists());
+
+        let command = prepared.prepared.launch.direct_child_command();
+        let environment = command
+            .get_envs()
+            .filter_map(|(name, value)| {
+                value.map(|value| {
+                    (
+                        name.to_string_lossy().into_owned(),
+                        value.to_string_lossy().into_owned(),
+                    )
+                })
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(
+            environment.get("CODEX_HOME").map(String::as_str),
+            prepared.bundle.root.to_str()
+        );
+        assert_eq!(
+            environment
+                .get("WORKBOARD_SESSION_ROLE")
+                .map(String::as_str),
+            Some("work_item_execution")
+        );
+        assert_eq!(
+            environment.get("WORKBOARD_OWNER").map(String::as_str),
+            Some(format!("work_item:{}", fixture.work_item_id).as_str())
+        );
+        assert!(environment.contains_key("WORKBOARD_WORKFLOW_TOKEN"));
+        assert!(environment.contains_key("WORKBOARD_REPOSITORY"));
+        assert!(environment.contains_key("WORKBOARD_CHECKOUT"));
+
+        assert!(std::env::var("WORKBOARD_WORKFLOW_TOKEN").is_err());
+        assert!(std::env::var("CODEX_HOME").is_err());
+    }
+
+    #[test]
+    fn a_failed_launch_leaves_no_capability_residue() {
+        let mut fixture = fixture();
+        let request = request(&fixture, "failed-launch");
+        let prepared = SessionLaunchService::new(&mut fixture.store)
+            .begin(request)
+            .expect("begin launch");
+        assert!(prepared.bundle.root.join("skills").is_dir());
+
+        let outcome =
+            SessionLaunchService::new(&mut fixture.store).execute(&prepared, &FailingExecutor);
+
+        assert!(outcome.is_err());
+        assert!(!prepared.bundle.root.join("skills").exists());
+        assert!(!prepared.bundle.root.join("hooks.json").exists());
+        assert!(!prepared.bundle.root.join("auth.json").exists());
+    }
+
+    #[test]
+    fn closing_a_session_removes_its_capabilities_and_keeps_its_transcripts() {
+        let mut fixture = fixture();
+        let launch_request = request(&fixture, "close-bundle");
+        let prepared = SessionLaunchService::new(&mut fixture.store)
+            .begin(launch_request)
+            .expect("begin launch");
+        let mutation = hook(
+            &fixture,
+            Tool::Codex,
+            "thread-bundle-close",
+            &fixture.checkout_path,
+            Some(prepared.prepared.launch.launch_token().to_owned()),
+        );
+        let binding = SessionLaunchService::new(&mut fixture.store)
+            .bind_hook(&mutation)
+            .expect("bind managed session");
+        let transcript = prepared.bundle.transcript_root.join("thread.jsonl");
+        fs::write(&transcript, b"{}").expect("write transcript");
+        let expected = mutation.process.expect("exact process evidence");
+        let terminator = RecordingTerminator {
+            expected,
+            called: Cell::new(false),
+            fail: false,
+        };
+
+        SessionLaunchService::new(&mut fixture.store)
+            .close(
+                binding.session_id,
+                "completed",
+                fixture.observed_at + time::Duration::seconds(3),
+                &terminator,
+            )
+            .expect("close managed session");
+
+        assert!(!prepared.bundle.root.join("skills").exists());
+        assert!(!prepared.bundle.root.join("hooks.json").exists());
+        assert!(!prepared.bundle.root.join("auth.json").exists());
+        assert!(
+            transcript.is_file(),
+            "a closed session must remain resumable, so its transcript survives"
+        );
+    }
+
+    #[test]
+    fn a_workspace_planning_launch_binds_a_workspace_owner_and_its_own_bundle() {
+        let mut fixture = fixture();
+        let mut planning = request(&fixture, "workspace-planning");
+        planning.owner = HierarchyOwner::Workspace(fixture.workspace_id);
+        planning.role = ManagedSessionRole::WorkspacePlanning;
+        planning.terminal_window = Some(format!("workboard-workspace-{}", fixture.workspace_id));
+        let prepared = SessionLaunchService::new(&mut fixture.store)
+            .begin(planning)
+            .expect("begin workspace planning launch");
+        let mutation = hook(
+            &fixture,
+            Tool::Codex,
+            "thread-planning",
+            &fixture.checkout_path,
+            Some(prepared.prepared.launch.launch_token().to_owned()),
+        );
+
+        let binding = SessionLaunchService::new(&mut fixture.store)
+            .bind_hook(&mutation)
+            .expect("bind workspace planning session");
+
+        assert_eq!(
+            binding.owner,
+            HierarchyOwner::Workspace(fixture.workspace_id)
+        );
+        assert_eq!(binding.role, ManagedSessionRole::WorkspacePlanning);
+        assert!(
+            binding.restore_membership_id.is_none(),
+            "a workspace session belongs to no Feature window"
+        );
+        let skills = prepared.bundle.root.join("skills");
+        assert!(
+            skills
+                .join("workboard-research-import")
+                .join("SKILL.md")
+                .is_file()
+        );
+        assert!(
+            skills
+                .join("workboard-epic-proposal")
+                .join("SKILL.md")
+                .is_file()
+        );
+        assert!(!skills.join("workboard-checkpoint").exists());
     }
 
     fn fixture() -> Fixture {
@@ -1520,6 +1783,7 @@ mod tests {
         Fixture {
             _directory: directory,
             store,
+            workspace_id,
             work_item_id,
             checkout_id,
             checkout_path,
@@ -1546,6 +1810,34 @@ mod tests {
             expires_at: fixture.observed_at + time::Duration::minutes(2),
             resume_context: None,
             initial_prompt: None,
+            capability: capability_fixture(fixture),
+        }
+    }
+
+    fn capability_fixture(fixture: &Fixture) -> CapabilityLaunchInputs {
+        let root = fixture
+            .checkout_path
+            .parent()
+            .unwrap_or(&fixture.checkout_path);
+        let provider_home = root.join("provider-home");
+        std::fs::create_dir_all(&provider_home).expect("provider home");
+        std::fs::write(provider_home.join("auth.json"), b"{}").expect("provider credential");
+        std::fs::write(provider_home.join(".credentials.json"), b"{}")
+            .expect("provider credential");
+        let database = root.join("workboard.sqlite");
+        if !database.exists() {
+            std::fs::write(&database, b"").expect("database fixture");
+        }
+        let executable = root.join("workboard.exe");
+        if !executable.exists() {
+            std::fs::write(&executable, b"").expect("executable fixture");
+        }
+        CapabilityLaunchInputs {
+            bundle_parent: root.join("managed-sessions"),
+            provider_home,
+            workboard_executable: executable,
+            database,
+            repository: "fixture".to_owned(),
         }
     }
 

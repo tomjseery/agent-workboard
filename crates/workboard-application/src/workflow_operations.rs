@@ -523,6 +523,7 @@ fn authorize_session_target(
             HierarchyOwner::WorkItem(owner_work_item_id) => {
                 i64::from(owner_work_item_id == work_item_id)
             }
+            HierarchyOwner::Workspace(_) => 0,
         };
         let repository_allowed = connection.query_row(
             "SELECT EXISTS (
@@ -745,6 +746,7 @@ fn workspace_for_owner(
     owner: HierarchyOwner,
 ) -> Result<WorkspaceId, AppError> {
     let value = match owner {
+        HierarchyOwner::Workspace(id) => return Ok(id),
         HierarchyOwner::Epic(id) => connection.query_row(
             "SELECT workspace_id FROM epics WHERE id = ?1",
             [id.to_string()],

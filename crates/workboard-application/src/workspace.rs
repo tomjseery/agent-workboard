@@ -105,6 +105,37 @@ impl WorkboardApplication {
         RecoveryService::new(&mut self.store)
     }
 
+    pub fn managed_transcript_roots(&self, tool: Tool) -> Result<Vec<PathBuf>, AppError> {
+        let directory = match tool {
+            Tool::Claude => "projects",
+            Tool::Codex => "sessions",
+        };
+        let provider = match tool {
+            Tool::Claude => "claude",
+            Tool::Codex => "codex",
+        };
+        self.store.read(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT DISTINCT capability_bundle_root FROM launch_intents
+                 WHERE capability_bundle_root IS NOT NULL AND provider = ?1",
+            )?;
+            let roots = statement
+                .query_map([provider], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(roots
+                .into_iter()
+                .map(|root| PathBuf::from(root).join(directory))
+                .filter(|path| path.is_dir())
+                .collect())
+        })
+    }
+
+    pub fn workspace_planning(
+        &mut self,
+    ) -> crate::workspace_planning::WorkspacePlanningService<'_> {
+        crate::workspace_planning::WorkspacePlanningService::new(&mut self.store)
+    }
+
     pub fn workflow_operations(&mut self) -> WorkflowOperationService<'_> {
         WorkflowOperationService::new(&mut self.store)
     }
