@@ -3958,21 +3958,50 @@ mod tests {
     #[test]
     #[ignore = "requires installed authenticated provider CLIs"]
     fn real_claude_provider_smoke() {
-        let status = Command::new(default_native_executable(Tool::Claude))
-            .arg("--version")
-            .status()
+        let output = Command::new(default_native_executable(Tool::Claude))
+            .args([
+                "--safe-mode",
+                "--tools",
+                "",
+                "--permission-mode",
+                "plan",
+                "--no-session-persistence",
+                "--model",
+                "haiku",
+                "--print",
+                "Reply with exactly WORKBOARD_SMOKE_OK and nothing else.",
+            ])
+            .output()
             .expect("launch real Claude CLI");
-        assert!(status.success());
+        assert_provider_smoke(output, "Claude");
     }
 
     #[test]
     #[ignore = "requires installed authenticated provider CLIs"]
     fn real_codex_provider_smoke() {
-        let status = Command::new(default_native_executable(Tool::Codex))
-            .arg("--version")
-            .status()
+        let output = Command::new(default_native_executable(Tool::Codex))
+            .args([
+                "exec",
+                "--ephemeral",
+                "--sandbox",
+                "read-only",
+                "--ignore-rules",
+                "--color",
+                "never",
+                "Reply with exactly WORKBOARD_SMOKE_OK and nothing else.",
+            ])
+            .output()
             .expect("launch real Codex CLI");
-        assert!(status.success());
+        assert_provider_smoke(output, "Codex");
+    }
+
+    fn assert_provider_smoke(output: std::process::Output, provider: &str) {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success() && stdout.contains("WORKBOARD_SMOKE_OK"),
+            "{provider} smoke failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        );
     }
 
     #[test]
