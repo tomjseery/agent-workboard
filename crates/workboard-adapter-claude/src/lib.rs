@@ -11,6 +11,10 @@ use workboard_native::{
     discover_jsonl_files, stream_jsonl,
 };
 
+pub use follow_up::{
+    ClaudeFollowUpClient, ClaudeFollowUpFailure, ClaudeFollowUpFailureKind, ClaudeFollowUpRequest,
+};
+
 pub const ADAPTER_VERSION: &str = "claude-jsonl-v1";
 
 pub fn launch_profile_arguments(
@@ -449,3 +453,4 @@ mod tests {
             .conversation
     }
 }
+mod follow_up;

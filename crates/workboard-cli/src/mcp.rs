@@ -5,13 +5,15 @@ use serde_json::{Value, json};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use workboard_application::AppError;
+use workboard_application::follow_up::{SendSessionFollowUp, SystemFollowUpExecutor};
 use workboard_application::workflow_operations::CheckpointWorkItem;
 use workboard_application::workspace::WorkboardApplication;
 use workboard_core::HierarchyOwner;
 
 use super::{
     FeatureProposalRequest, FeaturePublicationRequest, ManagedSessionRequest,
-    WorkItemCheckpointRequest, execute_managed_session_request, workflow_token,
+    SessionFollowUpRequest, WorkItemCheckpointRequest, execute_managed_session_request,
+    workflow_token,
 };
 
 const MAX_MESSAGE_BYTES: usize = 2 * 1024 * 1024;
@@ -220,6 +222,30 @@ fn tool_definitions() -> Value {
                 },
                 "additionalProperties": false
             }
+        },
+        {
+            "name": "session_send_follow_up",
+            "description": "Queue and deliver an ordered follow-up using only Workboard owner and session identity.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["owner", "expectedBindingGeneration", "text", "idempotencyKey"],
+                "properties": {
+                    "owner": {
+                        "type": "object",
+                        "required": ["kind", "id"],
+                        "properties": {
+                            "kind": { "type": "string", "enum": ["feature", "work_item"] },
+                            "id": { "type": "string", "format": "uuid" }
+                        },
+                        "additionalProperties": false
+                    },
+                    "sessionId": { "type": "string", "format": "uuid" },
+                    "expectedBindingGeneration": { "type": "integer", "minimum": 1 },
+                    "text": { "type": "string", "minLength": 1, "maxLength": 65536 },
+                    "idempotencyKey": { "type": "string", "minLength": 1 }
+                },
+                "additionalProperties": false
+            }
         }
     ])
 }
@@ -305,6 +331,25 @@ fn call_tool(application: &mut WorkboardApplication, request: &Value) -> Result<
             let request: ManagedSessionRequest = serde_json::from_value(arguments)?;
             execute_managed_session_request(application, &token, request, now)?
         }
+        "session_send_follow_up" => {
+            let request: SessionFollowUpRequest = serde_json::from_value(arguments)?;
+            let queued = application.follow_ups().queue_authenticated(
+                &token,
+                SendSessionFollowUp {
+                    owner: request.owner,
+                    session_id: request.session_id,
+                    expected_binding_generation: request.expected_binding_generation,
+                    text: request.text,
+                    idempotency_key: request.idempotency_key,
+                    requested_at: now,
+                },
+            )?;
+            let outcome = application
+                .follow_ups()
+                .deliver_next(Some(queued.session_id), now, &SystemFollowUpExecutor)?
+                .unwrap_or(queued);
+            serde_json::to_value(outcome)?
+        }
         _ => {
             return Err(AppError::External {
                 code: "mcp_tool_not_found".to_owned(),
@@ -354,7 +399,8 @@ mod tests {
                 "feature_submit_proposal",
                 "feature_publish",
                 "work_checkpoint",
-                "session_request"
+                "session_request",
+                "session_send_follow_up"
             ]
         );
     }
@@ -411,6 +457,6 @@ mod tests {
             }),
         )
         .expect("tools response");
-        assert_eq!(listed["result"]["tools"].as_array().map(Vec::len), Some(8));
+        assert_eq!(listed["result"]["tools"].as_array().map(Vec::len), Some(9));
     }
 }

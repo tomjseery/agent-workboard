@@ -37,6 +37,7 @@ pub struct WorkItemReadiness {
 #[serde(rename_all = "camelCase")]
 pub struct SessionChoice {
     pub session_id: ConversationId,
+    pub binding_generation: u32,
     pub provider: Tool,
     pub profile: LaunchProfile,
     pub role: ManagedSessionRole,
@@ -202,7 +203,8 @@ impl<'a> WorkProjectionService<'a> {
                           ) THEN 'missing'
                           ELSE 'unknown'
                         END,
-                        profile.schema_version, profile.model, profile.effort, profile.source
+                        profile.schema_version, profile.model, profile.effort, profile.source,
+                        managed.binding_generation
                  FROM native_session_associations association
                  JOIN native_sessions session ON session.id = association.session_id
                  JOIN managed_sessions managed ON managed.id = (
@@ -251,6 +253,7 @@ impl<'a> WorkProjectionService<'a> {
                         row.get::<_, Option<String>>(17)?,
                         row.get::<_, Option<String>>(18)?,
                         row.get::<_, Option<String>>(19)?,
+                        row.get::<_, u32>(20)?,
                     ))
                 })?
                 .collect::<Result<Vec<_>, _>>()?;
@@ -277,6 +280,7 @@ impl<'a> WorkProjectionService<'a> {
                         model,
                         effort,
                         source,
+                        binding_generation,
                     )| {
                         let session_id = parse_id(&session_id)?;
                         let provider = parse_tool(&provider)?;
@@ -308,6 +312,7 @@ impl<'a> WorkProjectionService<'a> {
                         );
                         Ok(SessionChoice {
                             session_id,
+                            binding_generation,
                             provider,
                             profile,
                             role,

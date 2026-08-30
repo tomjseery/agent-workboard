@@ -6,7 +6,7 @@ use workboard_core::ManagedSessionRole;
 use crate::error::AppError;
 use crate::integration::INTEGRATION_OWNER;
 
-pub(crate) const WORKFLOW_CONTRACT_VERSION: &str = "agent-workboard/workflow-v1";
+pub(crate) const WORKFLOW_CONTRACT_VERSION: &str = "agent-workboard/workflow-v2";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WorkflowOperation {
@@ -15,6 +15,7 @@ pub(crate) enum WorkflowOperation {
     PublishFeature,
     CheckpointWorkItem,
     RequestManagedSession,
+    SendSessionFollowUp,
     ProposeEpic,
     ProposeEpicFromResearch,
     ProposeFeature,
@@ -28,6 +29,7 @@ impl WorkflowOperation {
             Self::PublishFeature => "publishFeature",
             Self::CheckpointWorkItem => "checkpointWorkItem",
             Self::RequestManagedSession => "requestManagedSession",
+            Self::SendSessionFollowUp => "sendSessionFollowUp",
             Self::ProposeEpic => "proposeEpic",
             Self::ProposeEpicFromResearch => "proposeEpicFromResearch",
             Self::ProposeFeature => "proposeFeature",
@@ -41,6 +43,7 @@ impl WorkflowOperation {
             Self::PublishFeature => "feature_publish",
             Self::CheckpointWorkItem => "work_checkpoint",
             Self::RequestManagedSession => "session_request",
+            Self::SendSessionFollowUp => "session_send_follow_up",
             Self::ProposeEpic => "epic_propose",
             Self::ProposeEpicFromResearch => "epic_propose_research",
             Self::ProposeFeature => "feature_propose",
@@ -54,6 +57,7 @@ impl WorkflowOperation {
             Self::PublishFeature => "publish-feature",
             Self::CheckpointWorkItem => "checkpoint-work-item",
             Self::RequestManagedSession => "request-session",
+            Self::SendSessionFollowUp => "send-follow-up",
             Self::ProposeEpic => "create-epic",
             Self::ProposeEpicFromResearch => "import-epic-research",
             Self::ProposeFeature => "create-feature",
@@ -180,6 +184,16 @@ const SESSION_REQUEST: CapabilityAsset = CapabilityAsset {
     guidance: "Request a session when work belongs to a different Work item that is reachable from this assignment. Workboard resolves the checkout and launches the provider; you never construct a provider command yourself.\n\nA request for a Work item outside your assignment, or for a repository that Work item does not own, is refused.",
 };
 
+const SESSION_FOLLOW_UP: CapabilityAsset = CapabilityAsset {
+    name: "workboard-session-follow-up",
+    description: "Queue an ordered follow-up for a current bound Agent Workboard session.",
+    operations: &[
+        WorkflowOperation::ReadHierarchy,
+        WorkflowOperation::SendSessionFollowUp,
+    ],
+    guidance: "Send a follow-up using only the Feature or Work-item owner, the Workboard session ID when selection is required, the binding generation returned by hierarchy_read, the instruction text, and an idempotency key. Never supply or discover a provider-native identity, executable, provider home, or provider command.\n\nWorkboard preserves FIFO order, resolves the current binding internally, and returns pending when an active provider turn cannot accept the instruction safely. Reuse the same idempotency key only for the exact same instruction.",
+};
+
 const RECOVERY: CapabilityAsset = CapabilityAsset {
     name: "workboard-recovery",
     description: "Report an interrupted or inconsistent Agent Workboard Work item for recovery.",
@@ -196,19 +210,27 @@ pub(crate) fn bundle_assets(role: ManagedSessionRole) -> &'static [CapabilityAss
             &[RESEARCH_IMPORT, EPIC_PROPOSAL, WORKSPACE_FEATURE_PROPOSAL]
         }
         ManagedSessionRole::EpicNavigation => &[HIERARCHY_NAVIGATION, FEATURE_CREATION],
-        ManagedSessionRole::FeaturePlanning => {
-            &[FEATURE_PLANNING_PROPOSAL, APPROVAL_HANDOFF, PUBLICATION]
-        }
+        ManagedSessionRole::FeaturePlanning => &[
+            FEATURE_PLANNING_PROPOSAL,
+            APPROVAL_HANDOFF,
+            PUBLICATION,
+            SESSION_FOLLOW_UP,
+        ],
         ManagedSessionRole::WorkItemExecution => &[
             HIERARCHY_READ,
             CHECKPOINT,
             REVIEW,
             SESSION_REQUEST,
+            SESSION_FOLLOW_UP,
             RECOVERY,
         ],
-        ManagedSessionRole::Debugging | ManagedSessionRole::Review => {
-            &[HIERARCHY_READ, CHECKPOINT, REVIEW, SESSION_REQUEST]
-        }
+        ManagedSessionRole::Debugging | ManagedSessionRole::Review => &[
+            HIERARCHY_READ,
+            CHECKPOINT,
+            REVIEW,
+            SESSION_REQUEST,
+            SESSION_FOLLOW_UP,
+        ],
     }
 }
 
@@ -288,6 +310,7 @@ mod tests {
                 "workboard-feature-proposal",
                 "workboard-approval-handoff",
                 "workboard-publication",
+                "workboard-session-follow-up",
             ])
         );
         assert_eq!(
@@ -297,6 +320,7 @@ mod tests {
                 "workboard-checkpoint",
                 "workboard-review",
                 "workboard-session-request",
+                "workboard-session-follow-up",
                 "workboard-recovery",
             ])
         );

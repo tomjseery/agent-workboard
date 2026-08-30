@@ -16,6 +16,7 @@ use workboard_application::checkout::{
 use workboard_application::concertable_import::{
     ConcertableImportPreview, preview_concertable_plans,
 };
+use workboard_application::follow_up::{SendSessionFollowUp, SystemFollowUpExecutor};
 use workboard_application::hooks::{HookIngestionMutation, MAX_HOOK_INPUT_BYTES};
 use workboard_application::integration::{
     INTEGRATION_OWNER, IntegrationConfirmation, IntegrationOperation, IntegrationRequest,
@@ -343,6 +344,17 @@ enum SessionCommand {
     IgnoreImported {
         session: String,
     },
+    FollowUp {
+        work_item: Option<String>,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        binding_generation: u32,
+        #[arg(long)]
+        text: String,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -391,6 +403,7 @@ enum WorkflowCommand {
     PublishFeature(RequestFileArgs),
     CheckpointWorkItem(RequestFileArgs),
     RequestSession(RequestFileArgs),
+    SendFollowUp(RequestFileArgs),
 }
 
 #[derive(Debug, Args)]
@@ -431,6 +444,16 @@ struct ManagedSessionRequest {
     idempotency_key: String,
     terminal: Option<PathBuf>,
     native: Option<PathBuf>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionFollowUpRequest {
+    owner: HierarchyOwner,
+    session_id: Option<workboard_core::ConversationId>,
+    expected_binding_generation: u32,
+    text: String,
+    idempotency_key: String,
 }
 
 #[derive(Debug, Subcommand)]
@@ -1379,6 +1402,49 @@ fn execute(cli: Cli) -> Result<String, AppError> {
                 format!("Ignored imported session {}", candidate.native_id),
             )
         }
+        Some(Command::Session(SessionArgs {
+            command:
+                SessionCommand::FollowUp {
+                    work_item,
+                    session,
+                    binding_generation,
+                    text,
+                    idempotency_key,
+                },
+        })) => {
+            let workspace_id = resolve_workspace(&application, cli.workspace)?;
+            let snapshot = application.snapshot(workspace_id)?;
+            let work_item = select_work_item(&snapshot, work_item.as_deref(), cli.json)?.clone();
+            let projection = application.work_item_projection(work_item.id)?;
+            let session_id = match session.as_deref() {
+                Some(query) => Some(select_workboard_session(&projection.sessions, query)?),
+                None => None,
+            };
+            let now = time::OffsetDateTime::now_utc();
+            let queued = application.follow_ups().queue_for_board(
+                workspace_id,
+                SendSessionFollowUp {
+                    owner: HierarchyOwner::WorkItem(work_item.id),
+                    session_id,
+                    expected_binding_generation: binding_generation,
+                    text,
+                    idempotency_key: idempotency_key.unwrap_or_else(new_idempotency_key),
+                    requested_at: now,
+                },
+            )?;
+            let outcome = application
+                .follow_ups()
+                .deliver_next(Some(queued.session_id), now, &SystemFollowUpExecutor)?
+                .unwrap_or(queued);
+            output(
+                &outcome,
+                cli.json,
+                format!(
+                    "Follow-up is {:?} for Workboard session {}",
+                    outcome.status, outcome.session_id
+                ),
+            )
+        }
         Some(Command::Workflow(WorkflowArgs { command })) => {
             let workflow_token = workflow_token()?;
             let now = time::OffsetDateTime::now_utc();
@@ -1504,6 +1570,30 @@ fn execute(cli: Cli) -> Result<String, AppError> {
                         &outcome,
                         cli.json,
                         "Managed session request completed".to_owned(),
+                    )
+                }
+                WorkflowCommand::SendFollowUp(arguments) => {
+                    let request: SessionFollowUpRequest =
+                        read_request(&absolute(&current_directory, &arguments.request))?;
+                    let queued = application.follow_ups().queue_authenticated(
+                        &workflow_token,
+                        SendSessionFollowUp {
+                            owner: request.owner,
+                            session_id: request.session_id,
+                            expected_binding_generation: request.expected_binding_generation,
+                            text: request.text,
+                            idempotency_key: request.idempotency_key,
+                            requested_at: now,
+                        },
+                    )?;
+                    let outcome = application
+                        .follow_ups()
+                        .deliver_next(Some(queued.session_id), now, &SystemFollowUpExecutor)?
+                        .unwrap_or(queued);
+                    output(
+                        &outcome,
+                        cli.json,
+                        format!("Follow-up is {:?}", outcome.status),
                     )
                 }
             }
@@ -3411,6 +3501,27 @@ mod tests {
             panic!("expected Work command");
         };
         assert!(matches!(continued.command, WorkCommand::Continue { .. }));
+    }
+
+    #[test]
+    fn session_follow_up_accepts_only_workboard_selection_and_generation() {
+        let cli = Cli::try_parse_from([
+            "workboard",
+            "session",
+            "follow-up",
+            "abcd1234",
+            "--session",
+            "ef567890",
+            "--binding-generation",
+            "4",
+            "--text",
+            "Continue with the verified fix",
+        ])
+        .expect("follow-up command");
+        let Some(CliCommand::Session(session)) = cli.command else {
+            panic!("expected Session command");
+        };
+        assert!(matches!(session.command, SessionCommand::FollowUp { .. }));
     }
 
     #[test]

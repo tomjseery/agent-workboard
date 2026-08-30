@@ -72,6 +72,7 @@ pub struct AssignedDependency {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AssignedSession {
     pub session_id: ConversationId,
+    pub binding_generation: u32,
     pub provider: Tool,
     pub profile: LaunchProfile,
     pub role: ManagedSessionRole,
@@ -79,6 +80,7 @@ pub struct AssignedSession {
     pub live_status: Option<LiveStatus>,
     pub last_activity: Option<OffsetDateTime>,
     pub checkout_id: CheckoutId,
+    pub checkout_generation: Option<u64>,
     pub checkout_path: PathBuf,
     pub branch: Option<String>,
     pub resumability: Resumability,
@@ -170,11 +172,17 @@ impl<'a> WorkflowOperationService<'a> {
                             managed.session_id, managed.checkout_id
                      FROM launch_intents intent
                      JOIN managed_sessions managed ON managed.launch_intent_id = intent.id
+                     LEFT JOIN workflow_credentials credential
+                       ON credential.managed_session_id = managed.id
+                      AND credential.binding_generation = managed.binding_generation
                      JOIN native_session_associations association
                        ON association.session_id = managed.session_id
                       AND association.associated_until IS NULL
-                     WHERE intent.workflow_token_hash = ?1
-                       AND intent.workflow_token_expires_at > ?2
+                     WHERE (
+                           (credential.token_hash = ?1 AND credential.expires_at > ?2)
+                           OR (intent.workflow_token_hash = ?1
+                               AND intent.workflow_token_expires_at > ?2)
+                       )
                        AND intent.status = 'bound' AND managed.managed_until IS NULL",
                     params![token_hash(workflow_token), timestamp(observed_at)],
                     |row| {
@@ -562,11 +570,13 @@ impl<'a> WorkflowOperationService<'a> {
                           ) THEN 'missing'
                           ELSE 'unknown'
                         END,
-                        profile.schema_version, profile.model, profile.effort, profile.source
+                        profile.schema_version, profile.model, profile.effort, profile.source,
+                        managed.binding_generation, readiness.reconciliation_generation
                  FROM native_session_associations association
                  JOIN native_sessions session ON session.id = association.session_id
                  JOIN managed_sessions managed ON managed.session_id = session.id
                  LEFT JOIN launch_profiles profile ON profile.id = managed.profile_id
+                 LEFT JOIN checkout_readiness readiness ON readiness.checkout_id = managed.checkout_id
                  JOIN checkouts checkout ON checkout.id = managed.checkout_id
                  JOIN checkout_paths path
                    ON path.checkout_id = checkout.id AND path.observed_until IS NULL
@@ -616,6 +626,8 @@ impl<'a> WorkflowOperationService<'a> {
                         row.get::<_, Option<String>>(17)?,
                         row.get::<_, Option<String>>(18)?,
                         row.get::<_, Option<String>>(19)?,
+                        row.get::<_, u32>(20)?,
+                        row.get::<_, Option<i64>>(21)?,
                     ))
                 })?
                 .collect::<Result<Vec<_>, _>>()?;
@@ -642,6 +654,8 @@ impl<'a> WorkflowOperationService<'a> {
                         model,
                         effort,
                         profile_source,
+                        binding_generation,
+                        checkout_generation,
                     )| {
                         let owner = match parse_association_owner(
                             workspace_id,
@@ -673,6 +687,7 @@ impl<'a> WorkflowOperationService<'a> {
                             };
                             Ok(AssignedSession {
                                 session_id: parse_id(&session_id)?,
+                                binding_generation,
                                 provider,
                                 profile,
                                 role,
@@ -683,6 +698,10 @@ impl<'a> WorkflowOperationService<'a> {
                                     .map(parse_time)
                                     .transpose()?,
                                 checkout_id: parse_id(&checkout_id)?,
+                                checkout_generation: checkout_generation
+                                    .map(u64::try_from)
+                                    .transpose()
+                                    .map_err(|error| AppError::Domain(error.to_string()))?,
                                 checkout_path: PathBuf::from(checkout_path),
                                 branch,
                                 resumability: parse_wire(&resumability)?,

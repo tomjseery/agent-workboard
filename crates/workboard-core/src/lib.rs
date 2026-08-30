@@ -32,8 +32,8 @@ pub use identity::{
     DocumentId, DocumentReferenceId, EpicId, FeatureId, GitOperationIntentId, ImportBatchId,
     LaunchIntentId, LaunchLeaseId, LiveObservationId, ManagedSessionId, ManagedSessionRequestId,
     OperationIntentId, RecoveryAttemptId, RepositoryId, RepositoryPathId, RestoreMembershipId,
-    SessionBindingId, TerminalLayoutId, TerminalTabId, WorkItemCheckpointId, WorkItemId,
-    WorkflowEventId, WorkflowRunId, WorkspaceId, WorktreeId,
+    SessionBindingId, SessionFollowUpId, TerminalLayoutId, TerminalTabId, WorkItemCheckpointId,
+    WorkItemId, WorkflowEventId, WorkflowRunId, WorkspaceId, WorktreeId,
 };
 pub use launch::{
     CommandSpec, LaunchSpecError, ManagedLaunchMode, ManagedLaunchRequest, ManagedLaunchSpec,

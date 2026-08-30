@@ -16,7 +16,8 @@ use workboard_native::{
 pub use app_server::{
     APP_SERVER_ADAPTER_VERSION, CodexAppServerClient, CodexAppServerFailure,
     CodexAppServerFailureKind, CodexAppServerLimits, CodexAppServerSnapshot,
-    CodexAppServerStatusObservation, CodexAppServerThread,
+    CodexAppServerStatusObservation, CodexAppServerThread, CodexFollowUpReceipt,
+    CodexFollowUpRequest,
 };
 
 pub const ADAPTER_VERSION: &str = "codex-rollout-v1";

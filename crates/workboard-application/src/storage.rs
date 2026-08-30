@@ -12,7 +12,7 @@ use workboard_core::{ConversationId, LaunchLeaseId};
 
 use crate::AppError;
 
-const CURRENT_SCHEMA_VERSION: i64 = 36;
+const CURRENT_SCHEMA_VERSION: i64 = 37;
 const FOUNDATION_SCHEMA_CHECKSUM: &str = "agent-workboard-foundation-v1";
 const WORKSPACE_PLANNING_SCHEMA_CHECKSUM: &str = "agent-workboard-workspace-planning-v1";
 const WORK_ITEM_DEPENDENCY_SCHEMA_CHECKSUM: &str = "agent-workboard-work-item-dependency-v1";
@@ -21,6 +21,65 @@ const FEATURE_PROPOSAL_DECISION_SCHEMA_CHECKSUM: &str =
     "agent-workboard-feature-proposal-decision-v1";
 const SESSION_BINDING_GENERATION_SCHEMA_CHECKSUM: &str =
     "agent-workboard-session-binding-generation-v1";
+const SESSION_FOLLOW_UP_SCHEMA_CHECKSUM: &str = "agent-workboard-session-follow-up-v1";
+const SESSION_FOLLOW_UP_SQL: &str = r#"
+CREATE TABLE workflow_credentials (
+    id TEXT PRIMARY KEY,
+    managed_session_id TEXT NOT NULL REFERENCES managed_sessions(id) ON DELETE RESTRICT,
+    binding_generation INTEGER NOT NULL CHECK (binding_generation > 0),
+    token_hash TEXT NOT NULL UNIQUE CHECK (token_hash <> ''),
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    CHECK (expires_at > created_at)
+);
+INSERT INTO workflow_credentials (
+    id, managed_session_id, binding_generation, token_hash, created_at, expires_at
+)
+SELECT lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' ||
+       substr(lower(hex(randomblob(2))), 2) || '-' ||
+       substr('89ab', (random() & 3) + 1, 1) ||
+       substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6))),
+       managed.id, managed.binding_generation, intent.workflow_token_hash, intent.created_at,
+       intent.workflow_token_expires_at
+FROM managed_sessions managed
+JOIN launch_intents intent ON intent.id = managed.launch_intent_id
+WHERE intent.workflow_token_hash IS NOT NULL
+  AND intent.workflow_token_expires_at IS NOT NULL;
+CREATE INDEX workflow_credentials_session
+    ON workflow_credentials (managed_session_id, expires_at);
+CREATE TABLE session_follow_ups (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE RESTRICT,
+    feature_id TEXT REFERENCES features(id) ON DELETE RESTRICT,
+    work_item_id TEXT REFERENCES work_items(id) ON DELETE RESTRICT,
+    session_id TEXT NOT NULL REFERENCES native_sessions(id) ON DELETE RESTRICT,
+    association_id TEXT NOT NULL REFERENCES native_session_associations(id) ON DELETE RESTRICT,
+    managed_session_id TEXT NOT NULL REFERENCES managed_sessions(id) ON DELETE RESTRICT,
+    binding_generation INTEGER NOT NULL CHECK (binding_generation > 0),
+    checkout_id TEXT NOT NULL REFERENCES checkouts(id) ON DELETE RESTRICT,
+    checkout_generation INTEGER NOT NULL CHECK (checkout_generation > 0),
+    sequence INTEGER NOT NULL CHECK (sequence > 0),
+    idempotency_key TEXT NOT NULL UNIQUE CHECK (idempotency_key <> ''),
+    instruction TEXT NOT NULL CHECK (instruction <> ''),
+    instruction_hash TEXT NOT NULL CHECK (length(instruction_hash) = 64),
+    status TEXT NOT NULL CHECK (status IN ('pending', 'leased', 'delivered', 'failed')),
+    lease_token TEXT,
+    leased_until TEXT,
+    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+    receipt TEXT,
+    failure TEXT,
+    created_at TEXT NOT NULL,
+    delivered_at TEXT,
+    CHECK ((feature_id IS NOT NULL) + (work_item_id IS NOT NULL) = 1),
+    CHECK ((status = 'leased') = (lease_token IS NOT NULL)),
+    CHECK ((status = 'leased') = (leased_until IS NOT NULL)),
+    CHECK ((status = 'delivered') = (receipt IS NOT NULL)),
+    CHECK ((status = 'delivered') = (delivered_at IS NOT NULL)),
+    UNIQUE (session_id, binding_generation, sequence)
+);
+CREATE INDEX session_follow_ups_delivery
+    ON session_follow_ups (session_id, binding_generation, sequence, status);
+"#;
 const FEATURE_PROPOSAL_DECISION_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS feature_proposal_decisions (
     feature_id TEXT NOT NULL REFERENCES features(id) ON DELETE RESTRICT,
@@ -2537,6 +2596,12 @@ fn migrate(connection: &Connection) -> Result<(), AppError> {
             )
         },
     )?;
+    apply_migration(
+        connection,
+        37,
+        SESSION_FOLLOW_UP_SCHEMA_CHECKSUM,
+        SESSION_FOLLOW_UP_SQL,
+    )?;
     Ok(())
 }
 
@@ -3465,7 +3530,11 @@ fn health(connection: &Connection) -> Result<StorageHealth, AppError> {
 pub(crate) fn drop_workspace_planning_schema(connection: &Connection) {
     connection
         .execute_batch(
-            r#"ALTER TABLE managed_sessions DROP COLUMN binding_generation;
+            r#"DROP TABLE session_follow_ups;
+            DROP TABLE workflow_credentials;
+            DELETE FROM schema_migrations WHERE version = 37;
+
+            ALTER TABLE managed_sessions DROP COLUMN binding_generation;
             DELETE FROM schema_migrations WHERE version = 36;
 
             DROP TABLE feature_proposal_decisions;
@@ -3891,7 +3960,7 @@ mod tests {
                 "launch-intent".to_owned()
             )
         );
-        assert_eq!(store.health().expect("storage health").schema_version, 36);
+        assert_eq!(store.health().expect("storage health").schema_version, 37);
         assert!(store.health().expect("storage health").is_healthy());
     }
 
@@ -4590,7 +4659,7 @@ mod tests {
         assert_eq!(preserved_attestation, valid_attestation);
         assert_eq!(legacy_authority, "immutable_evidence");
         let health = store.health().expect("storage health");
-        assert_eq!(health.schema_version, 36);
+        assert_eq!(health.schema_version, 37);
         assert!(health.is_healthy());
         let audited_attestations: Vec<(String, String, String, String)> = store
             .read(|connection| {
@@ -4635,7 +4704,7 @@ mod tests {
             .expect("read upgraded schema 20 attestations");
         assert_eq!(upgraded_attestations, audited_attestations);
         let health = store.health().expect("upgraded storage health");
-        assert_eq!(health.schema_version, 36);
+        assert_eq!(health.schema_version, 37);
         assert!(health.is_healthy());
         drop(store);
 

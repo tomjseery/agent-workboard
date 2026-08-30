@@ -860,50 +860,67 @@ fn bind_transaction(
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, u32>(1)?)),
         )
         .optional()?;
-    let binding_generation = if let Some((managed_session_id, generation)) = current_managed_session
-    {
-        let next = generation.checked_add(1).ok_or_else(|| {
-            AppError::Domain("managed session binding generation overflowed".to_owned())
-        })?;
-        transaction.execute(
-            "UPDATE managed_sessions SET
+    let (managed_session_id, binding_generation) =
+        if let Some((managed_session_id, generation)) = current_managed_session {
+            let next = generation.checked_add(1).ok_or_else(|| {
+                AppError::Domain("managed session binding generation overflowed".to_owned())
+            })?;
+            transaction.execute(
+                "UPDATE managed_sessions SET
                  launch_intent_id = ?2, checkout_id = ?3, role = ?4, status = ?5,
                  profile_id = COALESCE(
                      (SELECT profile_id FROM launch_intents WHERE id = ?2), profile_id
                  ), binding_generation = ?6
              WHERE id = ?1 AND managed_until IS NULL",
-            params![
-                managed_session_id,
-                intent_id.map(|id| id.to_string()),
-                checkout_id.to_string(),
-                role_name(role)?,
-                managed_status,
-                next,
-            ],
-        )?;
-        next
-    } else {
-        let managed_session_id = ManagedSessionId::generate();
-        transaction.execute(
-            "INSERT INTO managed_sessions (
+                params![
+                    managed_session_id,
+                    intent_id.map(|id| id.to_string()),
+                    checkout_id.to_string(),
+                    role_name(role)?,
+                    managed_status,
+                    next,
+                ],
+            )?;
+            (managed_session_id, next)
+        } else {
+            let managed_session_id = ManagedSessionId::generate();
+            transaction.execute(
+                "INSERT INTO managed_sessions (
                  id, launch_intent_id, session_id, checkout_id, role, status, managed_from,
                  profile_id, binding_generation
              ) VALUES (
                  ?1, ?2, ?3, ?4, ?5, ?6, ?7,
                  (SELECT profile_id FROM launch_intents WHERE id = ?2), 1
              )",
+                params![
+                    managed_session_id.to_string(),
+                    intent_id.map(|id| id.to_string()),
+                    session_id.to_string(),
+                    checkout_id.to_string(),
+                    role_name(role)?,
+                    managed_status,
+                    timestamp(observed_at),
+                ],
+            )?;
+            (managed_session_id.to_string(), 1)
+        };
+    if let Some(intent_id) = intent_id {
+        transaction.execute(
+            "INSERT OR IGNORE INTO workflow_credentials (
+                 id, managed_session_id, binding_generation, token_hash, created_at, expires_at
+             )
+             SELECT ?1, ?2, ?3, workflow_token_hash, created_at, workflow_token_expires_at
+             FROM launch_intents
+             WHERE id = ?4 AND workflow_token_hash IS NOT NULL
+               AND workflow_token_expires_at IS NOT NULL",
             params![
-                managed_session_id.to_string(),
-                intent_id.map(|id| id.to_string()),
-                session_id.to_string(),
-                checkout_id.to_string(),
-                role_name(role)?,
-                managed_status,
-                timestamp(observed_at),
+                uuid::Uuid::new_v4().to_string(),
+                managed_session_id,
+                binding_generation,
+                intent_id.to_string(),
             ],
         )?;
-        1
-    };
+    }
     let restore_membership_id =
         ensure_restore_membership(transaction, session_id, owner, observed_at)?;
     ensure_restore_entry(transaction, session_id, owner, observed_at)?;
