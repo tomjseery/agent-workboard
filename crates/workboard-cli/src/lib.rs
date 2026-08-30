@@ -3316,8 +3316,8 @@ mod tests {
     use crate::selector::SelectionCandidate;
 
     use super::{
-        Cli, Command as CliCommand, FeatureCommand, SessionCommand, WorkCommand,
-        codex_app_executable, execute_from, select_candidate, slugify,
+        Cli, Command as CliCommand, FeatureCommand, SessionCommand, Tool, WorkCommand,
+        codex_app_executable, default_native_executable, execute_from, select_candidate, slugify,
     };
 
     #[test]
@@ -3341,6 +3341,26 @@ mod tests {
             .expect("create Codex bin directory");
         fs::write(&executable, []).expect("create Codex executable");
         assert_eq!(codex_app_executable(directory.path()), Some(executable));
+    }
+
+    #[test]
+    #[ignore = "requires installed authenticated provider CLIs"]
+    fn real_claude_provider_smoke() {
+        let status = Command::new(default_native_executable(Tool::Claude))
+            .arg("--version")
+            .status()
+            .expect("launch real Claude CLI");
+        assert!(status.success());
+    }
+
+    #[test]
+    #[ignore = "requires installed authenticated provider CLIs"]
+    fn real_codex_provider_smoke() {
+        let status = Command::new(default_native_executable(Tool::Codex))
+            .arg("--version")
+            .status()
+            .expect("launch real Codex CLI");
+        assert!(status.success());
     }
 
     #[test]
