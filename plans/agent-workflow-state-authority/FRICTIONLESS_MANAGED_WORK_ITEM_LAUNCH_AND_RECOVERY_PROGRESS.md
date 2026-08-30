@@ -23,10 +23,9 @@ gated rather than being bypassed.
 
 ## Next Steps
 
-Bring `origin/main` into the branch, resolve any integration differences, rerun the full verification set,
-then run the canonical review, push the stable candidate, and open the GitHub PR. Complete the final live
-managed-session acceptance when Workboard can launch a newly credentialed session for the blocked Agent
-Standards Work item.
+Run the canonical review over the merged candidate, resolve any findings, then push the stable head and open
+the GitHub PR. Complete the final live managed-session acceptance when Workboard can launch a newly
+credentialed session for the blocked Agent Standards Work item.
 
 ## Completed work
 
@@ -47,6 +46,8 @@ Standards Work item.
 - The ignored authenticated Codex smoke completed an ephemeral read-only turn and returned its exact marker.
 - Live `work continue d6305ca3` selected and resumed the existing Workboard session without launching a
   duplicate provider process.
+- `origin/main` was merged at `9a81d79`; formatting, warnings-denied clippy, the complete 208-test workspace
+  suite, and both authenticated provider smokes passed again on the merged head.
 
 ## Reviews
 
@@ -58,4 +59,4 @@ Canonical post-sync review remains pending.
   records rather than a competing planning representation.
 - The final downstream Agent Standards acceptance remains blocked on a newly launched scoped-credential
   session. The legacy pre-feature session cannot validly supply that evidence.
-- The branch was one commit behind `origin/main` at the last preflight and must be reconciled before PR.
+- The branch is reconciled with `origin/main`; review and PR publication are the remaining delivery gates.
