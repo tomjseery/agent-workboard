@@ -3086,6 +3086,20 @@ fn execute_work_launch(
             },
         });
     }
+    if let Some(session_id) = selection.session_id
+        && refreshed.sessions.iter().any(|session| {
+            session.session_id == session_id
+                && session
+                    .live_status
+                    .is_some_and(workboard_core::LiveStatus::indicates_live)
+                && session.actions.iter().any(|action| {
+                    action.kind == workboard_core::AvailableActionKind::SendFollowUp
+                        && action.enabled
+                })
+        })
+    {
+        return application.session_launch().current_binding(session_id);
+    }
     selection
         .profile
         .validate_for_launch(selection.provider, selection.role)
@@ -3115,6 +3129,16 @@ fn execute_work_launch(
         application
             .checkout_service()
             .reconcile_registered_checkout(target.checkout.checkout_id, now)?;
+        let readiness = application
+            .checkout_service()
+            .readiness_for_checkout(target.checkout.checkout_id)?
+            .ok_or(AppError::ResumeCheckoutRequired)?;
+        if readiness.access_mode != selection.access_mode {
+            return Err(AppError::CheckoutReconciliation {
+                code: "checkout_access_mode_changed".to_owned(),
+                message: "the checkout access mode changed after selection".to_owned(),
+            });
+        }
         let context = application.native_sources().resume_context(
             session_id,
             target.checkout.path.clone(),
@@ -3171,6 +3195,12 @@ fn execute_work_launch(
                     observed_at: now,
                 })?
         };
+        if readiness.access_mode != selection.access_mode {
+            return Err(AppError::CheckoutReconciliation {
+                code: "checkout_access_mode_changed".to_owned(),
+                message: "the checkout access mode changed after selection".to_owned(),
+            });
+        }
         BeginManagedSessionLaunch {
             owner: HierarchyOwner::WorkItem(work_item.id),
             role: selection.role,
@@ -3353,6 +3383,9 @@ fn work_launch_options(
             provider: session.provider,
             profile: session.profile.clone(),
             role: session.role,
+            access_mode: session
+                .checkout_access_mode
+                .unwrap_or(workboard_core::CheckoutAccessMode::WriteIsolated),
             status: format!(
                 "{} / {}",
                 session.binding_status,
@@ -3444,6 +3477,7 @@ fn work_launch_options(
                 provider: *provider,
                 profile,
                 role: ManagedSessionRole::WorkItemExecution,
+                access_mode: workboard_core::CheckoutAccessMode::WriteIsolated,
                 status: if projection.readiness.ready {
                     "ready".to_owned()
                 } else {
@@ -3515,6 +3549,7 @@ fn launch_selection(option: board::LaunchOption) -> board::LaunchSelection {
         provider: option.provider,
         profile: option.profile,
         role: option.role,
+        access_mode: option.access_mode,
     }
 }
 

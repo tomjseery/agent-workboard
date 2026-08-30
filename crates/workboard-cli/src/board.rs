@@ -15,9 +15,9 @@ use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 use ratatui::{Frame, Terminal};
 use workboard_application::AppError;
 use workboard_core::{
-    CheckoutAvailability, ConversationId, HierarchyOwner, LaunchProfile, LaunchProfileSource,
-    ManagedSessionRole, PRODUCT_NAME, ReasoningEffort, RepositoryId, Resumability, Tool, WorkItem,
-    WorkItemStatus, WorkflowState, WorkspaceSnapshot,
+    CheckoutAccessMode, CheckoutAvailability, ConversationId, HierarchyOwner, LaunchProfile,
+    LaunchProfileSource, ManagedSessionRole, PRODUCT_NAME, ReasoningEffort, RepositoryId,
+    Resumability, Tool, WorkItem, WorkItemStatus, WorkflowState, WorkspaceSnapshot,
 };
 
 use crate::selector::{RankedCandidate, SelectionCandidate, SelectionResult, resolve};
@@ -36,6 +36,7 @@ pub struct LaunchOption {
     pub provider: Tool,
     pub profile: LaunchProfile,
     pub role: ManagedSessionRole,
+    pub access_mode: CheckoutAccessMode,
     pub status: String,
     pub last_activity: Option<time::OffsetDateTime>,
     pub checkout: PathBuf,
@@ -51,6 +52,7 @@ pub struct LaunchSelection {
     pub provider: Tool,
     pub profile: LaunchProfile,
     pub role: ManagedSessionRole,
+    pub access_mode: CheckoutAccessMode,
 }
 
 struct LaunchPickerState {
@@ -143,6 +145,7 @@ impl LaunchPickerState {
             provider: option.provider,
             profile: option.profile.clone(),
             role: option.role,
+            access_mode: option.access_mode,
         })
     }
 }
@@ -186,7 +189,7 @@ fn render_launch_picker(frame: &mut Frame<'_>, state: &LaunchPickerState) {
     let sections = Layout::vertical([
         Constraint::Length(3),
         Constraint::Min(6),
-        Constraint::Length(8),
+        Constraint::Length(10),
         Constraint::Length(2),
     ])
     .split(frame.area());
@@ -237,6 +240,7 @@ fn render_launch_picker(frame: &mut Frame<'_>, state: &LaunchPickerState) {
                         .map_or("unknown", ReasoningEffort::as_str),
                 )),
                 Line::from(format!("Role: {}", role_title(option.role))),
+                Line::from(format!("Access: {}", access_mode_title(option.access_mode))),
                 Line::from(format!("Status: {}", option.status)),
                 Line::from(format!(
                     "Activity: {}",
@@ -283,6 +287,13 @@ fn role_title(role: ManagedSessionRole) -> &'static str {
         ManagedSessionRole::WorkItemExecution => "execution",
         ManagedSessionRole::Debugging => "debugging",
         ManagedSessionRole::Review => "review",
+    }
+}
+
+fn access_mode_title(access_mode: CheckoutAccessMode) -> &'static str {
+    match access_mode {
+        CheckoutAccessMode::WriteIsolated => "write isolated",
+        CheckoutAccessMode::ReadOnlyShared => "read-only shared",
     }
 }
 
@@ -1055,12 +1066,12 @@ mod tests {
     use ratatui::backend::TestBackend;
     use time::OffsetDateTime;
     use workboard_core::{
-        AssociationIntervalId, Checkout, CheckoutAvailability, CheckoutId, CheckoutPathId,
-        CheckoutPathInterval, ConversationId, ConversationRef, DocumentId, EffectiveCheckout, Epic,
-        EpicId, Feature, FeatureId, LaunchProfile, ManagedSessionRole, NativeSession,
-        NativeSessionAssociation, Repository, RepositoryId, Resumability, Slug, Tool, WorkItem,
-        WorkItemId, WorkItemKey, WorkItemStatus, WorkflowState, Workspace, WorkspaceId,
-        WorkspaceSnapshot,
+        AssociationIntervalId, Checkout, CheckoutAccessMode, CheckoutAvailability, CheckoutId,
+        CheckoutPathId, CheckoutPathInterval, ConversationId, ConversationRef, DocumentId,
+        EffectiveCheckout, Epic, EpicId, Feature, FeatureId, LaunchProfile, ManagedSessionRole,
+        NativeSession, NativeSessionAssociation, Repository, RepositoryId, Resumability, Slug,
+        Tool, WorkItem, WorkItemId, WorkItemKey, WorkItemStatus, WorkflowState, Workspace,
+        WorkspaceId, WorkspaceSnapshot,
     };
 
     use super::{BoardControl, BoardState, LaunchOption, LaunchPickerState, plain, render};
@@ -1195,6 +1206,45 @@ mod tests {
             .join("\n")
     }
 
+    fn render_launch_picker_text(state: &LaunchPickerState) -> String {
+        let backend = TestBackend::new(140, 30);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| super::render_launch_picker(frame, state))
+            .expect("render launch picker");
+        let buffer = terminal.backend().buffer();
+        buffer
+            .content()
+            .chunks(buffer.area.width as usize)
+            .map(|cells| cells.iter().map(|cell| cell.symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn launch_option(
+        provider: Tool,
+        session_id: Option<ConversationId>,
+        role: ManagedSessionRole,
+        access_mode: CheckoutAccessMode,
+        status: &str,
+        resumability: Resumability,
+    ) -> LaunchOption {
+        LaunchOption {
+            session_id,
+            writer_reservation_key: None,
+            repository_id: RepositoryId::generate(),
+            provider,
+            profile: LaunchProfile::suggested(provider, role),
+            role,
+            access_mode,
+            status: status.to_owned(),
+            last_activity: Some(OffsetDateTime::UNIX_EPOCH),
+            checkout: "C:/worktrees/managed".into(),
+            branch: Some("feature/managed".to_owned()),
+            resumability,
+        }
+    }
+
     #[test]
     fn empty_terminal_fixture_is_explicit() {
         let rendered = render_text(empty_snapshot(), true);
@@ -1261,6 +1311,7 @@ mod tests {
                     ManagedSessionRole::WorkItemExecution,
                 ),
                 role: ManagedSessionRole::WorkItemExecution,
+                access_mode: CheckoutAccessMode::WriteIsolated,
                 status: "new".to_owned(),
                 last_activity: None,
                 checkout: "C:/worktrees/materialize-on-start".into(),
@@ -1281,6 +1332,113 @@ mod tests {
         );
         assert_eq!(selection.role, ManagedSessionRole::Debugging);
         assert_eq!(selection.profile.role, ManagedSessionRole::Debugging);
+    }
+
+    #[test]
+    fn launch_picker_zero_session_fixture_shows_both_new_providers() {
+        let state = LaunchPickerState {
+            title: "Start Work item".to_owned(),
+            options: vec![
+                launch_option(
+                    Tool::Claude,
+                    None,
+                    ManagedSessionRole::WorkItemExecution,
+                    CheckoutAccessMode::WriteIsolated,
+                    "ready",
+                    Resumability::Unknown,
+                ),
+                launch_option(
+                    Tool::Codex,
+                    None,
+                    ManagedSessionRole::WorkItemExecution,
+                    CheckoutAccessMode::WriteIsolated,
+                    "ready",
+                    Resumability::Unknown,
+                ),
+            ],
+            selected: 0,
+        };
+
+        let rendered = render_launch_picker_text(&state);
+        assert!(rendered.contains("New Claude"));
+        assert!(rendered.contains("New Codex"));
+        assert!(rendered.contains("Access: write isolated"));
+        assert!(rendered.contains("Enter/s Start"));
+    }
+
+    #[test]
+    fn launch_picker_one_live_session_fixture_reports_exact_resume_facts() {
+        let state = LaunchPickerState {
+            title: "Continue Work item".to_owned(),
+            options: vec![launch_option(
+                Tool::Codex,
+                Some(ConversationId::generate()),
+                ManagedSessionRole::Debugging,
+                CheckoutAccessMode::ReadOnlyShared,
+                "bound / Active",
+                Resumability::Validated,
+            )],
+            selected: 0,
+        };
+
+        let rendered = render_launch_picker_text(&state);
+        assert!(rendered.contains("Resume Codex"));
+        assert!(rendered.contains("debugging"));
+        assert!(rendered.contains("bound / Active"));
+        assert!(rendered.contains("Activity: 1970-01-01"));
+        assert!(rendered.contains("Access: read-only shared"));
+        assert!(rendered.contains("feature/managed / Validated"));
+    }
+
+    #[test]
+    fn launch_picker_many_session_fixture_keeps_history_and_new_choices_visible() {
+        let state = LaunchPickerState {
+            title: "Continue Work item".to_owned(),
+            options: vec![
+                launch_option(
+                    Tool::Claude,
+                    Some(ConversationId::generate()),
+                    ManagedSessionRole::Review,
+                    CheckoutAccessMode::WriteIsolated,
+                    "stopped / Stopped",
+                    Resumability::Missing,
+                ),
+                launch_option(
+                    Tool::Codex,
+                    Some(ConversationId::generate()),
+                    ManagedSessionRole::WorkItemExecution,
+                    CheckoutAccessMode::WriteIsolated,
+                    "bound / Idle",
+                    Resumability::Validated,
+                ),
+                launch_option(
+                    Tool::Claude,
+                    None,
+                    ManagedSessionRole::WorkItemExecution,
+                    CheckoutAccessMode::WriteIsolated,
+                    "ready",
+                    Resumability::Unknown,
+                ),
+                launch_option(
+                    Tool::Codex,
+                    None,
+                    ManagedSessionRole::WorkItemExecution,
+                    CheckoutAccessMode::WriteIsolated,
+                    "ready",
+                    Resumability::Unknown,
+                ),
+            ],
+            selected: 1,
+        };
+
+        let rendered = render_launch_picker_text(&state);
+        assert!(rendered.contains("Resume Claude"));
+        assert!(rendered.contains("review"));
+        assert!(rendered.contains("stopped / Stopped"));
+        assert!(rendered.contains("Resume Codex"));
+        assert!(rendered.contains("bound / Idle"));
+        assert!(rendered.contains("New Claude"));
+        assert!(rendered.contains("New Codex"));
     }
 
     #[test]
