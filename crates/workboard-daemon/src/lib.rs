@@ -30,8 +30,8 @@ mod tests {
     use workboard_application::workspace::WorkboardApplication;
     use workboard_client::{EndpointDescriptor as ClientEndpoint, SubscriptionUpdate};
     use workboard_client_protocol::{
-        CURRENT_PROTOCOL_VERSION, EntityRef, EventCursor, EventEnvelope, EventId, EventKind,
-        EventPayload, InvalidationScope, ReadQueryCode, RequestId, ResyncReason,
+        CURRENT_PROTOCOL_VERSION, CommandCode, EntityRef, EventCursor, EventEnvelope, EventId,
+        EventKind, EventPayload, InvalidationScope, ReadQueryCode, RequestId, ResyncReason,
         WorkspaceId as ClientWorkspaceId,
     };
     use workboard_core::{RepositoryId, WorkspaceId};
@@ -189,7 +189,7 @@ mod tests {
     }
 
     #[test]
-    fn typed_client_negotiates_reads_and_advertises_writes_as_unavailable() {
+    fn typed_client_negotiates_reads_and_advertises_only_saved_views_as_available() {
         let directory = TempDir::new().expect("temporary directory");
         let (application, workspace_id) = application_fixture(&directory);
         let server = DaemonServer::start_application(application, loopback(), "opaque-token")
@@ -200,11 +200,22 @@ mod tests {
             CURRENT_PROTOCOL_VERSION
         );
         assert_eq!(client.handshake().command_capabilities.len(), 10);
+        assert_eq!(
+            client
+                .handshake()
+                .command_capabilities
+                .iter()
+                .filter(|capability| capability.available)
+                .map(|capability| capability.code)
+                .collect::<Vec<_>>(),
+            vec![CommandCode::SaveBoardView]
+        );
         assert!(
             client
                 .handshake()
                 .command_capabilities
                 .iter()
+                .filter(|capability| capability.code != CommandCode::SaveBoardView)
                 .all(|capability| !capability.available)
         );
         let snapshot = client

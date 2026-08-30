@@ -55,6 +55,10 @@ const toneClasses: Record<BootstrapPresentation["tone"], string> = {
 
 export function BootstrapScreen() {
   const { state } = useBootstrap();
+  return <BootstrapStatus state={state} />;
+}
+
+export function BootstrapStatus({ state }: { state: BootstrapState }) {
   const presentation = bootstrapPresentations[state];
 
   return (

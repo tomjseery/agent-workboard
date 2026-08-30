@@ -8,6 +8,7 @@ import type {
   SubscriptionTarget,
 } from "../../../core/generated";
 import { daemon } from "../../../core/daemon";
+import { applyWorkspaceEvent } from "../../../core/events";
 import { bootstrapQueryKey } from "./useBootstrapQuery";
 
 const ignoreBridgeFailure = () => undefined;
@@ -44,6 +45,9 @@ export function useBootstrapSubscription(target: SubscriptionTarget | undefined)
     let disposed = false;
     let subscription: Awaited<ReturnType<typeof daemon.subscribe>> | undefined;
     const onMessage = (message: SubscriptionMessage) => {
+      if (message.type === "event") {
+        applyWorkspaceEvent(queryClient, message.value);
+      }
       queryClient.setQueryData<BootstrapHandshake>(bootstrapQueryKey, (current) => {
         if (current === undefined) {
           return current;

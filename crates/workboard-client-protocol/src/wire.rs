@@ -3,8 +3,9 @@ use time::OffsetDateTime;
 use ts_rs::TS;
 
 use crate::{
-    BoardSnapshot, DaemonInstanceId, EntityRef, EventId, HierarchyChildren, HierarchyRef,
-    RequestId, WorkspaceId, WorkspaceReference, WorkspaceSummary,
+    BoardSnapshot, BoardViewDefinition, BoardViewId, DaemonInstanceId, EntityRef, EventId,
+    HierarchyChildren, HierarchyRef, RequestId, WorkspaceHierarchy, WorkspaceId,
+    WorkspaceReference, WorkspaceSummary,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -132,6 +133,9 @@ pub enum Operation {
 pub enum ReadQuery {
     WorkspaceSummary,
     HierarchyChildren { parent: HierarchyRef },
+    WorkspaceHierarchy,
+    BoardViews,
+    BoardView { view_id: BoardViewId },
     BoardSnapshot,
 }
 
@@ -173,7 +177,7 @@ impl CommandCode {
     rename_all_fields = "camelCase"
 )]
 pub enum CommandOperation {
-    SaveBoardView,
+    SaveBoardView { definition: BoardViewDefinition },
     ApproveFeature { feature_id: crate::FeatureId },
     RequestFeatureRevision { feature_id: crate::FeatureId },
     RejectFeature { feature_id: crate::FeatureId },
@@ -188,7 +192,7 @@ pub enum CommandOperation {
 impl CommandOperation {
     pub const fn code(&self) -> CommandCode {
         match self {
-            Self::SaveBoardView => CommandCode::SaveBoardView,
+            Self::SaveBoardView { .. } => CommandCode::SaveBoardView,
             Self::ApproveFeature { .. } => CommandCode::ApproveFeature,
             Self::RequestFeatureRevision { .. } => CommandCode::RequestFeatureRevision,
             Self::RejectFeature { .. } => CommandCode::RejectFeature,
@@ -284,6 +288,9 @@ pub enum ResponseResult {
     Handshake(HandshakeResponse),
     WorkspaceSummary(WorkspaceSummary),
     HierarchyChildren(HierarchyChildren),
+    WorkspaceHierarchy(WorkspaceHierarchy),
+    BoardViews(Vec<BoardViewDefinition>),
+    BoardView(BoardViewDefinition),
     BoardSnapshot(#[ts(type = "unknown")] BoardSnapshot),
     SubscriptionAccepted { cursor: EventCursor },
     CommandAccepted { code: CommandCode },
@@ -417,6 +424,7 @@ pub struct EventEnvelope {
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {
     ProjectionChanged,
+    BoardViewSaved,
     NativeSessionsRefreshed,
     PartialOutcomeRecorded,
 }
@@ -430,6 +438,7 @@ pub enum EventKind {
 )]
 pub enum EventPayload {
     ProjectionChanged { entity: EntityRef },
+    BoardViewSaved { view: BoardViewDefinition },
     NativeSessionsRefreshed { session_count: usize },
     PartialOutcome { outcome: PartialOutcome },
 }
@@ -446,6 +455,9 @@ pub struct InvalidationScope {
 pub enum ReadQueryCode {
     WorkspaceSummary,
     HierarchyChildren,
+    WorkspaceHierarchy,
+    BoardViews,
+    BoardView,
     BoardSnapshot,
 }
 
@@ -574,7 +586,9 @@ mod tests {
             workspace_id: Some(WorkspaceId::generate()),
             expected_revision: None,
             idempotency_key: None,
-            operation: Operation::Command(CommandOperation::SaveBoardView),
+            operation: Operation::Command(CommandOperation::ApproveFeature {
+                feature_id: crate::FeatureId::generate(),
+            }),
         };
         assert_eq!(
             request.validate().expect_err("invalid mutation").code,
@@ -609,7 +623,9 @@ mod tests {
             workspace_id: Some(WorkspaceId::generate()),
             expected_revision: Some(0),
             idempotency_key: Some("key\n".to_owned()),
-            operation: Operation::Command(CommandOperation::SaveBoardView),
+            operation: Operation::Command(CommandOperation::ApproveFeature {
+                feature_id: crate::FeatureId::generate(),
+            }),
         };
         assert_eq!(
             request.validate().expect_err("control key").code,
@@ -643,6 +659,11 @@ mod tests {
             ReadQuery::HierarchyChildren {
                 parent: HierarchyRef::Workspace(WorkspaceId::generate()),
             },
+            ReadQuery::WorkspaceHierarchy,
+            ReadQuery::BoardViews,
+            ReadQuery::BoardView {
+                view_id: crate::BoardViewId::generate(),
+            },
             ReadQuery::BoardSnapshot,
         ];
         assert_eq!(
@@ -653,6 +674,9 @@ mod tests {
             vec![
                 json!("workspace_summary"),
                 json!("hierarchy_children"),
+                json!("workspace_hierarchy"),
+                json!("board_views"),
+                json!("board_view"),
                 json!("board_snapshot"),
             ]
         );
@@ -678,6 +702,7 @@ mod tests {
         );
         let event_kinds = [
             EventKind::ProjectionChanged,
+            EventKind::BoardViewSaved,
             EventKind::NativeSessionsRefreshed,
             EventKind::PartialOutcomeRecorded,
         ];
@@ -688,6 +713,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 json!("projection_changed"),
+                json!("board_view_saved"),
                 json!("native_sessions_refreshed"),
                 json!("partial_outcome_recorded"),
             ]

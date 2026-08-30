@@ -11,11 +11,13 @@ use time::OffsetDateTime;
 use workboard_client::framing::{read_frame, write_frame};
 use workboard_client::{EndpointDescriptor, endpoint_path};
 use workboard_client_protocol::{
-    BoardSnapshot, CURRENT_PROTOCOL_VERSION, CommandCapability, CommandCode, DaemonInstanceId,
-    EntityRef, EventCursor, EventEnvelope, EventId, EventKind, EventPayload, HandshakeResponse,
-    Heartbeat, HierarchyChildren, Operation, PartialOutcome, ReadQuery, RequestEnvelope,
-    ResponseEnvelope, ResponseResult, ResyncReason, ResyncRequirement, ServerMessage,
-    UnavailableReason, WorkspaceId, WorkspaceProjection, WorkspaceReference, WorkspaceSummary,
+    BoardSnapshot, BoardViewDefinition, BoardViewDensity, BoardViewFilters, BoardViewGrouping,
+    BoardViewGroupingKind, BoardViewSort, BoardViewSortDirection, BoardViewSortField,
+    CURRENT_PROTOCOL_VERSION, CommandCapability, CommandCode, DaemonInstanceId, EntityRef,
+    EventCursor, EventEnvelope, EventId, EventKind, EventPayload, HandshakeResponse, Heartbeat,
+    HierarchyChildren, Operation, PartialOutcome, ReadQuery, RequestEnvelope, ResponseEnvelope,
+    ResponseResult, ResyncReason, ResyncRequirement, ServerMessage, UnavailableReason,
+    WorkspaceHierarchy, WorkspaceId, WorkspaceProjection, WorkspaceReference, WorkspaceSummary,
 };
 
 #[derive(Deserialize)]
@@ -266,6 +268,38 @@ impl FakeServer {
                 })
             }
             ReadQuery::BoardSnapshot => ResponseResult::BoardSnapshot(self.snapshot()),
+            ReadQuery::WorkspaceHierarchy => {
+                ResponseResult::WorkspaceHierarchy(WorkspaceHierarchy {
+                    workspace: self.workspace_reference(),
+                    repositories: Vec::new(),
+                    epics: Vec::new(),
+                    features: Vec::new(),
+                    work_items: Vec::new(),
+                    recent_entities: Vec::new(),
+                    focused_entity: None,
+                })
+            }
+            ReadQuery::BoardViews => ResponseResult::BoardViews(Vec::new()),
+            ReadQuery::BoardView { view_id } => ResponseResult::BoardView(BoardViewDefinition {
+                id: *view_id,
+                workspace_id: self.workspace_id,
+                title: "Test view".to_owned(),
+                filters: BoardViewFilters {
+                    query: None,
+                    repository_ids: Vec::new(),
+                    statuses: Vec::new(),
+                },
+                grouping: BoardViewGrouping {
+                    kind: BoardViewGroupingKind::Hierarchy,
+                    lanes: Vec::new(),
+                },
+                sort: BoardViewSort {
+                    field: BoardViewSortField::Title,
+                    direction: BoardViewSortDirection::Ascending,
+                },
+                density: BoardViewDensity::Comfortable,
+                revision: 1,
+            }),
         };
         write_message(
             stream,

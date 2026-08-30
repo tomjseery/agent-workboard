@@ -3,8 +3,8 @@ use time::OffsetDateTime;
 use ts_rs::TS;
 
 use crate::{
-    AssociationId, CheckoutId, CheckoutPathId, DocumentId, EpicId, FeatureId, HierarchyRef,
-    RepositoryId, RepositoryPathId, SessionId, WorkItemId, WorkspaceId,
+    AssociationId, BoardViewId, CheckoutId, CheckoutPathId, DocumentId, EntityRef, EpicId,
+    FeatureId, HierarchyRef, RepositoryId, RepositoryPathId, SessionId, WorkItemId, WorkspaceId,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -50,6 +50,111 @@ pub struct WorkItemReference {
     pub key: String,
     pub slug: String,
     pub title: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceHierarchy {
+    pub workspace: WorkspaceReference,
+    pub repositories: Vec<RepositoryReference>,
+    pub epics: Vec<HierarchyEpic>,
+    pub features: Vec<HierarchyFeature>,
+    pub work_items: Vec<HierarchyWorkItem>,
+    pub recent_entities: Vec<EntityRef>,
+    pub focused_entity: Option<EntityRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct HierarchyEpic {
+    pub epic: EpicReference,
+    pub repository_ids: Vec<RepositoryId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct HierarchyFeature {
+    pub feature: FeatureReference,
+    pub repository_ids: Vec<RepositoryId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct HierarchyWorkItem {
+    pub work_item: WorkItemReference,
+    pub repository_ids: Vec<RepositoryId>,
+    pub status: WorkItemStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardViewDefinition {
+    pub id: BoardViewId,
+    pub workspace_id: WorkspaceId,
+    pub title: String,
+    pub filters: BoardViewFilters,
+    pub grouping: BoardViewGrouping,
+    pub sort: BoardViewSort,
+    pub density: BoardViewDensity,
+    pub revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardViewFilters {
+    pub query: Option<String>,
+    pub repository_ids: Vec<RepositoryId>,
+    pub statuses: Vec<WorkItemStatus>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardViewGrouping {
+    pub kind: BoardViewGroupingKind,
+    pub lanes: Vec<BoardViewLaneDefinition>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardViewLaneDefinition {
+    pub key: String,
+    pub title: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum BoardViewGroupingKind {
+    Hierarchy,
+    Repository,
+    Status,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardViewSort {
+    pub field: BoardViewSortField,
+    pub direction: BoardViewSortDirection,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum BoardViewSortField {
+    Title,
+    Key,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum BoardViewSortDirection {
+    Ascending,
+    Descending,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum BoardViewDensity {
+    Comfortable,
+    Compact,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

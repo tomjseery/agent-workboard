@@ -56,6 +56,7 @@ define_id!(CheckoutId);
 define_id!(CheckoutPathId);
 define_id!(DocumentId);
 define_id!(AssociationId);
+define_id!(BoardViewId);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", content = "id", rename_all = "snake_case")]

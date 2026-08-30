@@ -216,7 +216,7 @@ fn execute_protocol(
                     negotiated_read_version: negotiated,
                     compatible_command_versions,
                     workspaces,
-                    command_capabilities: unavailable_capabilities(),
+                    command_capabilities: command_capabilities(),
                     event_version: 1,
                     heartbeat_interval_ms: HEARTBEAT_INTERVAL.as_millis() as u64,
                     max_frame_bytes: MAX_FRAME_BYTES,
@@ -247,6 +247,15 @@ fn execute_protocol(
                 ReadQuery::HierarchyChildren { parent } => application
                     .client_hierarchy_children(core_id, *parent)
                     .map(ResponseResult::HierarchyChildren),
+                ReadQuery::WorkspaceHierarchy => application
+                    .client_workspace_hierarchy(core_id)
+                    .map(ResponseResult::WorkspaceHierarchy),
+                ReadQuery::BoardViews => application
+                    .client_board_views(core_id)
+                    .map(ResponseResult::BoardViews),
+                ReadQuery::BoardView { view_id } => application
+                    .client_board_view(core_id, *view_id)
+                    .map(ResponseResult::BoardView),
                 ReadQuery::BoardSnapshot => application
                     .client_board_snapshot(core_id)
                     .map(ResponseResult::BoardSnapshot),
@@ -257,7 +266,7 @@ fn execute_protocol(
                     request,
                     Some(revision),
                     result,
-                    unavailable_actions(revision),
+                    available_actions(revision),
                 ),
                 Ok(_) => ClientResponseEnvelope::failure(
                     request.protocol_version,
@@ -294,12 +303,42 @@ fn execute_protocol(
                 request,
                 Some(revision),
                 ResponseResult::SubscriptionAccepted { cursor },
-                unavailable_actions(revision),
+                available_actions(revision),
             )
         }
         Operation::Command(command) => {
             if request.protocol_version != CURRENT_PROTOCOL_VERSION {
                 return incompatible(request);
+            }
+            if let workboard_client_protocol::CommandOperation::SaveBoardView { definition } =
+                command
+            {
+                let workspace_id = request.workspace_id.expect("validated Workspace");
+                let result = application.save_client_board_view(
+                    core_workspace_id(workspace_id),
+                    request.expected_revision.expect("validated revision"),
+                    request
+                        .idempotency_key
+                        .as_deref()
+                        .expect("validated idempotency key"),
+                    request.request_id,
+                    definition.clone(),
+                );
+                return match result {
+                    Ok(saved) => {
+                        let revision = application
+                            .projection_revision(core_workspace_id(workspace_id))
+                            .expect("saved view revision");
+                        ClientResponseEnvelope::success(
+                            request.protocol_version,
+                            request,
+                            Some(revision),
+                            ResponseResult::BoardView(saved),
+                            available_actions(revision),
+                        )
+                    }
+                    Err(error) => application_failure(request.protocol_version, request, error),
+                };
             }
             let mut error = ProtocolError::new(
                 "capability_unavailable",
@@ -320,6 +359,15 @@ fn response_within_limits(result: &ResponseResult) -> bool {
         ResponseResult::Handshake(value) => value.workspaces.len() <= MAX_COLLECTION_ITEMS,
         ResponseResult::WorkspaceSummary(_) => true,
         ResponseResult::HierarchyChildren(value) => value.children.len() <= MAX_COLLECTION_ITEMS,
+        ResponseResult::WorkspaceHierarchy(value) => {
+            value.repositories.len() <= MAX_COLLECTION_ITEMS
+                && value.epics.len() <= MAX_COLLECTION_ITEMS
+                && value.features.len() <= MAX_COLLECTION_ITEMS
+                && value.work_items.len() <= MAX_COLLECTION_ITEMS
+                && value.recent_entities.len() <= MAX_COLLECTION_ITEMS
+        }
+        ResponseResult::BoardViews(value) => value.len() <= MAX_COLLECTION_ITEMS,
+        ResponseResult::BoardView(_) => true,
         ResponseResult::BoardSnapshot(value) => {
             value.repositories.len() <= MAX_COLLECTION_ITEMS
                 && value.epics.len() <= MAX_COLLECTION_ITEMS
@@ -344,25 +392,29 @@ fn unavailable_reason() -> UnavailableReason {
     }
 }
 
-fn unavailable_capabilities() -> Vec<CommandCapability> {
+fn command_capabilities() -> Vec<CommandCapability> {
     CommandCode::ALL
         .into_iter()
         .map(|code| CommandCapability {
             code,
-            available: false,
-            compatible_versions: Vec::new(),
-            unavailable_reason: Some(unavailable_reason()),
+            available: code == CommandCode::SaveBoardView,
+            compatible_versions: if code == CommandCode::SaveBoardView {
+                vec![CURRENT_PROTOCOL_VERSION]
+            } else {
+                Vec::new()
+            },
+            unavailable_reason: (code != CommandCode::SaveBoardView).then(unavailable_reason),
         })
         .collect()
 }
 
-fn unavailable_actions(revision: u64) -> Vec<AvailableAction> {
+fn available_actions(revision: u64) -> Vec<AvailableAction> {
     CommandCode::ALL
         .into_iter()
         .map(|code| AvailableAction {
             code,
-            available: false,
-            unavailable_reason: Some(unavailable_reason()),
+            available: code == CommandCode::SaveBoardView,
+            unavailable_reason: (code != CommandCode::SaveBoardView).then(unavailable_reason),
             expected_revision: Some(revision),
         })
         .collect()
@@ -399,7 +451,7 @@ pub(crate) enum WriterRequest {
         response: Sender<ResponseEnvelope>,
     },
     Protocol {
-        request: ClientRequestEnvelope,
+        request: Box<ClientRequestEnvelope>,
         daemon_instance_id: DaemonInstanceId,
         response: Sender<ClientResponseEnvelope>,
     },
@@ -874,7 +926,7 @@ fn send_protocol(
     let (response_sender, response_receiver) = mpsc::channel();
     writer
         .send(WriterRequest::Protocol {
-            request,
+            request: Box::new(request),
             daemon_instance_id,
             response: response_sender,
         })
