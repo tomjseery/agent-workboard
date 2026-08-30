@@ -12,17 +12,17 @@ use workboard_core::{ConversationId, LaunchLeaseId};
 
 use crate::AppError;
 
-const CURRENT_SCHEMA_VERSION: i64 = 35;
+const CURRENT_SCHEMA_VERSION: i64 = 36;
 const FOUNDATION_SCHEMA_CHECKSUM: &str = "agent-workboard-foundation-v1";
 const WORKSPACE_PLANNING_SCHEMA_CHECKSUM: &str = "agent-workboard-workspace-planning-v1";
 const WORK_ITEM_DEPENDENCY_SCHEMA_CHECKSUM: &str = "agent-workboard-work-item-dependency-v1";
 const LAUNCH_PROFILE_SCHEMA_CHECKSUM: &str = "agent-workboard-launch-profile-v1";
 const FEATURE_PROPOSAL_DECISION_SCHEMA_CHECKSUM: &str =
     "agent-workboard-feature-proposal-decision-v1";
+const SESSION_BINDING_GENERATION_SCHEMA_CHECKSUM: &str =
+    "agent-workboard-session-binding-generation-v1";
 const FEATURE_PROPOSAL_DECISION_SQL: &str = r#"
-ALTER TABLE feature_planning_proposals
-    ADD COLUMN generation INTEGER NOT NULL DEFAULT 1 CHECK (generation > 0);
-CREATE TABLE feature_proposal_decisions (
+CREATE TABLE IF NOT EXISTS feature_proposal_decisions (
     feature_id TEXT NOT NULL REFERENCES features(id) ON DELETE RESTRICT,
     generation INTEGER NOT NULL CHECK (generation > 0),
     decision TEXT NOT NULL CHECK (decision IN ('request_revision', 'reject')),
@@ -2475,11 +2475,33 @@ fn migrate(connection: &Connection) -> Result<(), AppError> {
         LAUNCH_PROFILE_SCHEMA_CHECKSUM,
         LAUNCH_PROFILE_SQL,
     )?;
-    apply_migration(
+    apply_validated_migration(
         connection,
         35,
         FEATURE_PROPOSAL_DECISION_SCHEMA_CHECKSUM,
         FEATURE_PROPOSAL_DECISION_SQL,
+        |transaction| {
+            add_column_if_missing(
+                transaction,
+                "feature_planning_proposals",
+                "generation",
+                "ALTER TABLE feature_planning_proposals ADD COLUMN generation INTEGER NOT NULL DEFAULT 1 CHECK (generation > 0)",
+            )
+        },
+    )?;
+    apply_validated_migration(
+        connection,
+        36,
+        SESSION_BINDING_GENERATION_SCHEMA_CHECKSUM,
+        "",
+        |transaction| {
+            add_column_if_missing(
+                transaction,
+                "managed_sessions",
+                "binding_generation",
+                "ALTER TABLE managed_sessions ADD COLUMN binding_generation INTEGER NOT NULL DEFAULT 1 CHECK (binding_generation > 0)",
+            )
+        },
     )?;
     Ok(())
 }
@@ -2751,6 +2773,23 @@ fn migration_exists(connection: &Connection, version: i64) -> Result<bool, AppEr
         |row| row.get(0),
     )?;
     Ok(exists != 0)
+}
+
+fn add_column_if_missing(
+    transaction: &Transaction<'_>,
+    table: &str,
+    column: &str,
+    sql: &str,
+) -> Result<(), AppError> {
+    let exists: i64 = transaction.query_row(
+        "SELECT EXISTS (SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2)",
+        params![table, column],
+        |row| row.get(0),
+    )?;
+    if exists == 0 {
+        transaction.execute_batch(sql)?;
+    }
+    Ok(())
 }
 
 fn apply_migration(
@@ -4391,7 +4430,7 @@ mod tests {
         assert_eq!(preserved_attestation, valid_attestation);
         assert_eq!(legacy_authority, "immutable_evidence");
         let health = store.health().expect("storage health");
-        assert_eq!(health.schema_version, 35);
+        assert_eq!(health.schema_version, 36);
         assert!(health.is_healthy());
         let audited_attestations: Vec<(String, String, String, String)> = store
             .read(|connection| {
@@ -4436,7 +4475,7 @@ mod tests {
             .expect("read upgraded schema 20 attestations");
         assert_eq!(upgraded_attestations, audited_attestations);
         let health = store.health().expect("upgraded storage health");
-        assert_eq!(health.schema_version, 35);
+        assert_eq!(health.schema_version, 36);
         assert!(health.is_healthy());
         drop(store);
 

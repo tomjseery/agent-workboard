@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use rusqlite::OptionalExtension;
@@ -365,7 +365,7 @@ fn readiness(
         .map(|(item, _)| *item)
         .collect::<Vec<_>>();
     let mut memo = HashMap::new();
-    let layer = dependency_layer(work_item.id, edges, &mut memo)?;
+    let layer = dependency_layer(work_item.id, edges, &mut memo, &mut HashSet::new())?;
     let ready = blocked_by.is_empty()
         && matches!(
             work_item.status,
@@ -386,14 +386,21 @@ fn dependency_layer(
     work_item_id: WorkItemId,
     edges: &[(WorkItemId, WorkItemId)],
     memo: &mut HashMap<WorkItemId, u32>,
+    visiting: &mut HashSet<WorkItemId>,
 ) -> Result<u32, AppError> {
     if let Some(layer) = memo.get(&work_item_id) {
         return Ok(*layer);
     }
+    if !visiting.insert(work_item_id) {
+        return Err(AppError::PlanningDocumentInvalid(
+            "Work-item dependencies must be acyclic".to_owned(),
+        ));
+    }
     let mut layer = 0;
     for (_, dependency) in edges.iter().filter(|(item, _)| *item == work_item_id) {
-        layer = layer.max(dependency_layer(*dependency, edges, memo)?.saturating_add(1));
+        layer = layer.max(dependency_layer(*dependency, edges, memo, visiting)?.saturating_add(1));
     }
+    visiting.remove(&work_item_id);
     memo.insert(work_item_id, layer);
     Ok(layer)
 }
@@ -572,8 +579,13 @@ mod tests {
         assert!(!leaf_readiness.ready);
         assert_eq!(leaf_readiness.blocked_by, [middle.id]);
         assert_eq!(
-            dependency_layer(leaf.id, &edges, &mut std::collections::HashMap::new())
-                .expect("layer"),
+            dependency_layer(
+                leaf.id,
+                &edges,
+                &mut std::collections::HashMap::new(),
+                &mut std::collections::HashSet::new(),
+            )
+            .expect("layer"),
             2
         );
     }
