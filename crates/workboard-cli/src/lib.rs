@@ -3129,10 +3129,32 @@ fn execute_work_launch(
         application
             .checkout_service()
             .reconcile_registered_checkout(target.checkout.checkout_id, now)?;
-        let readiness = application
+        let readiness = match application
             .checkout_service()
             .readiness_for_checkout(target.checkout.checkout_id)?
-            .ok_or(AppError::ResumeCheckoutRequired)?;
+        {
+            Some(readiness) => readiness,
+            None => {
+                let HierarchyOwner::WorkItem(work_item_id) = target.owner else {
+                    return Err(AppError::ResumeCheckoutRequired);
+                };
+                let readiness =
+                    application
+                        .checkout_service()
+                        .prepare_work_item(PrepareWorkItemCheckout {
+                            work_item_id,
+                            repository_id: target.checkout.repository_id,
+                            idempotency_key: format!(
+                                "{launch_idempotency_key}:legacy-resume-checkout"
+                            ),
+                            observed_at: now,
+                        })?;
+                if readiness.checkout_id != target.checkout.checkout_id {
+                    return Err(AppError::ResumeCheckoutRequired);
+                }
+                readiness
+            }
+        };
         if readiness.access_mode != selection.access_mode {
             return Err(AppError::CheckoutReconciliation {
                 code: "checkout_access_mode_changed".to_owned(),
