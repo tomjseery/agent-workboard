@@ -47,9 +47,9 @@ and generated Claude/Codex mirrors. The frozen Agent Standards head is
 `3cef65a492cc6ecb24f54d78cfbb299a19f891d1`. Verification is PowerShell-qualified because Git Bash/MSYS
 changes executable resolution and causes three environment-dependent baseline assertions.
 
-The baseline must also capture the stalled predecessor records, checkout-liveness divergence, global
-`continue-roadmap` collision, planning-store commit and Epic hash, generated-mirror inventory, and the two
-then-open Workboard gaps: scoped repository-instruction paths and structured atomic checkpoints.
+The baseline must also capture the stalled predecessor records, checkout-liveness divergence, planning-store
+commit and Epic hash, generated-mirror inventory, and the two then-open Workboard gaps: scoped
+repository-instruction paths and structured atomic checkpoints.
 
 ## Delivery phases
 
@@ -97,8 +97,7 @@ The two upstream limitations remain explicit. Scoped assigned context belongs to
 `frictionless-managed-work-item-launch-and-recovery/return-scoped-managed-assigned-context`.
 `work_checkpoint` still accepts only an opaque summary and coarse next-action enum; no published sibling Work
 item yet owns its structured atomic replacement, so later managed checkpoint work must retain this as an
-unresolved dependency rather than inventing a second authority. The globally installed Workboard
-`continue-roadmap` also still wins the bare skill name over the repository skill; Phase 4 owns that collision.
+unresolved dependency rather than inventing a second authority.
 
 Frozen-head PowerShell verification is green: Workflow verification reports one provider, eight examples,
 five schemas, and contract v2; the complete hook suite reports 424 tests passing with one skip; and the
@@ -192,16 +191,18 @@ exact checkout binding, Git-observed no incidental plan mutation, full verificat
 
 Workboard item: `route-managed-planning-and-execution-skills`.
 
-Give `plan-execution`, `plan-checkpoint`, `plans`, `plan-authoring`, `continue-roadmap`, `resume-plan`,
-`update-roadmap`, `handoff`, and `open-worktree` explicit managed and unmanaged branches. Managed execution
+Give `plan-execution`, `plan-checkpoint`, `plans`, `plan-authoring`, `resume-plan`, `update-roadmap`, `handoff`,
+and `open-worktree` explicit managed and unmanaged branches. Managed execution
 resolves the assigned Work item, documents, checkout, and next action through typed Workboard state and
 checkpoints through Workboard alone. Unmanaged execution retains the existing repository plan/ledger route.
 Managed handoff identifies Feature, Work item, checkout, and next action; managed worktree opening uses the
 recorded checkout and fails closed on Git disagreement.
 
-Resolve the global/repository `continue-roadmap` collision, keep routing provider-neutral, and ensure both
-host harnesses select identical skills. Prove managed and unmanaged route equivalence, complete unmanaged
-compatibility, no host-agent/model names, canonical tests, and generated mirror parity.
+The globally installed Workboard `continue-roadmap` compatibility skill and its Concertable-specific collision
+are outside this Agent Standards cutover and remain with the migration compatibility delivery. Keep routing
+provider-neutral and ensure both host harnesses select identical skills. Prove managed and unmanaged route
+equivalence, complete unmanaged compatibility, no host-agent/model names, canonical tests, and generated
+mirror parity.
 
 ### Phase 5 — Cut over hooks, worktrees, generators, and mirrors
 
