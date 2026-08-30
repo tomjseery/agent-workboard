@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod generation;
 mod identity;
 mod projection;
 mod wire;

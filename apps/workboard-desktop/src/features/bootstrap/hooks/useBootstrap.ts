@@ -1,4 +1,4 @@
-import type { BootstrapState } from "../types/bootstrap";
+import type { BootstrapState } from "../../../core/generated";
 import { useBootstrapQuery } from "./useBootstrapQuery";
 import { useBootstrapSubscription } from "./useBootstrapSubscription";
 

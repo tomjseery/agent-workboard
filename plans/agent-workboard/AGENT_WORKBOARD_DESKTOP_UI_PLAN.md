@@ -255,7 +255,7 @@ The app is additive. On configuration, security, or negotiation failure it shows
 
 ### 3. Generate TypeScript contracts and conformance fixtures
 
-- Status: [ ]
+- Status: [x]
 - Slug: `generate-typescript-contracts-and-conformance-fixtures`
 - Dependencies: items 1 and 2
 - Delivery type: deterministic contract generation

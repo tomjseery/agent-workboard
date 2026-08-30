@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420 --strictPort",
     "build": "tsc -b && vite build",
+    "generate": "cargo run -q --manifest-path src-tauri/Cargo.toml --bin generate-contracts -- write",
+    "generate:check": "cargo run -q --manifest-path src-tauri/Cargo.toml --bin generate-contracts -- check",
     "typecheck": "tsc -b --pretty false",
     "test": "vitest run"
   },

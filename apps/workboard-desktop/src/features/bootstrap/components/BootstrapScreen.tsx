@@ -1,4 +1,4 @@
-import type { BootstrapState } from "../types/bootstrap";
+import type { BootstrapState } from "../../../core/generated";
 import { useBootstrap } from "../hooks/useBootstrap";
 
 interface BootstrapPresentation {
