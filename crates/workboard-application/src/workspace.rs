@@ -15,6 +15,7 @@ use workboard_core::{
 };
 
 use crate::AppError;
+use crate::batch_launch::BatchLaunchService;
 use crate::checkout::CheckoutService;
 use crate::follow_up::FollowUpService;
 use crate::git::{GitCli, GitRepositoryDiscovery, GitWorktreeResolver};
@@ -91,6 +92,10 @@ impl WorkboardApplication {
 
     pub fn checkout_service(&mut self) -> CheckoutService<'_> {
         CheckoutService::new(&mut self.store)
+    }
+
+    pub fn batch_launches(&mut self) -> BatchLaunchService<'_> {
+        BatchLaunchService::new(&mut self.store)
     }
 
     pub fn work_item_projection(
