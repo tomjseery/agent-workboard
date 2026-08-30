@@ -118,6 +118,32 @@ Verify `python .agents/workflows/verify.py --root .`, the complete hook unit sui
 
 Workboard item: `evolve-workflow-v2-for-two-state-providers`.
 
+Status: complete on 2026-08-30 in Agent Standards commit
+`1dd28657c88cfc98b51b61f6a24da90ab1a60dc4` (`feat(workflow): evolve Workflow v2 contract for a second
+state provider`), published on `origin/work-item/8e31b124-544d-4dca-988e-2e5199b40360`.
+
+The coordinated contract change evolved 19 files. Canonical changes are
+`.agents/workflows/contract/v2/capabilities.json`, `compatibility.json`, `provider.schema.json`,
+`state.schema.json`, the new `examples/provider.workboard.example.json` and
+`examples/state.workboard.example.json`, `.agents/workflows/providers/repository.md`, the new
+`.agents/workflows/providers/workboard.md`, `.agents/workflows/workflow_runtime.py`, and
+`.agents/hooks/tests/test_workflow_contracts.py`. The equivalent nine Workflow files under
+`plugins/workflow/workflows` are generated mirrors.
+
+Workflow v2 now declares `repository` and `workboard` providers over the same five operations and declares
+`repository`, `workboard`, and `reconciliation-required` selection outcomes, with reconciliation yielding no
+provider. Repository state still requires its plan, ledger, roadmap, and reviews artifacts. Workboard state
+requires Epic, Feature, Work-item, document, and checkout identities and rejects repository artifact fields.
+The repository provider example remains valid, each provider has exactly one matching probe example, and the
+new managed state example validates. Runtime routing did not change: `select_state_provider` still constructs
+`RepositoryStateProvider`.
+
+PowerShell verification is green at the commit: Workflow verification reports contract v2, two providers,
+ten examples, and five schemas; the complete hook suite reports 426 tests passing with one skip; and the
+generated-copy check reports 302 files current, including 73 skills and 29 docs. An independent acceptance
+rerun on 2026-08-30 repeated Workflow verification, the provider-specific artifact tests, the provider/outcome
+agreement test, the unchanged repository-routing test, and generated-copy verification successfully.
+
 Add `workboard` to provider and state schemas and compatibility metadata. Introduce a managed artifacts
 shape, conditional repository artifacts, a reconciliation-required selection outcome with no provider, one
 Workboard provider example, and one managed state example. Keep contract version v2 and the existing
@@ -196,6 +222,9 @@ and generated Claude/Codex skills, hooks, workflows, and manifests match their s
 
 ## Current delivery state
 
-Planning is published and its six Work items are ready. No implementation phase is recorded complete. Start
-with the immutable recovery baseline, then deliver the contract and provider selection before routing skills,
-cutting over hooks and generated artifacts, and closing with the offline recovery matrix.
+Phases 1 and 2 are complete and separately committed. The immutable recovery evidence is recorded above, and
+Workflow v2 now expresses both providers without changing runtime selection. Phase 3,
+`implement-three-state-provider-selection`, is the next delivery gate. Before managed checkpoint behavior can
+be considered complete, that phase must retain the unresolved upstream ownership gap for a structured atomic
+replacement of the current opaque `work_checkpoint` payload; it must not fill the gap with repository state or
+a second planning record.
