@@ -12,11 +12,25 @@ use workboard_core::{ConversationId, LaunchLeaseId};
 
 use crate::AppError;
 
-const CURRENT_SCHEMA_VERSION: i64 = 34;
+const CURRENT_SCHEMA_VERSION: i64 = 35;
 const FOUNDATION_SCHEMA_CHECKSUM: &str = "agent-workboard-foundation-v1";
 const WORKSPACE_PLANNING_SCHEMA_CHECKSUM: &str = "agent-workboard-workspace-planning-v1";
 const WORK_ITEM_DEPENDENCY_SCHEMA_CHECKSUM: &str = "agent-workboard-work-item-dependency-v1";
 const LAUNCH_PROFILE_SCHEMA_CHECKSUM: &str = "agent-workboard-launch-profile-v1";
+const FEATURE_PROPOSAL_DECISION_SCHEMA_CHECKSUM: &str =
+    "agent-workboard-feature-proposal-decision-v1";
+const FEATURE_PROPOSAL_DECISION_SQL: &str = r#"
+ALTER TABLE feature_planning_proposals
+    ADD COLUMN generation INTEGER NOT NULL DEFAULT 1 CHECK (generation > 0);
+CREATE TABLE feature_proposal_decisions (
+    feature_id TEXT NOT NULL REFERENCES features(id) ON DELETE RESTRICT,
+    generation INTEGER NOT NULL CHECK (generation > 0),
+    decision TEXT NOT NULL CHECK (decision IN ('request_revision', 'reject')),
+    reason TEXT NOT NULL CHECK (reason <> ''),
+    decided_at TEXT NOT NULL,
+    PRIMARY KEY (feature_id, generation)
+);
+"#;
 const LAUNCH_PROFILE_SQL: &str = r#"
 CREATE TABLE launch_profiles (
     id TEXT PRIMARY KEY,
@@ -2461,6 +2475,12 @@ fn migrate(connection: &Connection) -> Result<(), AppError> {
         LAUNCH_PROFILE_SCHEMA_CHECKSUM,
         LAUNCH_PROFILE_SQL,
     )?;
+    apply_migration(
+        connection,
+        35,
+        FEATURE_PROPOSAL_DECISION_SCHEMA_CHECKSUM,
+        FEATURE_PROPOSAL_DECISION_SQL,
+    )?;
     Ok(())
 }
 
@@ -4371,7 +4391,7 @@ mod tests {
         assert_eq!(preserved_attestation, valid_attestation);
         assert_eq!(legacy_authority, "immutable_evidence");
         let health = store.health().expect("storage health");
-        assert_eq!(health.schema_version, 34);
+        assert_eq!(health.schema_version, 35);
         assert!(health.is_healthy());
         let audited_attestations: Vec<(String, String, String, String)> = store
             .read(|connection| {
@@ -4416,7 +4436,7 @@ mod tests {
             .expect("read upgraded schema 20 attestations");
         assert_eq!(upgraded_attestations, audited_attestations);
         let health = store.health().expect("upgraded storage health");
-        assert_eq!(health.schema_version, 34);
+        assert_eq!(health.schema_version, 35);
         assert!(health.is_healthy());
         drop(store);
 

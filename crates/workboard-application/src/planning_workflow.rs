@@ -84,6 +84,16 @@ pub struct FeatureProposalOutcome {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FeatureProposalDecisionOutcome {
+    pub feature_id: FeatureId,
+    pub workflow_run_id: WorkflowRunId,
+    pub generation: u32,
+    pub decision: String,
+    pub reason: String,
+    pub state: WorkflowState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FeaturePublicationOutcome {
     pub feature_id: FeatureId,
     pub workflow_run_id: WorkflowRunId,
@@ -323,7 +333,8 @@ impl<'a> PlanningWorkflowService<'a> {
                      status = excluded.status,
                      submitted_at = excluded.submitted_at,
                      approved_at = NULL,
-                     published_commit = NULL",
+                     published_commit = NULL,
+                     generation = feature_planning_proposals.generation + 1",
                 params![
                     feature_id.to_string(),
                     draft.workflow_run_id.to_string(),
@@ -341,11 +352,13 @@ impl<'a> PlanningWorkflowService<'a> {
         })
     }
 
-    pub fn reject_proposal(
+    pub fn request_proposal_revision(
         &mut self,
         feature_id: FeatureId,
-        rejected_at: OffsetDateTime,
-    ) -> Result<FeatureProposalOutcome, AppError> {
+        feedback: &str,
+        requested_at: OffsetDateTime,
+    ) -> Result<FeatureProposalDecisionOutcome, AppError> {
+        validate_decision_reason(feedback)?;
         self.store.write(|transaction| {
             let draft = draft_by_feature(transaction, feature_id)?;
             if draft.state != WorkflowState::AwaitingApproval {
@@ -353,13 +366,19 @@ impl<'a> PlanningWorkflowService<'a> {
                     "Feature has no proposal awaiting approval".to_owned(),
                 ));
             }
+            let generation = proposal_generation(transaction, feature_id)?;
+            let payload = serde_json::to_string(&serde_json::json!({
+                "decision": "request_revision",
+                "generation": generation,
+                "feedback": feedback,
+            }))?;
             transition_feature(
                 transaction,
                 &draft,
                 WorkflowState::PlanningActive,
                 WorkflowActor::User,
-                rejected_at,
-                "{}",
+                requested_at,
+                &payload,
                 None,
             )?;
             transaction.execute(
@@ -367,12 +386,74 @@ impl<'a> PlanningWorkflowService<'a> {
                  WHERE feature_id = ?1 AND status = 'awaiting_approval'",
                 [feature_id.to_string()],
             )?;
-            let count = proposal_work_item_count(transaction, feature_id)?;
-            Ok(FeatureProposalOutcome {
+            insert_proposal_decision(
+                transaction,
+                feature_id,
+                generation,
+                "request_revision",
+                feedback,
+                requested_at,
+            )?;
+            Ok(FeatureProposalDecisionOutcome {
                 feature_id,
                 workflow_run_id: draft.workflow_run_id,
+                generation,
+                decision: "request_revision".to_owned(),
+                reason: feedback.to_owned(),
                 state: WorkflowState::PlanningActive,
-                work_item_count: count,
+            })
+        })
+    }
+
+    pub fn reject_proposal(
+        &mut self,
+        feature_id: FeatureId,
+        reason: &str,
+        rejected_at: OffsetDateTime,
+    ) -> Result<FeatureProposalDecisionOutcome, AppError> {
+        validate_decision_reason(reason)?;
+        self.store.write(|transaction| {
+            let draft = draft_by_feature(transaction, feature_id)?;
+            if draft.state != WorkflowState::AwaitingApproval {
+                return Err(AppError::Domain(
+                    "Feature has no proposal awaiting approval".to_owned(),
+                ));
+            }
+            let generation = proposal_generation(transaction, feature_id)?;
+            let payload = serde_json::to_string(&serde_json::json!({
+                "decision": "reject",
+                "generation": generation,
+                "reason": reason,
+            }))?;
+            transition_feature(
+                transaction,
+                &draft,
+                WorkflowState::Cancelled,
+                WorkflowActor::User,
+                rejected_at,
+                &payload,
+                None,
+            )?;
+            transaction.execute(
+                "UPDATE feature_planning_proposals SET status = 'rejected'
+                 WHERE feature_id = ?1 AND status = 'awaiting_approval'",
+                [feature_id.to_string()],
+            )?;
+            insert_proposal_decision(
+                transaction,
+                feature_id,
+                generation,
+                "reject",
+                reason,
+                rejected_at,
+            )?;
+            Ok(FeatureProposalDecisionOutcome {
+                feature_id,
+                workflow_run_id: draft.workflow_run_id,
+                generation,
+                decision: "reject".to_owned(),
+                reason: reason.to_owned(),
+                state: WorkflowState::Cancelled,
             })
         })
     }
@@ -1140,6 +1221,50 @@ fn proposal_work_item_count(
     )
 }
 
+fn proposal_generation(
+    transaction: &Transaction<'_>,
+    feature_id: FeatureId,
+) -> Result<u32, AppError> {
+    let generation = transaction.query_row(
+        "SELECT generation FROM feature_planning_proposals WHERE feature_id = ?1",
+        [feature_id.to_string()],
+        |row| row.get::<_, u32>(0),
+    )?;
+    Ok(generation)
+}
+
+fn insert_proposal_decision(
+    transaction: &Transaction<'_>,
+    feature_id: FeatureId,
+    generation: u32,
+    decision: &str,
+    reason: &str,
+    decided_at: OffsetDateTime,
+) -> Result<(), AppError> {
+    transaction.execute(
+        "INSERT INTO feature_proposal_decisions (
+             feature_id, generation, decision, reason, decided_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            feature_id.to_string(),
+            generation,
+            decision,
+            reason,
+            timestamp(decided_at),
+        ],
+    )?;
+    Ok(())
+}
+
+fn validate_decision_reason(value: &str) -> Result<(), AppError> {
+    if value.trim().is_empty() || value.len() > 8 * 1024 || value.chars().any(char::is_control) {
+        return Err(AppError::Domain(
+            "Proposal feedback or rejection reason is invalid".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_proposal(proposal: &FeatureProposal) -> Result<(), AppError> {
     let encoded = serde_json::to_vec(proposal)?;
     if encoded.len() > MAX_PROPOSAL_BYTES
@@ -1656,14 +1781,17 @@ mod tests {
             .expect("repeat proposal");
         assert_eq!(first, repeated);
         assert_eq!(first.state, WorkflowState::AwaitingApproval);
-        fixture
+        let revision = fixture
             .app
             .planning_workflows()
-            .reject_proposal(
+            .request_proposal_revision(
                 active.draft.feature_id,
+                "Clarify the verification boundary",
                 fixture.at + time::Duration::minutes(5),
             )
-            .expect("reject proposal");
+            .expect("request proposal revision");
+        assert_eq!(revision.generation, 1);
+        assert_eq!(revision.state, WorkflowState::PlanningActive);
         fixture
             .app
             .planning_workflows()
@@ -1748,6 +1876,27 @@ mod tests {
             })
             .expect("published dependency");
         assert_eq!(dependencies, (1, 0));
+        let decision = fixture
+            .app
+            .store
+            .read(|connection| {
+                connection
+                    .query_row(
+                        "SELECT decision, reason FROM feature_proposal_decisions
+                         WHERE feature_id = ?1 AND generation = 1",
+                        [active.draft.feature_id.to_string()],
+                        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                    )
+                    .map_err(Into::into)
+            })
+            .expect("durable proposal decision");
+        assert_eq!(
+            decision,
+            (
+                "request_revision".to_owned(),
+                "Clarify the verification boundary".to_owned()
+            )
+        );
         let published_count = git(
             &fixture.planning_store,
             &["rev-list", "--count", &published.commit],
@@ -1755,6 +1904,54 @@ mod tests {
         .parse::<u32>()
         .expect("published commit count");
         assert_eq!(published_count, before_count + 1);
+    }
+
+    #[test]
+    fn terminal_rejection_cancels_the_feature_and_preserves_the_reason() {
+        let mut fixture = fixture();
+        let active = activate_planning(&mut fixture, Tool::Claude);
+        fixture
+            .app
+            .planning_workflows()
+            .submit_proposal(
+                active.draft.feature_id,
+                &active.workflow_token,
+                proposal(&active, fixture.repository_id),
+                "proposal-to-reject",
+                fixture.at + time::Duration::minutes(3),
+            )
+            .expect("submit proposal");
+        let rejected = fixture
+            .app
+            .planning_workflows()
+            .reject_proposal(
+                active.draft.feature_id,
+                "The proposed scope is no longer wanted",
+                fixture.at + time::Duration::minutes(4),
+            )
+            .expect("reject proposal");
+        assert_eq!(rejected.state, WorkflowState::Cancelled);
+        assert_eq!(rejected.generation, 1);
+        assert!(matches!(
+            fixture.app.planning_workflows().submit_proposal(
+                active.draft.feature_id,
+                &active.workflow_token,
+                proposal(&active, fixture.repository_id),
+                "proposal-after-rejection",
+                fixture.at + time::Duration::minutes(5),
+            ),
+            Err(AppError::WorkflowOperationUnauthorized)
+        ));
+        let snapshot = fixture
+            .app
+            .snapshot(fixture.workspace_id)
+            .expect("snapshot");
+        let feature = snapshot
+            .features
+            .iter()
+            .find(|feature| feature.id == active.draft.feature_id)
+            .expect("rejected Feature");
+        assert_eq!(feature.state, WorkflowState::Cancelled);
     }
 
     #[test]
