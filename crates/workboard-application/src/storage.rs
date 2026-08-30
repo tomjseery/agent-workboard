@@ -116,8 +116,42 @@ SELECT id, NULL, work_item_id, feature_id, epic_id, checkout_id, provider,
        expected_native_id, terminal_pid, failure, workflow_token_hash,
        workflow_token_expires_at, terminal_window
 FROM launch_intents;
+CREATE TEMP TABLE migration32_managed_session_intents AS
+SELECT id, launch_intent_id FROM managed_sessions WHERE launch_intent_id IS NOT NULL;
+CREATE TEMP TABLE migration32_session_request_intents AS
+SELECT id, launch_intent_id FROM managed_session_requests WHERE launch_intent_id IS NOT NULL;
+CREATE TEMP TABLE migration32_recovery_outcome_intents AS
+SELECT attempt_id, session_id, launch_intent_id
+FROM recovery_entry_outcomes WHERE launch_intent_id IS NOT NULL;
+UPDATE managed_sessions SET launch_intent_id = NULL WHERE launch_intent_id IS NOT NULL;
+UPDATE managed_session_requests SET launch_intent_id = NULL WHERE launch_intent_id IS NOT NULL;
+UPDATE recovery_entry_outcomes SET launch_intent_id = NULL WHERE launch_intent_id IS NOT NULL;
 DROP TABLE launch_intents;
 ALTER TABLE launch_intents_v2 RENAME TO launch_intents;
+UPDATE managed_sessions
+SET launch_intent_id = (
+    SELECT launch_intent_id FROM migration32_managed_session_intents saved
+    WHERE saved.id = managed_sessions.id
+)
+WHERE id IN (SELECT id FROM migration32_managed_session_intents);
+UPDATE managed_session_requests
+SET launch_intent_id = (
+    SELECT launch_intent_id FROM migration32_session_request_intents saved
+    WHERE saved.id = managed_session_requests.id
+)
+WHERE id IN (SELECT id FROM migration32_session_request_intents);
+UPDATE recovery_entry_outcomes
+SET launch_intent_id = (
+    SELECT launch_intent_id FROM migration32_recovery_outcome_intents saved
+    WHERE saved.attempt_id = recovery_entry_outcomes.attempt_id
+      AND saved.session_id = recovery_entry_outcomes.session_id
+)
+WHERE (attempt_id, session_id) IN (
+    SELECT attempt_id, session_id FROM migration32_recovery_outcome_intents
+);
+DROP TABLE migration32_managed_session_intents;
+DROP TABLE migration32_session_request_intents;
+DROP TABLE migration32_recovery_outcome_intents;
 
 CREATE TABLE native_session_associations_v2 (
     id TEXT PRIMARY KEY,
@@ -2595,6 +2629,8 @@ fn backfill_work_item_dependencies(transaction: &Transaction<'_>) -> Result<(), 
             .query_row(
                 "SELECT event.payload_json FROM workflow_events event
                  JOIN workflow_runs run ON run.id = event.run_id
+                 JOIN feature_planning_proposals proposal
+                   ON proposal.feature_id = run.feature_id AND proposal.status = 'published'
                  WHERE run.feature_id = ?1 AND event.to_state = 'proposal_ready'
                  ORDER BY event.sequence DESC LIMIT 1",
                 [feature_id.as_str()],
@@ -3429,7 +3465,13 @@ fn health(connection: &Connection) -> Result<StorageHealth, AppError> {
 pub(crate) fn drop_workspace_planning_schema(connection: &Connection) {
     connection
         .execute_batch(
-            r#"DROP TABLE launch_profile_preferences;
+            r#"ALTER TABLE managed_sessions DROP COLUMN binding_generation;
+            DELETE FROM schema_migrations WHERE version = 36;
+
+            DROP TABLE feature_proposal_decisions;
+            DELETE FROM schema_migrations WHERE version = 35;
+
+            DROP TABLE launch_profile_preferences;
             ALTER TABLE managed_session_requests DROP COLUMN profile_id;
             ALTER TABLE managed_sessions DROP COLUMN profile_id;
             ALTER TABLE launch_intents DROP COLUMN profile_id;
@@ -3733,6 +3775,124 @@ mod tests {
                 .expect("health")
                 .is_healthy()
         );
+    }
+
+    #[test]
+    fn schema_31_live_bindings_and_rejected_proposals_survive_upgrade() {
+        let directory = TempDir::new().expect("temporary directory");
+        let path = directory.path().join("workboard.sqlite");
+        let mut store = SqliteStore::open(&path).expect("open store");
+        store.write(seed_hierarchy).expect("seed hierarchy");
+        drop(store);
+
+        let connection = Connection::open(&path).expect("open current database");
+        super::drop_workspace_planning_schema(&connection);
+        connection
+            .execute_batch(
+                r#"INSERT INTO checkouts (
+                       id, repository_id, git_worktree_identity, branch, head, availability,
+                       created_at
+                   ) VALUES (
+                       'checkout', 'code-repository', 'worktree', 'feature/live', 'head',
+                       'available', '2026-08-27T08:00:00Z'
+                   );
+                   INSERT INTO native_sessions (
+                       id, provider, native_id, discovered_at
+                   ) VALUES (
+                       'session', 'codex', 'native-session', '2026-08-27T08:00:00Z'
+                   );
+                   INSERT INTO launch_intents (
+                       id, work_item_id, checkout_id, provider, idempotency_key, token_hash,
+                       status, created_at, expires_at, role
+                   ) VALUES (
+                       'launch-intent', 'work-item', 'checkout', 'codex', 'launch-key',
+                       'launch-token', 'bound', '2026-08-27T08:00:00Z',
+                       '2026-08-28T08:00:00Z', 'work_item_execution'
+                   );
+                   INSERT INTO managed_sessions (
+                       id, launch_intent_id, session_id, checkout_id, role, status, managed_from
+                   ) VALUES (
+                       'managed-session', 'launch-intent', 'session', 'checkout',
+                       'work_item_execution', 'bound', '2026-08-27T08:00:00Z'
+                   );
+                   INSERT INTO managed_session_requests (
+                       id, requesting_session_id, work_item_id, provider, idempotency_key,
+                       status, requested_at, launch_intent_id
+                   ) VALUES (
+                       'session-request', 'session', 'work-item', 'codex', 'request-key',
+                       'bound', '2026-08-27T08:00:00Z', 'launch-intent'
+                   );
+                   INSERT INTO recovery_attempts (
+                       id, workspace_id, idempotency_key, requested_at, plan_json, status,
+                       completed_at
+                   ) VALUES (
+                       'recovery-attempt', 'workspace', 'recovery-key',
+                       '2026-08-27T08:00:00Z', '{}', 'completed', '2026-08-27T08:01:00Z'
+                   );
+                   INSERT INTO recovery_entry_outcomes (
+                       attempt_id, session_id, status, launch_intent_id, observed_at
+                   ) VALUES (
+                       'recovery-attempt', 'session', 'bound', 'launch-intent',
+                       '2026-08-27T08:01:00Z'
+                   );
+                   INSERT INTO workflow_runs (
+                       id, feature_id, current_state, started_at
+                   ) VALUES (
+                       'planning-run', 'feature', 'planning_active', '2026-08-27T08:00:00Z'
+                   );
+                   INSERT INTO workflow_events (
+                       id, run_id, sequence, from_state, to_state, actor, occurred_at,
+                       payload_json
+                   ) VALUES (
+                       'proposal-event', 'planning-run', 1, 'planning_active', 'proposal_ready',
+                       'planner', '2026-08-27T08:01:00Z',
+                       '{"proposal":{"work_items":[{"slug":"never-published","dependencies":[]}]}}'
+                   );
+                   INSERT INTO feature_planning_proposals (
+                       feature_id, workflow_run_id, idempotency_key, proposal_json, status,
+                       submitted_at
+                   ) VALUES (
+                       'feature', 'planning-run', 'proposal-key', '{}', 'rejected',
+                       '2026-08-27T08:01:00Z'
+                   );"#,
+            )
+            .expect("seed live schema 31 state");
+        drop(connection);
+
+        let store = SqliteStore::open(&path).expect("upgrade live schema 31 state");
+        let references: (String, String, String) = store
+            .read(|connection| {
+                Ok((
+                    connection.query_row(
+                        "SELECT launch_intent_id FROM managed_sessions WHERE id = 'managed-session'",
+                        [],
+                        |row| row.get(0),
+                    )?,
+                    connection.query_row(
+                        "SELECT launch_intent_id FROM managed_session_requests WHERE id = 'session-request'",
+                        [],
+                        |row| row.get(0),
+                    )?,
+                    connection.query_row(
+                        "SELECT launch_intent_id FROM recovery_entry_outcomes
+                         WHERE attempt_id = 'recovery-attempt' AND session_id = 'session'",
+                        [],
+                        |row| row.get(0),
+                    )?,
+                ))
+            })
+            .expect("read preserved launch intent references");
+
+        assert_eq!(
+            references,
+            (
+                "launch-intent".to_owned(),
+                "launch-intent".to_owned(),
+                "launch-intent".to_owned()
+            )
+        );
+        assert_eq!(store.health().expect("storage health").schema_version, 36);
+        assert!(store.health().expect("storage health").is_healthy());
     }
 
     #[test]
