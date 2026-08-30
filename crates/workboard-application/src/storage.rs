@@ -12,7 +12,7 @@ use workboard_core::{ConversationId, LaunchLeaseId};
 
 use crate::AppError;
 
-const CURRENT_SCHEMA_VERSION: i64 = 37;
+const CURRENT_SCHEMA_VERSION: i64 = 38;
 const FOUNDATION_SCHEMA_CHECKSUM: &str = "agent-workboard-foundation-v1";
 const WORKSPACE_PLANNING_SCHEMA_CHECKSUM: &str = "agent-workboard-workspace-planning-v1";
 const WORK_ITEM_DEPENDENCY_SCHEMA_CHECKSUM: &str = "agent-workboard-work-item-dependency-v1";
@@ -22,6 +22,76 @@ const FEATURE_PROPOSAL_DECISION_SCHEMA_CHECKSUM: &str =
 const SESSION_BINDING_GENERATION_SCHEMA_CHECKSUM: &str =
     "agent-workboard-session-binding-generation-v1";
 const SESSION_FOLLOW_UP_SCHEMA_CHECKSUM: &str = "agent-workboard-session-follow-up-v1";
+const WRITER_SESSION_RESERVATION_SCHEMA_CHECKSUM: &str =
+    "agent-workboard-writer-session-reservation-v1";
+const WRITER_SESSION_RESERVATION_SQL: &str = r#"
+ALTER TABLE checkout_reconciliation_events RENAME TO checkout_reconciliation_events_v37;
+ALTER TABLE checkout_readiness RENAME TO checkout_readiness_v37;
+CREATE TABLE checkout_readiness (
+    checkout_id TEXT PRIMARY KEY REFERENCES checkouts(id) ON DELETE RESTRICT,
+    schema_version INTEGER NOT NULL CHECK (schema_version > 0),
+    repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE RESTRICT,
+    checkout_path_id TEXT NOT NULL REFERENCES checkout_paths(id) ON DELETE RESTRICT,
+    purpose TEXT NOT NULL CHECK (
+        purpose IN ('feature_integration', 'work_item_write', 'writer_session', 'read_only_shared')
+    ),
+    access_mode TEXT NOT NULL CHECK (access_mode IN ('write_isolated', 'read_only_shared')),
+    owner_kind TEXT NOT NULL CHECK (owner_kind IN ('epic', 'feature', 'work_item')),
+    owner_id TEXT NOT NULL CHECK (owner_id <> ''),
+    session_id TEXT REFERENCES native_sessions(id) ON DELETE RESTRICT,
+    session_key TEXT NOT NULL,
+    parent_feature_checkout_id TEXT REFERENCES checkouts(id) ON DELETE RESTRICT,
+    base_revision TEXT NOT NULL CHECK (base_revision <> ''),
+    source_revision TEXT NOT NULL CHECK (source_revision <> ''),
+    path TEXT NOT NULL CHECK (path <> ''),
+    git_worktree_identity TEXT NOT NULL CHECK (git_worktree_identity <> ''),
+    branch TEXT,
+    head TEXT NOT NULL CHECK (head <> ''),
+    availability TEXT NOT NULL CHECK (availability IN ('available', 'missing', 'deleted', 'replaced')),
+    isolation_generation INTEGER NOT NULL CHECK (isolation_generation > 0),
+    reconciliation_generation INTEGER NOT NULL CHECK (reconciliation_generation > 0),
+    evidence_json TEXT NOT NULL CHECK (evidence_json <> ''),
+    observed_at TEXT NOT NULL,
+    UNIQUE (repository_id, purpose, owner_kind, owner_id, session_key),
+    UNIQUE (repository_id, path),
+    UNIQUE (repository_id, branch),
+    CHECK (
+        (purpose = 'feature_integration' AND owner_kind = 'feature'
+            AND access_mode = 'write_isolated' AND session_id IS NULL AND session_key = '') OR
+        (purpose = 'work_item_write' AND owner_kind = 'work_item'
+            AND access_mode = 'write_isolated' AND session_id IS NULL AND session_key = '') OR
+        (purpose = 'writer_session' AND owner_kind = 'work_item'
+            AND access_mode = 'write_isolated' AND session_key <> '') OR
+        (purpose = 'read_only_shared' AND access_mode = 'read_only_shared'
+            AND ((session_id IS NULL AND session_key = '') OR
+                 (session_id IS NOT NULL AND session_key <> '')))
+    )
+);
+INSERT INTO checkout_readiness (
+    checkout_id, schema_version, repository_id, checkout_path_id, purpose, access_mode,
+    owner_kind, owner_id, session_id, session_key, parent_feature_checkout_id,
+    base_revision, source_revision, path, git_worktree_identity, branch, head,
+    availability, isolation_generation, reconciliation_generation, evidence_json, observed_at
+)
+SELECT checkout_id, 2, repository_id, checkout_path_id, purpose, access_mode,
+       owner_kind, owner_id, session_id, session_key, parent_feature_checkout_id,
+       base_revision, source_revision, path, git_worktree_identity, branch, head,
+       availability, isolation_generation, reconciliation_generation, evidence_json, observed_at
+FROM checkout_readiness_v37;
+CREATE TABLE checkout_reconciliation_events (
+    checkout_id TEXT NOT NULL REFERENCES checkout_readiness(checkout_id) ON DELETE RESTRICT,
+    generation INTEGER NOT NULL CHECK (generation > 0),
+    availability TEXT NOT NULL CHECK (availability IN ('available', 'missing', 'deleted', 'replaced')),
+    head TEXT NOT NULL,
+    evidence_json TEXT NOT NULL CHECK (evidence_json <> ''),
+    observed_at TEXT NOT NULL,
+    PRIMARY KEY (checkout_id, generation)
+);
+INSERT INTO checkout_reconciliation_events
+SELECT * FROM checkout_reconciliation_events_v37;
+DROP TABLE checkout_reconciliation_events_v37;
+DROP TABLE checkout_readiness_v37;
+"#;
 const SESSION_FOLLOW_UP_SQL: &str = r#"
 CREATE TABLE workflow_credentials (
     id TEXT PRIMARY KEY,
@@ -2602,6 +2672,12 @@ fn migrate(connection: &Connection) -> Result<(), AppError> {
         SESSION_FOLLOW_UP_SCHEMA_CHECKSUM,
         SESSION_FOLLOW_UP_SQL,
     )?;
+    apply_migration(
+        connection,
+        38,
+        WRITER_SESSION_RESERVATION_SCHEMA_CHECKSUM,
+        WRITER_SESSION_RESERVATION_SQL,
+    )?;
     Ok(())
 }
 
@@ -3530,7 +3606,9 @@ fn health(connection: &Connection) -> Result<StorageHealth, AppError> {
 pub(crate) fn drop_workspace_planning_schema(connection: &Connection) {
     connection
         .execute_batch(
-            r#"DROP TABLE session_follow_ups;
+            r#"DELETE FROM schema_migrations WHERE version = 38;
+
+            DROP TABLE session_follow_ups;
             DROP TABLE workflow_credentials;
             DELETE FROM schema_migrations WHERE version = 37;
 
@@ -3692,7 +3770,7 @@ mod tests {
                  ALTER TABLE managed_session_requests DROP COLUMN repository_id;
                  ALTER TABLE managed_session_requests DROP COLUMN readiness_generation;
                  ALTER TABLE managed_session_requests DROP COLUMN checkout_id;
-                 DELETE FROM schema_migrations WHERE version = 31;
+                 DELETE FROM schema_migrations WHERE version IN (31, 38);
                  PRAGMA user_version = 30;",
             )
             .expect("remove checkout readiness schema");
@@ -3960,7 +4038,7 @@ mod tests {
                 "launch-intent".to_owned()
             )
         );
-        assert_eq!(store.health().expect("storage health").schema_version, 37);
+        assert_eq!(store.health().expect("storage health").schema_version, 38);
         assert!(store.health().expect("storage health").is_healthy());
     }
 
@@ -4659,7 +4737,7 @@ mod tests {
         assert_eq!(preserved_attestation, valid_attestation);
         assert_eq!(legacy_authority, "immutable_evidence");
         let health = store.health().expect("storage health");
-        assert_eq!(health.schema_version, 37);
+        assert_eq!(health.schema_version, 38);
         assert!(health.is_healthy());
         let audited_attestations: Vec<(String, String, String, String)> = store
             .read(|connection| {
@@ -4704,7 +4782,7 @@ mod tests {
             .expect("read upgraded schema 20 attestations");
         assert_eq!(upgraded_attestations, audited_attestations);
         let health = store.health().expect("upgraded storage health");
-        assert_eq!(health.schema_version, 37);
+        assert_eq!(health.schema_version, 38);
         assert!(health.is_healthy());
         drop(store);
 

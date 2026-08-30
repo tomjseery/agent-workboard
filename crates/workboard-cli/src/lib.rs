@@ -12,6 +12,7 @@ use workboard_application::AppError;
 use workboard_application::caller::{CallerIdentityProvider, EnvironmentCallerIdentity};
 use workboard_application::checkout::{
     AdoptFeatureCheckout, PrepareFeatureCheckout, PrepareWorkItemCheckout,
+    PrepareWriterSessionCheckout,
 };
 use workboard_application::concertable_import::{
     ConcertableImportPreview, preview_concertable_plans,
@@ -2841,19 +2842,28 @@ fn execute_work_launch(
             capability: capability_inputs(application, target.tool, &repository_slug)?,
         }
     } else {
-        if selection.role == ManagedSessionRole::WorkItemExecution
+        if selection.writer_reservation_key.is_none()
             && refreshed
                 .sessions
                 .iter()
                 .any(|session| session.primary_writer)
         {
             return Err(AppError::External {
-                code: "primary_writer_already_current".to_owned(),
-                message: "resume the current primary writer or choose a debugging/review role"
-                    .to_owned(),
+                code: "launch_state_changed".to_owned(),
+                message: "a primary writer became current; preview Start another again".to_owned(),
             });
         }
-        let readiness =
+        let readiness = if let Some(reservation_key) = selection.writer_reservation_key {
+            application
+                .checkout_service()
+                .prepare_writer_session(PrepareWriterSessionCheckout {
+                    work_item_id: work_item.id,
+                    repository_id: selection.repository_id,
+                    reservation_key,
+                    idempotency_key: format!("{launch_idempotency_key}:checkout"),
+                    observed_at: now,
+                })?
+        } else {
             application
                 .checkout_service()
                 .prepare_work_item(PrepareWorkItemCheckout {
@@ -2861,7 +2871,8 @@ fn execute_work_launch(
                     repository_id: selection.repository_id,
                     idempotency_key: format!("{launch_idempotency_key}:checkout"),
                     observed_at: now,
-                })?;
+                })?
+        };
         BeginManagedSessionLaunch {
             owner: HierarchyOwner::WorkItem(work_item.id),
             role: selection.role,
@@ -2890,7 +2901,7 @@ fn execute_work_launch(
 }
 
 fn work_launch_options(
-    application: &WorkboardApplication,
+    application: &mut WorkboardApplication,
     snapshot: &workboard_core::WorkspaceSnapshot,
     projection: &workboard_application::work_projection::WorkItemProjection,
     repository_filter: Option<workboard_core::RepositoryId>,
@@ -2904,6 +2915,7 @@ fn work_launch_options(
         .filter(|session| repository_filter.is_none_or(|id| session.repository_id == id))
         .map(|session| board::LaunchOption {
             session_id: Some(session.session_id),
+            writer_reservation_key: None,
             repository_id: session.repository_id,
             provider: session.provider,
             profile: session.profile.clone(),
@@ -2932,7 +2944,7 @@ fn work_launch_options(
         .copied()
         .filter(|id| repository_filter.is_none_or(|filter| *id == filter))
     {
-        let (checkout, branch) = snapshot
+        let (primary_checkout, primary_branch) = snapshot
             .effective_checkouts
             .iter()
             .find(|checkout| {
@@ -2960,6 +2972,23 @@ fn work_launch_options(
             })
             .unwrap_or_else(|| (PathBuf::from("materialize on Start"), None));
         for provider in &providers {
+            let writer_reservation_key = projection
+                .sessions
+                .iter()
+                .any(|session| session.primary_writer)
+                .then(new_idempotency_key);
+            let (checkout, branch) = if let Some(reservation_key) = &writer_reservation_key {
+                application.checkout_service().writer_session_preview(
+                    projection.work_item.id,
+                    repository_id,
+                    reservation_key,
+                )?
+            } else {
+                (
+                    primary_checkout.clone(),
+                    primary_branch.clone().unwrap_or_default(),
+                )
+            };
             let mut profile = application.preferred_launch_profile(
                 projection.workspace_id,
                 *provider,
@@ -2977,6 +3006,7 @@ fn work_launch_options(
             }
             options.push(board::LaunchOption {
                 session_id: None,
+                writer_reservation_key,
                 repository_id,
                 provider: *provider,
                 profile,
@@ -2990,8 +3020,8 @@ fn work_launch_options(
                     )
                 },
                 last_activity: None,
-                checkout: checkout.clone(),
-                branch: branch.clone(),
+                checkout,
+                branch: (!branch.is_empty()).then_some(branch),
                 resumability: workboard_core::Resumability::Unknown,
             });
         }
@@ -3047,6 +3077,7 @@ fn noninteractive_work_selection(
 fn launch_selection(option: board::LaunchOption) -> board::LaunchSelection {
     board::LaunchSelection {
         session_id: option.session_id,
+        writer_reservation_key: option.writer_reservation_key,
         repository_id: option.repository_id,
         provider: option.provider,
         profile: option.profile,

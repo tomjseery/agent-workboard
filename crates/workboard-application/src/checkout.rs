@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 use workboard_core::{
     CHECKOUT_READINESS_SCHEMA_VERSION, CheckoutAccessMode, CheckoutAvailability,
@@ -54,6 +55,29 @@ pub struct PrepareWorkItemCheckout {
     pub observed_at: OffsetDateTime,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrepareWriterSessionCheckout {
+    pub work_item_id: WorkItemId,
+    pub repository_id: RepositoryId,
+    pub reservation_key: String,
+    pub idempotency_key: String,
+    pub observed_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WorkItemAllocation {
+    Primary,
+    WriterSession { reservation_key: String },
+}
+
+struct WorkItemAllocationRequest {
+    work_item_id: WorkItemId,
+    repository_id: RepositoryId,
+    idempotency_key: String,
+    observed_at: OffsetDateTime,
+    allocation: WorkItemAllocation,
+}
+
 struct WorkItemCheckoutContext {
     repository_path: PathBuf,
     repository_common_dir: PathBuf,
@@ -87,13 +111,74 @@ impl<'a> CheckoutService<'a> {
         request: PrepareWorkItemCheckout,
         git: &(impl GitWorktreeCreator + GitWorktreeResolver),
     ) -> Result<CheckoutReadiness, AppError> {
+        self.prepare_work_item_allocation(
+            WorkItemAllocationRequest {
+                work_item_id: request.work_item_id,
+                repository_id: request.repository_id,
+                idempotency_key: request.idempotency_key,
+                observed_at: request.observed_at,
+                allocation: WorkItemAllocation::Primary,
+            },
+            git,
+        )
+    }
+
+    pub fn prepare_writer_session(
+        &mut self,
+        request: PrepareWriterSessionCheckout,
+    ) -> Result<CheckoutReadiness, AppError> {
+        self.prepare_writer_session_with(request, &GitCli)
+    }
+
+    pub fn prepare_writer_session_with(
+        &mut self,
+        request: PrepareWriterSessionCheckout,
+        git: &(impl GitWorktreeCreator + GitWorktreeResolver),
+    ) -> Result<CheckoutReadiness, AppError> {
+        self.prepare_work_item_allocation(
+            WorkItemAllocationRequest {
+                work_item_id: request.work_item_id,
+                repository_id: request.repository_id,
+                idempotency_key: request.idempotency_key,
+                observed_at: request.observed_at,
+                allocation: WorkItemAllocation::WriterSession {
+                    reservation_key: request.reservation_key,
+                },
+            },
+            git,
+        )
+    }
+
+    pub fn writer_session_preview(
+        &self,
+        work_item_id: WorkItemId,
+        repository_id: RepositoryId,
+        reservation_key: &str,
+    ) -> Result<(PathBuf, String), AppError> {
+        let allocation = WorkItemAllocation::WriterSession {
+            reservation_key: reservation_key.to_owned(),
+        };
+        validate_reservation_key(&allocation)?;
+        let context = self.work_item_context(work_item_id, repository_id, &allocation)?;
+        Ok((context.target, context.branch))
+    }
+
+    fn prepare_work_item_allocation(
+        &mut self,
+        request: WorkItemAllocationRequest,
+        git: &(impl GitWorktreeCreator + GitWorktreeResolver),
+    ) -> Result<CheckoutReadiness, AppError> {
         validate_work_item_request(&request)?;
-        let context = self.work_item_context(&request)?;
+        let context = self.work_item_context(
+            request.work_item_id,
+            request.repository_id,
+            &request.allocation,
+        )?;
         let parent = git.resolve(&context.parent_path)?;
         validate_parent_checkout(&context, &parent)?;
         let current = read_work_item_readiness(self.store, &request)?;
         if let Some(readiness) = current.as_ref() {
-            validate_recorded_allocation(readiness, &context)?;
+            validate_recorded_allocation(readiness, &context, &request.allocation)?;
             reject_active_writer(self.store, readiness.checkout_id)?;
         }
         let intent_id = ensure_work_item_intent(self.store, &request, &context)?;
@@ -264,7 +349,9 @@ impl<'a> CheckoutService<'a> {
 
     fn work_item_context(
         &self,
-        request: &PrepareWorkItemCheckout,
+        work_item_id: WorkItemId,
+        repository_id: RepositoryId,
+        allocation: &WorkItemAllocation,
     ) -> Result<WorkItemCheckoutContext, AppError> {
         self.store.read(|connection| {
             let row = connection
@@ -290,10 +377,7 @@ impl<'a> CheckoutService<'a> {
                        ON checkout_path.checkout_id = checkout.id
                       AND checkout_path.observed_until IS NULL
                      WHERE item.id = ?1",
-                    params![
-                        request.work_item_id.to_string(),
-                        request.repository_id.to_string()
-                    ],
+                    params![work_item_id.to_string(), repository_id.to_string()],
                     |row| {
                         Ok((
                             row.get::<_, String>(0)?,
@@ -329,14 +413,23 @@ impl<'a> CheckoutService<'a> {
                         )
                     })?;
             let repository_path = PathBuf::from(repository_path);
+            let (target, branch) = match allocation {
+                WorkItemAllocation::Primary => (
+                    work_item_target(&repository_path, work_item_id)?,
+                    format!("work-item/{work_item_id}"),
+                ),
+                WorkItemAllocation::WriterSession { reservation_key } => {
+                    writer_session_target(&repository_path, work_item_id, reservation_key)?
+                }
+            };
             Ok(WorkItemCheckoutContext {
                 repository_common_dir: PathBuf::from(repository_common_dir),
                 parent_checkout_id: parse_id(&parent_checkout_id)?,
                 parent_path: PathBuf::from(parent_path),
                 parent_identity: PathBuf::from(parent_identity),
                 base_revision: parent_branch.unwrap_or_else(|| source_revision.clone()),
-                target: work_item_target(&repository_path, request.work_item_id)?,
-                branch: format!("work-item/{}", request.work_item_id),
+                target,
+                branch,
                 repository_path,
                 source_revision,
             })
@@ -900,8 +993,19 @@ fn record_registered_checkout_reconciliation(
     }
 }
 
-fn validate_work_item_request(request: &PrepareWorkItemCheckout) -> Result<(), AppError> {
+fn validate_work_item_request(request: &WorkItemAllocationRequest) -> Result<(), AppError> {
     if request.idempotency_key.trim().is_empty() {
+        return Err(AppError::EmptyIdempotencyKey);
+    }
+    validate_reservation_key(&request.allocation)?;
+    Ok(())
+}
+
+fn validate_reservation_key(allocation: &WorkItemAllocation) -> Result<(), AppError> {
+    if matches!(
+        allocation,
+        WorkItemAllocation::WriterSession { reservation_key } if reservation_key.trim().is_empty()
+    ) {
         return Err(AppError::EmptyIdempotencyKey);
     }
     Ok(())
@@ -936,9 +1040,10 @@ fn validate_parent_checkout(
 fn validate_recorded_allocation(
     readiness: &CheckoutReadiness,
     context: &WorkItemCheckoutContext,
+    allocation: &WorkItemAllocation,
 ) -> Result<(), AppError> {
     if readiness.schema_version != CHECKOUT_READINESS_SCHEMA_VERSION
-        || readiness.purpose != CheckoutPurpose::WorkItemWrite
+        || readiness.purpose != allocation_purpose(allocation)
         || readiness.access_mode != CheckoutAccessMode::WriteIsolated
         || readiness.parent_feature_checkout_id != Some(context.parent_checkout_id)
         || !paths_equal(&readiness.path, &context.target)
@@ -1026,6 +1131,46 @@ fn work_item_target(repository_path: &Path, work_item_id: WorkItemId) -> Result<
         .join(format!("WorkItem-{work_item_id}")))
 }
 
+fn writer_session_target(
+    repository_path: &Path,
+    work_item_id: WorkItemId,
+    reservation_key: &str,
+) -> Result<(PathBuf, String), AppError> {
+    let primary = work_item_target(repository_path, work_item_id)?;
+    let digest = format!("{:x}", Sha256::digest(reservation_key.as_bytes()));
+    let suffix = &digest[..12];
+    let target = primary.with_file_name(format!("WorkItem-{work_item_id}.Writer-{suffix}"));
+    Ok((target, format!("work-item/{work_item_id}/writer/{suffix}")))
+}
+
+fn allocation_purpose(allocation: &WorkItemAllocation) -> CheckoutPurpose {
+    match allocation {
+        WorkItemAllocation::Primary => CheckoutPurpose::WorkItemWrite,
+        WorkItemAllocation::WriterSession { .. } => CheckoutPurpose::WriterSession,
+    }
+}
+
+fn allocation_purpose_name(allocation: &WorkItemAllocation) -> &'static str {
+    match allocation {
+        WorkItemAllocation::Primary => "work_item_write",
+        WorkItemAllocation::WriterSession { .. } => "writer_session",
+    }
+}
+
+fn allocation_session_key(allocation: &WorkItemAllocation) -> &str {
+    match allocation {
+        WorkItemAllocation::Primary => "",
+        WorkItemAllocation::WriterSession { reservation_key } => reservation_key,
+    }
+}
+
+fn allocation_intent_kind(allocation: &WorkItemAllocation) -> &'static str {
+    match allocation {
+        WorkItemAllocation::Primary => "work_item_checkout",
+        WorkItemAllocation::WriterSession { .. } => "writer_session_checkout",
+    }
+}
+
 fn ensure_target_parent(target: &Path) -> Result<(), AppError> {
     let parent = target
         .parent()
@@ -1044,7 +1189,7 @@ fn directory_is_empty(path: &Path) -> Result<bool, AppError> {
 
 fn ensure_work_item_intent(
     store: &mut SqliteStore,
-    request: &PrepareWorkItemCheckout,
+    request: &WorkItemAllocationRequest,
     context: &WorkItemCheckoutContext,
 ) -> Result<OperationIntentId, AppError> {
     let payload = serde_json::to_string(&serde_json::json!({
@@ -1056,6 +1201,8 @@ fn ensure_work_item_intent(
         "branch": context.branch,
         "base_revision": context.base_revision,
         "source_revision": context.source_revision,
+        "purpose": allocation_purpose_name(&request.allocation),
+        "reservation_key": allocation_session_key(&request.allocation),
     }))?;
     let at = timestamp(request.observed_at);
     store.write(|transaction| {
@@ -1076,7 +1223,7 @@ fn ensure_work_item_intent(
             .optional()?;
         if let Some((id, work_item_id, kind, existing_payload)) = existing {
             if work_item_id.as_deref() != Some(request.work_item_id.to_string().as_str())
-                || kind != "work_item_checkout"
+                || kind != allocation_intent_kind(&request.allocation)
                 || existing_payload != payload
             {
                 return Err(AppError::IdempotencyConflict);
@@ -1087,11 +1234,12 @@ fn ensure_work_item_intent(
         transaction.execute(
             "INSERT INTO operation_intents (
                  id, work_item_id, idempotency_key, kind, status, payload_json, created_at
-             ) VALUES (?1, ?2, ?3, 'work_item_checkout', 'pending', ?4, ?5)",
+             ) VALUES (?1, ?2, ?3, ?4, 'pending', ?5, ?6)",
             params![
                 intent_id.to_string(),
                 request.work_item_id.to_string(),
                 request.idempotency_key,
+                allocation_intent_kind(&request.allocation),
                 payload,
                 at,
             ],
@@ -1102,18 +1250,20 @@ fn ensure_work_item_intent(
 
 fn read_work_item_readiness(
     store: &SqliteStore,
-    request: &PrepareWorkItemCheckout,
+    request: &WorkItemAllocationRequest,
 ) -> Result<Option<CheckoutReadiness>, AppError> {
     store.read(|connection| {
         let raw = connection
             .query_row(
                 &readiness_select(
-                    "WHERE repository_id = ?1 AND purpose = 'work_item_write'\
-                     AND owner_kind = 'work_item' AND owner_id = ?2 AND session_key = ''",
+                    "WHERE repository_id = ?1 AND purpose = ?3\
+                     AND owner_kind = 'work_item' AND owner_id = ?2 AND session_key = ?4",
                 ),
                 params![
                     request.repository_id.to_string(),
-                    request.work_item_id.to_string()
+                    request.work_item_id.to_string(),
+                    allocation_purpose_name(&request.allocation),
+                    allocation_session_key(&request.allocation),
                 ],
                 raw_readiness,
             )
@@ -1232,7 +1382,7 @@ fn reject_active_writer(store: &SqliteStore, checkout_id: CheckoutId) -> Result<
 
 fn reject_allocation_collision(
     store: &SqliteStore,
-    request: &PrepareWorkItemCheckout,
+    request: &WorkItemAllocationRequest,
     context: &WorkItemCheckoutContext,
     resolved: &ResolvedWorktree,
 ) -> Result<(), AppError> {
@@ -1243,7 +1393,7 @@ fn reject_allocation_collision(
                  WHERE repository_id = ?1
                    AND (path = ?2 OR git_worktree_identity = ?3 OR branch = ?4)
                    AND NOT (owner_kind = 'work_item' AND owner_id = ?5
-                            AND purpose = 'work_item_write' AND session_key = '')
+                            AND purpose = ?6 AND session_key = ?7)
                  LIMIT 1",
                 params![
                     request.repository_id.to_string(),
@@ -1251,6 +1401,8 @@ fn reject_allocation_collision(
                     path_text(&resolved.git_dir)?,
                     context.branch,
                     request.work_item_id.to_string(),
+                    allocation_purpose_name(&request.allocation),
+                    allocation_session_key(&request.allocation),
                 ],
                 |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
             )
@@ -1269,7 +1421,7 @@ fn reject_allocation_collision(
 
 fn persist_work_item_readiness(
     store: &mut SqliteStore,
-    request: &PrepareWorkItemCheckout,
+    request: &WorkItemAllocationRequest,
     context: &WorkItemCheckoutContext,
     intent_id: OperationIntentId,
     resolved: &ResolvedWorktree,
@@ -1365,20 +1517,22 @@ fn persist_work_item_readiness(
             )?;
             path_id
         };
-        transaction.execute(
-            "INSERT INTO work_item_checkout_overrides (
-                 work_item_id, repository_id, checkout_id, assigned_at
-             ) VALUES (?1, ?2, ?3, ?4)
-             ON CONFLICT(work_item_id, repository_id) DO UPDATE SET
-                 checkout_id = excluded.checkout_id,
-                 assigned_at = excluded.assigned_at",
-            params![
-                request.work_item_id.to_string(),
-                request.repository_id.to_string(),
-                checkout_id.to_string(),
-                at,
-            ],
-        )?;
+        if request.allocation == WorkItemAllocation::Primary {
+            transaction.execute(
+                "INSERT INTO work_item_checkout_overrides (
+                     work_item_id, repository_id, checkout_id, assigned_at
+                 ) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(work_item_id, repository_id) DO UPDATE SET
+                     checkout_id = excluded.checkout_id,
+                     assigned_at = excluded.assigned_at",
+                params![
+                    request.work_item_id.to_string(),
+                    request.repository_id.to_string(),
+                    checkout_id.to_string(),
+                    at,
+                ],
+            )?;
+        }
         transaction.execute(
             "INSERT INTO checkout_readiness (
                  checkout_id, schema_version, repository_id, checkout_path_id,
@@ -1386,9 +1540,9 @@ fn persist_work_item_readiness(
                  parent_feature_checkout_id, base_revision, source_revision, path,
                  git_worktree_identity, branch, head, availability,
                  isolation_generation, reconciliation_generation, evidence_json, observed_at
-             ) VALUES (?1, ?2, ?3, ?4, 'work_item_write', 'write_isolated',
-                       'work_item', ?5, NULL, '', ?6, ?7, ?8, ?9, ?10, ?11, ?12,
-                       'available', ?13, ?14, ?15, ?16)
+             ) VALUES (?1, ?2, ?3, ?4, ?5, 'write_isolated',
+                       'work_item', ?6, NULL, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+                       'available', ?15, ?16, ?17, ?18)
              ON CONFLICT(checkout_id) DO UPDATE SET
                  checkout_path_id = excluded.checkout_path_id,
                  parent_feature_checkout_id = excluded.parent_feature_checkout_id,
@@ -1408,7 +1562,9 @@ fn persist_work_item_readiness(
                 CHECKOUT_READINESS_SCHEMA_VERSION,
                 request.repository_id.to_string(),
                 checkout_path_id.to_string(),
+                allocation_purpose_name(&request.allocation),
                 request.work_item_id.to_string(),
+                allocation_session_key(&request.allocation),
                 context.parent_checkout_id.to_string(),
                 context.base_revision,
                 context.source_revision,
@@ -1450,7 +1606,7 @@ fn persist_work_item_readiness(
         repository_id: request.repository_id,
         checkout_id,
         checkout_path_id,
-        purpose: CheckoutPurpose::WorkItemWrite,
+        purpose: allocation_purpose(&request.allocation),
         access_mode: CheckoutAccessMode::WriteIsolated,
         owner: HierarchyOwner::WorkItem(request.work_item_id),
         session_id: None,
@@ -1675,7 +1831,8 @@ mod tests {
 
     use super::{
         AdoptFeatureCheckout, CheckoutService, PrepareFeatureCheckout, PrepareWorkItemCheckout,
-        request_payload, timestamp, work_item_target,
+        PrepareWriterSessionCheckout, request_payload, timestamp, work_item_target,
+        writer_session_target,
     };
     use crate::AppError;
     use crate::git::{GitWorktreeCreator, GitWorktreeResolver, ResolvedWorktree};
@@ -1905,6 +2062,29 @@ mod tests {
         }
     }
 
+    fn writer_session_git(
+        fixture: &Fixture,
+        work_item_id: WorkItemId,
+        reservation_key: &str,
+    ) -> WorkItemGit {
+        let parent = fake_git(fixture).resolved;
+        let (child_path, branch) =
+            writer_session_target(&fixture.repository_path, work_item_id, reservation_key)
+                .expect("derived writer-session target");
+        WorkItemGit {
+            parent,
+            child: ResolvedWorktree {
+                path: child_path.clone(),
+                common_dir: fixture.repository_common_dir.clone(),
+                git_dir: child_path.join(".git-worktrees-writer-session"),
+                branch: Some(format!("refs/heads/{branch}")),
+                head_oid: "0123456789abcdef".to_owned(),
+            },
+            child_resolves: true,
+            creates: Cell::new(0),
+        }
+    }
+
     #[test]
     fn creates_once_and_reuses_the_feature_checkout() {
         let mut fixture = fixture();
@@ -1978,6 +2158,75 @@ mod tests {
         assert_eq!(repeated.reconciliation_generation, 2);
         assert_eq!(git.creates.get(), 1);
         assert_eq!(inherited, 0);
+    }
+
+    #[test]
+    fn materializes_distinct_additional_writer_checkouts_without_replacing_the_primary() {
+        let mut fixture = fixture();
+        let feature_git = fake_git(&fixture);
+        let feature_request = request(&fixture, "feature-checkout");
+        CheckoutService::new(&mut fixture.store)
+            .prepare_feature_with(feature_request, &feature_git)
+            .expect("prepare Feature checkout");
+        let work_item_id = seed_work_item(&mut fixture);
+        let primary_git = work_item_git(&fixture, work_item_id, ".git-worktrees-primary");
+        let primary = CheckoutService::new(&mut fixture.store)
+            .prepare_work_item_with(
+                PrepareWorkItemCheckout {
+                    work_item_id,
+                    repository_id: fixture.repository_id,
+                    idempotency_key: "primary-checkout".to_owned(),
+                    observed_at: fixture.observed_at,
+                },
+                &primary_git,
+            )
+            .expect("prepare primary checkout");
+        let first_git = writer_session_git(&fixture, work_item_id, "writer-one");
+        let first = CheckoutService::new(&mut fixture.store)
+            .prepare_writer_session_with(
+                PrepareWriterSessionCheckout {
+                    work_item_id,
+                    repository_id: fixture.repository_id,
+                    reservation_key: "writer-one".to_owned(),
+                    idempotency_key: "writer-one-checkout".to_owned(),
+                    observed_at: fixture.observed_at,
+                },
+                &first_git,
+            )
+            .expect("prepare first writer checkout");
+        let second_git = writer_session_git(&fixture, work_item_id, "writer-two");
+        let second = CheckoutService::new(&mut fixture.store)
+            .prepare_writer_session_with(
+                PrepareWriterSessionCheckout {
+                    work_item_id,
+                    repository_id: fixture.repository_id,
+                    reservation_key: "writer-two".to_owned(),
+                    idempotency_key: "writer-two-checkout".to_owned(),
+                    observed_at: fixture.observed_at,
+                },
+                &second_git,
+            )
+            .expect("prepare second writer checkout");
+        let effective = fixture
+            .store
+            .read(|connection| {
+                connection
+                    .query_row(
+                        "SELECT checkout_id FROM effective_work_item_checkouts
+                         WHERE work_item_id = ?1 AND repository_id = ?2",
+                        params![work_item_id.to_string(), fixture.repository_id.to_string()],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .map_err(Into::into)
+            })
+            .expect("effective primary checkout");
+
+        assert_eq!(first.purpose, CheckoutPurpose::WriterSession);
+        assert_eq!(second.purpose, CheckoutPurpose::WriterSession);
+        assert_ne!(first.checkout_id, second.checkout_id);
+        assert_ne!(first.path, second.path);
+        assert_ne!(first.branch, second.branch);
+        assert_eq!(effective, primary.checkout_id.to_string());
     }
 
     #[test]

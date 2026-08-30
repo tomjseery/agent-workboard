@@ -184,6 +184,9 @@ impl<'a> SessionLaunchService<'a> {
         if duplicate.is_some() {
             return Err(AppError::DuplicateConfirmed);
         }
+        if request.mode == ManagedLaunchMode::New {
+            reject_checkout_launch_conflict(self.store, request.checkout_id)?;
+        }
         let token = Uuid::new_v4().to_string();
         let workflow_token = Uuid::new_v4().to_string();
         let intent_id = workboard_core::LaunchIntentId::generate();
@@ -829,6 +832,7 @@ fn bind_transaction(
     managed_status: &str,
 ) -> Result<ConfirmedSessionBinding, AppError> {
     let session_id = ensure_native_session(transaction, tool, native_id, observed_at)?;
+    bind_writer_session_checkout(transaction, checkout_id, owner, session_id)?;
     let current_owner = transaction
         .query_row(
             "SELECT workspace_id, epic_id, feature_id, work_item_id
@@ -1106,6 +1110,10 @@ fn validate_owner_checkout(
                 "SELECT EXISTS (
                      SELECT 1 FROM effective_work_item_checkouts
                      WHERE work_item_id = ?1 AND checkout_id = ?2
+                     UNION ALL
+                     SELECT 1 FROM checkout_readiness
+                     WHERE owner_kind = 'work_item' AND owner_id = ?1
+                       AND checkout_id = ?2 AND purpose IN ('writer_session', 'read_only_shared')
                  )",
                 params![work_item_id.to_string(), checkout_id.to_string()],
                 |row| row.get::<_, i64>(0),
@@ -1146,6 +1154,73 @@ fn validate_owner_checkout(
         Ok(())
     } else {
         Err(AppError::ResumeCheckoutNotScanned)
+    }
+}
+
+fn reject_checkout_launch_conflict(
+    store: &SqliteStore,
+    checkout_id: CheckoutId,
+) -> Result<(), AppError> {
+    let conflict = store.read(|connection| {
+        connection
+            .query_row(
+                "SELECT EXISTS (
+                     SELECT 1 FROM launch_intents
+                     WHERE checkout_id = ?1 AND status IN ('pending', 'launched')
+                     UNION ALL
+                     SELECT 1 FROM managed_sessions
+                     WHERE checkout_id = ?1 AND managed_until IS NULL
+                       AND status IN ('bound', 'adopted')
+                 )",
+                [checkout_id.to_string()],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|value| value != 0)
+            .map_err(Into::into)
+    })?;
+    if conflict {
+        Err(AppError::CheckoutReconciliation {
+            code: "checkout_writer_active".to_owned(),
+            message: "the checkout already has a current or pending managed writer".to_owned(),
+        })
+    } else {
+        Ok(())
+    }
+}
+
+fn bind_writer_session_checkout(
+    transaction: &Transaction<'_>,
+    checkout_id: CheckoutId,
+    owner: HierarchyOwner,
+    session_id: ConversationId,
+) -> Result<(), AppError> {
+    let HierarchyOwner::WorkItem(work_item_id) = owner else {
+        return Ok(());
+    };
+    let allocation = transaction
+        .query_row(
+            "SELECT session_id FROM checkout_readiness
+             WHERE checkout_id = ?1 AND owner_kind = 'work_item' AND owner_id = ?2
+               AND purpose = 'writer_session'",
+            params![checkout_id.to_string(), work_item_id.to_string()],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()?;
+    match allocation {
+        None => Ok(()),
+        Some(None) => {
+            transaction.execute(
+                "UPDATE checkout_readiness SET session_id = ?2 WHERE checkout_id = ?1",
+                params![checkout_id.to_string(), session_id.to_string()],
+            )?;
+            Ok(())
+        }
+        Some(Some(existing)) if existing == session_id.to_string() => Ok(()),
+        Some(Some(_)) => Err(AppError::CheckoutReconciliation {
+            code: "writer_session_reservation_bound".to_owned(),
+            message: "the writer-session checkout is already bound to another Workboard session"
+                .to_owned(),
+        }),
     }
 }
 
@@ -1756,6 +1831,96 @@ mod tests {
             transcript.is_file(),
             "a closed session must remain resumable, so its transcript survives"
         );
+    }
+
+    #[test]
+    fn session_start_claims_the_exact_writer_checkout_reservation() {
+        let mut fixture = fixture();
+        let parent_checkout_id = fixture.checkout_id;
+        let writer_checkout_id = CheckoutId::generate();
+        let writer_path_id = workboard_core::CheckoutPathId::generate();
+        let writer_path = fixture._directory.path().join("writer-checkout");
+        fs::create_dir(&writer_path).expect("writer checkout");
+        let now = fixture.observed_at.unix_timestamp_nanos().to_string();
+        fixture
+            .store
+            .write(|transaction| {
+                transaction.execute(
+                    "INSERT INTO checkouts (
+                         id, repository_id, git_worktree_identity, branch, head,
+                         availability, created_at
+                     ) SELECT ?1, repository_id, 'writer-identity', 'work-item/writer', 'head',
+                              'available', ?2 FROM checkouts WHERE id = ?3",
+                    params![
+                        writer_checkout_id.to_string(),
+                        now,
+                        parent_checkout_id.to_string()
+                    ],
+                )?;
+                transaction.execute(
+                    "INSERT INTO checkout_paths (
+                         id, checkout_id, path, observed_from, observed_until
+                     ) VALUES (?1, ?2, ?3, ?4, NULL)",
+                    params![
+                        writer_path_id.to_string(),
+                        writer_checkout_id.to_string(),
+                        writer_path.to_string_lossy(),
+                        now,
+                    ],
+                )?;
+                transaction.execute(
+                    "INSERT INTO checkout_readiness (
+                         checkout_id, schema_version, repository_id, checkout_path_id,
+                         purpose, access_mode, owner_kind, owner_id, session_id, session_key,
+                         parent_feature_checkout_id, base_revision, source_revision, path,
+                         git_worktree_identity, branch, head, availability,
+                         isolation_generation, reconciliation_generation, evidence_json, observed_at
+                     ) SELECT ?1, 2, repository_id, ?2, 'writer_session', 'write_isolated',
+                              'work_item', ?3, NULL, 'writer-reservation', ?4, 'main', 'head',
+                              ?5, 'writer-identity', 'work-item/writer', 'head', 'available',
+                              1, 1, '[]', ?6 FROM checkouts WHERE id = ?4",
+                    params![
+                        writer_checkout_id.to_string(),
+                        writer_path_id.to_string(),
+                        fixture.work_item_id.to_string(),
+                        parent_checkout_id.to_string(),
+                        writer_path.to_string_lossy(),
+                        now,
+                    ],
+                )?;
+                Ok(())
+            })
+            .expect("seed writer checkout reservation");
+        fixture.checkout_id = writer_checkout_id;
+        fixture.checkout_path = writer_path;
+        let launch_request = request(&fixture, "writer-session-launch");
+        let prepared = SessionLaunchService::new(&mut fixture.store)
+            .begin(launch_request)
+            .expect("begin writer launch");
+        let mutation = hook(
+            &fixture,
+            Tool::Codex,
+            "thread-writer",
+            &fixture.checkout_path,
+            Some(prepared.prepared.launch.launch_token().to_owned()),
+        );
+        let binding = SessionLaunchService::new(&mut fixture.store)
+            .bind_hook(&mutation)
+            .expect("bind writer session");
+        let reserved_session = fixture
+            .store
+            .read(|connection| {
+                connection
+                    .query_row(
+                        "SELECT session_id FROM checkout_readiness WHERE checkout_id = ?1",
+                        [writer_checkout_id.to_string()],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .map_err(Into::into)
+            })
+            .expect("bound writer reservation");
+
+        assert_eq!(reserved_session, binding.session_id.to_string());
     }
 
     #[test]

@@ -302,7 +302,8 @@ impl<'a> WorkProjectionService<'a> {
                         let resumability = parse_wire(&resumability)?;
                         let primary_writer = role == ManagedSessionRole::WorkItemExecution
                             && associated_until.is_none()
-                            && managed_until.is_none();
+                            && managed_until.is_none()
+                            && purpose.as_deref() == Some("work_item_write");
                         let actions = session_actions(
                             work_item_id,
                             session_id,
@@ -440,7 +441,8 @@ fn work_item_actions(
             )
         });
     } else if current_primary {
-        start = start.disabled("a primary writer is already current");
+        start.confirmation =
+            Some("Start an additional writer in a distinct writer-session checkout".to_owned());
     }
     let mut actions = vec![start];
     if sessions.iter().any(|session| {
