@@ -1,9 +1,10 @@
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 use time::OffsetDateTime;
-use workboard_core::Tool;
+use workboard_core::{LaunchProfile, LaunchProfileError, Tool};
 use workboard_native::{
     AdapterFailure, AdapterFailureKind, AdapterScan, ConversationKind, NativeAdapter,
     NativeConversation, ScanLimits, SourceScan, SourceState, TranscriptBuilder, TranscriptChunk,
@@ -11,6 +12,28 @@ use workboard_native::{
 };
 
 pub const ADAPTER_VERSION: &str = "claude-jsonl-v1";
+
+pub fn launch_profile_arguments(
+    profile: &LaunchProfile,
+) -> Result<Vec<OsString>, LaunchProfileError> {
+    profile.validate_for_launch(Tool::Claude, profile.role)?;
+    Ok(vec![
+        OsString::from("--model"),
+        OsString::from(
+            profile
+                .model
+                .as_deref()
+                .ok_or(LaunchProfileError::UnknownModel)?,
+        ),
+        OsString::from("--effort"),
+        OsString::from(
+            profile
+                .effort
+                .ok_or(LaunchProfileError::UnknownEffort)?
+                .as_str(),
+        ),
+    ])
+}
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ClaudeAdapterV1 {
@@ -395,6 +418,23 @@ mod tests {
 
         assert!(text.contains("Assistant-only nebula phrase"));
         assert!(text.contains("Synthetic tool payload"));
+    }
+
+    #[test]
+    fn maps_a_validated_profile_without_shell_interpretation() {
+        let profile = workboard_core::LaunchProfile::new(
+            workboard_core::Tool::Claude,
+            "sonnet",
+            workboard_core::ReasoningEffort::Xhigh,
+            workboard_core::ManagedSessionRole::Review,
+            workboard_core::LaunchProfileSource::ExplicitOverride,
+        )
+        .expect("valid profile");
+
+        assert_eq!(
+            super::launch_profile_arguments(&profile).expect("profile arguments"),
+            ["--model", "sonnet", "--effort", "xhigh"].map(std::ffi::OsString::from)
+        );
     }
 
     fn find<'a>(

@@ -7,8 +7,8 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 use workboard_core::{
     AssociationIntervalId, CheckoutId, ConversationId, ConversationRef, HierarchyOwner,
-    LiveEvidenceSource, LiveObservationId, ManagedLaunchMode, ManagedSessionId, ManagedSessionRole,
-    ProcessIdentity, RestoreMembershipId, Tool,
+    LaunchProfile, LiveEvidenceSource, LiveObservationId, ManagedLaunchMode, ManagedSessionId,
+    ManagedSessionRole, ProcessIdentity, RestoreMembershipId, Tool,
 };
 
 use crate::AppError;
@@ -51,6 +51,7 @@ pub struct BeginManagedSessionLaunch {
     pub created_at: OffsetDateTime,
     pub expires_at: OffsetDateTime,
     pub resume_context: Option<ResumeContext>,
+    pub profile: LaunchProfile,
     pub initial_prompt: Option<String>,
     pub capability: CapabilityLaunchInputs,
 }
@@ -61,6 +62,7 @@ pub struct PreparedSessionLaunch {
     pub role: ManagedSessionRole,
     pub tool: Tool,
     pub checkout_id: CheckoutId,
+    pub profile: LaunchProfile,
     pub prepared: PreparedManagedLaunch,
     pub bundle: PreparedCapabilityBundle,
 }
@@ -72,6 +74,7 @@ pub struct ManagedSessionLaunchPreview {
     pub role: ManagedSessionRole,
     pub tool: Tool,
     pub checkout_id: CheckoutId,
+    pub profile: LaunchProfile,
     pub launch: ManagedLaunchPreview,
 }
 
@@ -135,6 +138,10 @@ impl<'a> SessionLaunchService<'a> {
                 "launch intent expiry must follow creation".to_owned(),
             ));
         }
+        request
+            .profile
+            .validate_for_launch(request.tool, request.role)
+            .map_err(|error| AppError::Domain(error.to_string()))?;
         validate_owner_checkout(self.store, request.owner, request.checkout_id)?;
         validate_checkout_cwd(self.store, request.checkout_id, &request.working_directory)?;
         if let ManagedLaunchMode::Resume(native_id) = &request.mode {
@@ -202,6 +209,7 @@ impl<'a> SessionLaunchService<'a> {
             launch_token: token.clone(),
             workflow_token: Some(workflow_token.clone()),
             capability_environment: bundle.environment.clone(),
+            profile: request.profile.clone(),
             initial_prompt: request.initial_prompt.clone(),
         }) {
             Ok(prepared) => prepared,
@@ -232,6 +240,7 @@ impl<'a> SessionLaunchService<'a> {
             role: request.role,
             tool: request.tool,
             checkout_id: request.checkout_id,
+            profile: request.profile,
             prepared,
             bundle,
         })
@@ -244,6 +253,7 @@ impl<'a> SessionLaunchService<'a> {
             role: prepared.role,
             tool: prepared.tool,
             checkout_id: prepared.checkout_id,
+            profile: prepared.profile.clone(),
             launch: prepared.prepared.preview.clone(),
         }
     }
@@ -850,8 +860,12 @@ fn bind_transaction(
         .unwrap_or_else(ManagedSessionId::generate);
     transaction.execute(
         "INSERT OR IGNORE INTO managed_sessions (
-             id, launch_intent_id, session_id, checkout_id, role, status, managed_from
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+             id, launch_intent_id, session_id, checkout_id, role, status, managed_from,
+             profile_id
+         ) VALUES (
+             ?1, ?2, ?3, ?4, ?5, ?6, ?7,
+             (SELECT profile_id FROM launch_intents WHERE id = ?2)
+         )",
         params![
             managed_session_id.to_string(),
             intent_id.map(|id| id.to_string()),
@@ -971,6 +985,22 @@ fn insert_launch_intent(
     bundle: Option<&PreparedCapabilityBundle>,
 ) -> Result<(), AppError> {
     let (workspace_id, epic_id, feature_id, work_item_id) = owner_columns(request.owner);
+    let profile_id = intent_id.to_string();
+    transaction.execute(
+        "INSERT INTO launch_profiles (
+             id, schema_version, provider, model, effort, role, source, created_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            profile_id,
+            i64::from(request.profile.schema_version),
+            tool_name(request.profile.tool),
+            request.profile.model,
+            request.profile.effort.map(|effort| effort.as_str()),
+            role_name(request.profile.role)?,
+            profile_source_name(request.profile.source),
+            timestamp(request.created_at),
+        ],
+    )?;
     transaction.execute(
         "INSERT INTO launch_intents (
              id, workspace_id, epic_id, feature_id, work_item_id, checkout_id,
@@ -978,9 +1008,10 @@ fn insert_launch_intent(
              role, expected_native_id, workflow_token_hash,
              workflow_token_expires_at, terminal_window, capability_bundle_root,
              capability_bundle_digest, capability_bundle_version
+             , profile_id
          ) VALUES (
              ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'pending', ?10, ?11, ?12, ?13,
-             ?14, ?15, ?16, ?17, ?18, ?19
+             ?14, ?15, ?16, ?17, ?18, ?19, ?20
          )",
         params![
             intent_id.to_string(),
@@ -1002,9 +1033,20 @@ fn insert_launch_intent(
             bundle.map(|bundle| path_text(&bundle.root)).transpose()?,
             bundle.map(|bundle| bundle.digest.as_str()),
             bundle.map(|bundle| bundle.version),
+            profile_id,
         ],
     )?;
     Ok(())
+}
+
+fn profile_source_name(source: workboard_core::LaunchProfileSource) -> &'static str {
+    match source {
+        workboard_core::LaunchProfileSource::Suggested => "suggested",
+        workboard_core::LaunchProfileSource::Preference => "preference",
+        workboard_core::LaunchProfileSource::ExplicitOverride => "explicit_override",
+        workboard_core::LaunchProfileSource::ResumePreserved => "resume_preserved",
+        workboard_core::LaunchProfileSource::LegacyUnknown => "legacy_unknown",
+    }
 }
 
 fn validate_owner_checkout(
@@ -1426,8 +1468,9 @@ mod tests {
     use tempfile::TempDir;
     use time::OffsetDateTime;
     use workboard_core::{
-        CheckoutId, ConversationRef, EpicId, FeatureId, HierarchyOwner, ManagedLaunchMode,
-        ManagedSessionRole, ProcessIdentity, RepositoryId, Tool, WorkItemId, WorkspaceId,
+        CheckoutId, ConversationRef, EpicId, FeatureId, HierarchyOwner, LaunchProfile,
+        ManagedLaunchMode, ManagedSessionRole, ProcessIdentity, RepositoryId, Tool, WorkItemId,
+        WorkspaceId,
     };
 
     use super::{
@@ -1509,6 +1552,54 @@ mod tests {
         let prepared = SessionLaunchService::new(&mut fixture.store)
             .begin(request)
             .expect("begin launch");
+        let native_arguments = prepared
+            .prepared
+            .launch
+            .native()
+            .arguments()
+            .iter()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            &native_arguments[..4],
+            [
+                "--model",
+                "gpt-5.6",
+                "--config",
+                "model_reasoning_effort=\"high\"",
+            ]
+        );
+        let stored_profile = fixture
+            .store
+            .read(|connection| {
+                connection
+                    .query_row(
+                        "SELECT profile.model, profile.effort, profile.role, profile.source
+                         FROM launch_intents intent
+                         JOIN launch_profiles profile ON profile.id = intent.profile_id
+                         WHERE intent.id = ?1",
+                        [prepared.intent_id.to_string()],
+                        |row| {
+                            Ok((
+                                row.get::<_, String>(0)?,
+                                row.get::<_, String>(1)?,
+                                row.get::<_, String>(2)?,
+                                row.get::<_, String>(3)?,
+                            ))
+                        },
+                    )
+                    .map_err(Into::into)
+            })
+            .expect("stored profile");
+        assert_eq!(
+            stored_profile,
+            (
+                "gpt-5.6".to_owned(),
+                "high".to_owned(),
+                "work_item_execution".to_owned(),
+                "suggested".to_owned(),
+            )
+        );
 
         let skills = prepared.bundle.root.join("skills");
         assert!(
@@ -1627,6 +1718,8 @@ mod tests {
         let mut planning = request(&fixture, "workspace-planning");
         planning.owner = HierarchyOwner::Workspace(fixture.workspace_id);
         planning.role = ManagedSessionRole::WorkspacePlanning;
+        planning.profile =
+            LaunchProfile::suggested(Tool::Codex, ManagedSessionRole::WorkspacePlanning);
         planning.terminal_window = Some(format!("workboard-workspace-{}", fixture.workspace_id));
         let prepared = SessionLaunchService::new(&mut fixture.store)
             .begin(planning)
@@ -1809,6 +1902,7 @@ mod tests {
             created_at: fixture.observed_at,
             expires_at: fixture.observed_at + time::Duration::minutes(2),
             resume_context: None,
+            profile: LaunchProfile::suggested(Tool::Codex, ManagedSessionRole::WorkItemExecution),
             initial_prompt: None,
             capability: capability_fixture(fixture),
         }

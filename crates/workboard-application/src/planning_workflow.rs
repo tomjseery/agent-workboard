@@ -1545,6 +1545,10 @@ mod tests {
                 created_at: fixture.at + time::Duration::seconds(2),
                 expires_at: fixture.at + time::Duration::minutes(2),
                 resume_context: None,
+                profile: workboard_core::LaunchProfile::suggested(
+                    tool,
+                    ManagedSessionRole::FeaturePlanning,
+                ),
                 initial_prompt: Some(super::planner_bootstrap_prompt(&draft)),
                 capability,
             })

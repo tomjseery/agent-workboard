@@ -336,6 +336,11 @@ fn recover_entry(
             created_at: now,
             expires_at: now + time::Duration::minutes(2),
             resume_context: context,
+            profile: {
+                let mut profile = entry.profile.clone();
+                profile.source = workboard_core::LaunchProfileSource::ResumePreserved;
+                profile
+            },
             initial_prompt: replacing.then(|| {
                 format!(
                     "Continue {} as a confirmed replacement for unresumable native session {}. Read the assigned Workboard hierarchy and preserve its existing history.",

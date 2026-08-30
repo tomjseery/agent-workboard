@@ -12,10 +12,41 @@ use workboard_core::{ConversationId, LaunchLeaseId};
 
 use crate::AppError;
 
-const CURRENT_SCHEMA_VERSION: i64 = 33;
+const CURRENT_SCHEMA_VERSION: i64 = 34;
 const FOUNDATION_SCHEMA_CHECKSUM: &str = "agent-workboard-foundation-v1";
 const WORKSPACE_PLANNING_SCHEMA_CHECKSUM: &str = "agent-workboard-workspace-planning-v1";
 const WORK_ITEM_DEPENDENCY_SCHEMA_CHECKSUM: &str = "agent-workboard-work-item-dependency-v1";
+const LAUNCH_PROFILE_SCHEMA_CHECKSUM: &str = "agent-workboard-launch-profile-v1";
+const LAUNCH_PROFILE_SQL: &str = r#"
+CREATE TABLE launch_profiles (
+    id TEXT PRIMARY KEY,
+    schema_version INTEGER NOT NULL CHECK (schema_version > 0),
+    provider TEXT NOT NULL CHECK (provider IN ('claude', 'codex')),
+    model TEXT,
+    effort TEXT CHECK (effort IN ('low', 'medium', 'high', 'xhigh', 'max')),
+    role TEXT NOT NULL,
+    source TEXT NOT NULL CHECK (
+        source IN ('suggested', 'preference', 'explicit_override', 'resume_preserved', 'legacy_unknown')
+    ),
+    created_at TEXT NOT NULL,
+    CHECK ((model IS NULL) = (effort IS NULL)),
+    CHECK (source = 'legacy_unknown' OR model IS NOT NULL)
+);
+ALTER TABLE launch_intents
+    ADD COLUMN profile_id TEXT REFERENCES launch_profiles(id) ON DELETE RESTRICT;
+ALTER TABLE managed_sessions
+    ADD COLUMN profile_id TEXT REFERENCES launch_profiles(id) ON DELETE RESTRICT;
+ALTER TABLE managed_session_requests
+    ADD COLUMN profile_id TEXT REFERENCES launch_profiles(id) ON DELETE RESTRICT;
+CREATE TABLE launch_profile_preferences (
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL CHECK (provider IN ('claude', 'codex')),
+    role TEXT NOT NULL,
+    profile_id TEXT NOT NULL REFERENCES launch_profiles(id) ON DELETE RESTRICT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (workspace_id, provider, role)
+);
+"#;
 const WORK_ITEM_DEPENDENCY_SQL: &str = r#"
 ALTER TABLE work_items ADD COLUMN proposal_order INTEGER NOT NULL DEFAULT 0;
 CREATE TABLE work_item_dependencies (
@@ -2424,6 +2455,12 @@ fn migrate(connection: &Connection) -> Result<(), AppError> {
         WORK_ITEM_DEPENDENCY_SQL,
         backfill_work_item_dependencies,
     )?;
+    apply_migration(
+        connection,
+        34,
+        LAUNCH_PROFILE_SCHEMA_CHECKSUM,
+        LAUNCH_PROFILE_SQL,
+    )?;
     Ok(())
 }
 
@@ -3333,7 +3370,14 @@ fn health(connection: &Connection) -> Result<StorageHealth, AppError> {
 pub(crate) fn drop_workspace_planning_schema(connection: &Connection) {
     connection
         .execute_batch(
-            r#"DROP TABLE work_item_dependencies;
+            r#"DROP TABLE launch_profile_preferences;
+            ALTER TABLE managed_session_requests DROP COLUMN profile_id;
+            ALTER TABLE managed_sessions DROP COLUMN profile_id;
+            ALTER TABLE launch_intents DROP COLUMN profile_id;
+            DROP TABLE launch_profiles;
+            DELETE FROM schema_migrations WHERE version = 34;
+
+            DROP TABLE work_item_dependencies;
             ALTER TABLE work_items DROP COLUMN proposal_order;
             DELETE FROM schema_migrations WHERE version = 33;
 
@@ -4327,7 +4371,7 @@ mod tests {
         assert_eq!(preserved_attestation, valid_attestation);
         assert_eq!(legacy_authority, "immutable_evidence");
         let health = store.health().expect("storage health");
-        assert_eq!(health.schema_version, 33);
+        assert_eq!(health.schema_version, 34);
         assert!(health.is_healthy());
         let audited_attestations: Vec<(String, String, String, String)> = store
             .read(|connection| {
@@ -4372,7 +4416,7 @@ mod tests {
             .expect("read upgraded schema 20 attestations");
         assert_eq!(upgraded_attestations, audited_attestations);
         let health = store.health().expect("upgraded storage health");
-        assert_eq!(health.schema_version, 33);
+        assert_eq!(health.schema_version, 34);
         assert!(health.is_healthy());
         drop(store);
 

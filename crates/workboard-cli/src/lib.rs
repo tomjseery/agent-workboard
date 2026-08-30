@@ -249,6 +249,10 @@ enum WorkCommand {
         #[arg(long, value_enum, default_value = "codex")]
         tool: ToolArg,
         #[arg(long)]
+        model: Option<String>,
+        #[arg(long, value_enum)]
+        effort: Option<EffortArg>,
+        #[arg(long)]
         terminal: Option<PathBuf>,
         #[arg(long)]
         native: Option<PathBuf>,
@@ -277,6 +281,10 @@ enum SessionCommand {
         session: Option<String>,
         #[arg(long, value_enum)]
         tool: Option<ToolArg>,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long, value_enum)]
+        effort: Option<EffortArg>,
         #[arg(long)]
         terminal: Option<PathBuf>,
         #[arg(long)]
@@ -459,6 +467,27 @@ impl From<IntegrationMutationArg> for IntegrationOperation {
 enum ToolArg {
     Claude,
     Codex,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum EffortArg {
+    Low,
+    Medium,
+    High,
+    Xhigh,
+    Max,
+}
+
+impl From<EffortArg> for workboard_core::ReasoningEffort {
+    fn from(value: EffortArg) -> Self {
+        match value {
+            EffortArg::Low => Self::Low,
+            EffortArg::Medium => Self::Medium,
+            EffortArg::High => Self::High,
+            EffortArg::Xhigh => Self::Xhigh,
+            EffortArg::Max => Self::Max,
+        }
+    }
 }
 
 impl From<ToolArg> for Tool {
@@ -901,6 +930,8 @@ fn execute(cli: Cli) -> Result<String, AppError> {
                     work_item,
                     repository,
                     tool,
+                    model,
+                    effort,
                     terminal,
                     native,
                     checkout,
@@ -912,6 +943,16 @@ fn execute(cli: Cli) -> Result<String, AppError> {
             let work_item = select_work_item(&snapshot, work_item.as_deref(), cli.json)?.clone();
             let tool = Tool::from(tool);
             let now = time::OffsetDateTime::now_utc();
+            let profile = accepted_launch_profile(
+                &mut application,
+                workspace_id,
+                tool,
+                ManagedSessionRole::WorkItemExecution,
+                None,
+                model,
+                effort,
+                now,
+            )?;
             let launch_idempotency_key = idempotency_key.unwrap_or_else(new_idempotency_key);
             if checkout.is_some() {
                 return Err(AppError::CheckoutReconciliation {
@@ -970,6 +1011,7 @@ fn execute(cli: Cli) -> Result<String, AppError> {
                 created_at: now,
                 expires_at: now + time::Duration::minutes(2),
                 resume_context: None,
+                profile,
                 initial_prompt: Some(work_item_bootstrap_prompt(work_item.id)),
                 capability,
             };
@@ -1033,6 +1075,8 @@ fn execute(cli: Cli) -> Result<String, AppError> {
                 SessionCommand::Resume {
                     session,
                     tool,
+                    model,
+                    effort,
                     terminal,
                     native,
                     idempotency_key,
@@ -1045,6 +1089,16 @@ fn execute(cli: Cli) -> Result<String, AppError> {
                 select_session(&snapshot, session.as_deref(), requested_tool, cli.json)?.clone();
             let target = application.managed_session_target(session.id)?;
             let now = time::OffsetDateTime::now_utc();
+            let profile = accepted_launch_profile(
+                &mut application,
+                workspace_id,
+                target.tool,
+                target.role,
+                Some(&target.profile),
+                model,
+                effort,
+                now,
+            )?;
             application
                 .checkout_service()
                 .reconcile_registered_checkout(target.checkout.checkout_id, now)?;
@@ -1069,6 +1123,7 @@ fn execute(cli: Cli) -> Result<String, AppError> {
                 created_at: now,
                 expires_at: now + time::Duration::minutes(2),
                 resume_context: Some(context),
+                profile,
                 initial_prompt: None,
                 capability: capability_inputs(
                     &application,
@@ -1655,6 +1710,10 @@ fn execute_epic_continue(
             created_at: now,
             expires_at: now + time::Duration::minutes(2),
             resume_context: None,
+            profile: workboard_core::LaunchProfile::suggested(
+                tool,
+                ManagedSessionRole::EpicNavigation,
+            ),
             initial_prompt: Some(prompt),
             capability,
         })?;
@@ -1716,6 +1775,10 @@ fn execute_plan_launch(
             created_at: now,
             expires_at: now + time::Duration::minutes(2),
             resume_context: None,
+            profile: workboard_core::LaunchProfile::suggested(
+                tool,
+                ManagedSessionRole::WorkspacePlanning,
+            ),
             initial_prompt: Some(prompt),
             capability,
         })?;
@@ -2012,6 +2075,10 @@ fn execute_feature_create(
             created_at: now,
             expires_at: now + time::Duration::minutes(2),
             resume_context: None,
+            profile: workboard_core::LaunchProfile::suggested(
+                tool,
+                ManagedSessionRole::FeaturePlanning,
+            ),
             initial_prompt: Some(planner_bootstrap_prompt(&draft)),
             capability,
         })?;
@@ -2472,6 +2539,55 @@ fn tool_title(tool: Tool) -> &'static str {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn accepted_launch_profile(
+    application: &mut WorkboardApplication,
+    workspace_id: WorkspaceId,
+    tool: Tool,
+    role: ManagedSessionRole,
+    prior: Option<&workboard_core::LaunchProfile>,
+    model: Option<String>,
+    effort: Option<EffortArg>,
+    accepted_at: time::OffsetDateTime,
+) -> Result<workboard_core::LaunchProfile, AppError> {
+    if prior.is_some_and(|profile| profile.model.is_none() || profile.effort.is_none())
+        && (model.is_none() || effort.is_none())
+    {
+        return Err(AppError::External {
+            code: "legacy_launch_profile_unknown".to_owned(),
+            message:
+                "the legacy session has no recorded model or effort; choose both before resuming"
+                    .to_owned(),
+        });
+    }
+    let fallback = application.preferred_launch_profile(workspace_id, tool, role)?;
+    let base = prior
+        .filter(|profile| profile.model.is_some() && profile.effort.is_some())
+        .unwrap_or(&fallback);
+    let source = if model.is_some() || effort.is_some() {
+        workboard_core::LaunchProfileSource::ExplicitOverride
+    } else if prior.is_some() {
+        workboard_core::LaunchProfileSource::ResumePreserved
+    } else {
+        base.source
+    };
+    let profile = workboard_core::LaunchProfile::new(
+        tool,
+        model
+            .or_else(|| base.model.clone())
+            .ok_or_else(|| AppError::Domain("launch model is unknown".to_owned()))?,
+        effort
+            .map(Into::into)
+            .or(base.effort)
+            .ok_or_else(|| AppError::Domain("launch effort is unknown".to_owned()))?,
+        role,
+        source,
+    )
+    .map_err(|error| AppError::Domain(error.to_string()))?;
+    application.remember_launch_profile(workspace_id, &profile, accepted_at)?;
+    Ok(profile)
+}
+
 fn read_hook_input() -> Result<String, AppError> {
     let mut bytes = Vec::new();
     io::stdin()
@@ -2631,6 +2747,10 @@ fn execute_managed_session_request(
             created_at: now,
             expires_at: now + time::Duration::minutes(2),
             resume_context: None,
+            profile: workboard_core::LaunchProfile::suggested(
+                requested.tool,
+                ManagedSessionRole::WorkItemExecution,
+            ),
             initial_prompt: Some(work_item_bootstrap_prompt(requested.work_item_id)),
             capability,
         })?;

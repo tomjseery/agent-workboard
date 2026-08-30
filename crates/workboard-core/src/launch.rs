@@ -70,6 +70,7 @@ pub struct ManagedLaunchRequest {
     pub launch_token: String,
     pub workflow_token: Option<String>,
     pub capability_environment: Vec<(String, String)>,
+    pub profile_arguments: Vec<OsString>,
     pub initial_prompt: Option<String>,
 }
 
@@ -98,6 +99,7 @@ impl ManagedLaunchSpec {
             launch_token,
             workflow_token,
             capability_environment,
+            profile_arguments,
             initial_prompt,
         } = request;
         validate_path(&working_directory)?;
@@ -135,7 +137,16 @@ impl ManagedLaunchSpec {
         }) {
             return Err(LaunchSpecError::UnsafeInitialPrompt);
         }
-        let native_arguments = match (tool, mode, initial_prompt) {
+        if profile_arguments.iter().any(|argument| {
+            argument.is_empty()
+                || argument
+                    .to_str()
+                    .is_none_or(|value| value.chars().any(char::is_control))
+        }) {
+            return Err(LaunchSpecError::UnsafeProfileArgument);
+        }
+        let mut native_arguments = profile_arguments;
+        native_arguments.extend(match (tool, mode, initial_prompt) {
             (Tool::Claude, ManagedLaunchMode::New, prompt) => {
                 prompt.map(OsString::from).into_iter().collect()
             }
@@ -165,7 +176,7 @@ impl ManagedLaunchSpec {
             (_, ManagedLaunchMode::Resume(_), Some(_)) => {
                 return Err(LaunchSpecError::UnsafeInitialPrompt);
             }
-        };
+        });
         let native = CommandSpec::new(native_executable, native_arguments);
         if terminal_executable.as_os_str().is_empty() {
             return Err(LaunchSpecError::EmptyExecutable);
@@ -357,6 +368,7 @@ pub enum LaunchSpecError {
     UnsafeInitialPrompt,
     UnsafeTerminalWindow,
     UnsafeCapabilityEnvironment,
+    UnsafeProfileArgument,
 }
 
 impl Display for LaunchSpecError {
@@ -383,6 +395,9 @@ impl Display for LaunchSpecError {
             }
             Self::UnsafeCapabilityEnvironment => {
                 formatter.write_str("capability environment name or value is empty or unsafe")
+            }
+            Self::UnsafeProfileArgument => {
+                formatter.write_str("launch profile argument is empty or unsafe")
             }
         }
     }
@@ -456,6 +471,7 @@ mod tests {
                 "CLAUDE_CONFIG_DIR".to_owned(),
                 "C:/bundles/session".to_owned(),
             )],
+            profile_arguments: Vec::new(),
             initial_prompt: Some("Use the managed Feature planning workflow.".to_owned()),
         })
         .expect("new managed launch");
@@ -523,6 +539,7 @@ mod tests {
             launch_token: "opaque-token".to_owned(),
             workflow_token: None,
             capability_environment: Vec::new(),
+            profile_arguments: Vec::new(),
             initial_prompt: None,
         })
         .expect("managed resume");
@@ -647,6 +664,7 @@ mod tests {
             launch_token: "opaque-token".to_owned(),
             workflow_token: None,
             capability_environment: vec![(name.to_owned(), value.to_owned())],
+            profile_arguments: Vec::new(),
             initial_prompt: None,
         };
 
