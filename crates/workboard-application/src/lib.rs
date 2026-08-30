@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod actions;
+pub mod batch_launch;
 pub mod caller;
 pub mod capability_bundle;
 pub mod checkout;

@@ -9,6 +9,9 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use directories::{ProjectDirs, UserDirs};
 use serde::Serialize;
 use workboard_application::AppError;
+use workboard_application::batch_launch::{
+    ConfirmManagedLaunchBatch, ManagedLaunchBatchReservation, PreviewManagedLaunchBatch,
+};
 use workboard_application::caller::{CallerIdentityProvider, EnvironmentCallerIdentity};
 use workboard_application::checkout::{
     AdoptFeatureCheckout, PrepareFeatureCheckout, PrepareWorkItemCheckout,
@@ -288,6 +291,46 @@ enum WorkCommand {
         native: Option<PathBuf>,
         #[arg(long)]
         idempotency_key: Option<String>,
+    },
+    Batch {
+        #[command(subcommand)]
+        command: WorkBatchCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum WorkBatchCommand {
+    Preview {
+        feature: Option<String>,
+        #[arg(long = "work-item")]
+        work_items: Vec<String>,
+        #[arg(long, value_enum, default_value = "codex")]
+        tool: ToolArg,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long, value_enum)]
+        effort: Option<EffortArg>,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    Start {
+        batch: String,
+        #[arg(long)]
+        confirm: String,
+        #[arg(long)]
+        terminal: Option<PathBuf>,
+        #[arg(long)]
+        native: Option<PathBuf>,
+    },
+    Resume {
+        batch: String,
+        #[arg(long)]
+        terminal: Option<PathBuf>,
+        #[arg(long)]
+        native: Option<PathBuf>,
+    },
+    Status {
+        batch: String,
     },
 }
 
@@ -1133,6 +1176,140 @@ fn execute(cli: Cli) -> Result<String, AppError> {
                 &binding,
                 cli.json,
                 format!("Continued managed session for {}", work_item.title),
+            )
+        }
+        Some(Command::Work(WorkArgs {
+            command:
+                WorkCommand::Batch {
+                    command:
+                        WorkBatchCommand::Preview {
+                            feature,
+                            work_items,
+                            tool,
+                            model,
+                            effort,
+                            idempotency_key,
+                        },
+                },
+        })) => {
+            let workspace_id = resolve_workspace(&application, cli.workspace)?;
+            let snapshot = application.snapshot(workspace_id)?;
+            let feature = select_feature(&snapshot, feature.as_deref(), cli.json)?.clone();
+            let mut selected = Vec::with_capacity(work_items.len());
+            for selector in &work_items {
+                selected.push(select_work_item(&snapshot, Some(selector), true)?.id);
+            }
+            let tool = Tool::from(tool);
+            let mut profile = application.preferred_launch_profile(
+                workspace_id,
+                tool,
+                ManagedSessionRole::WorkItemExecution,
+            )?;
+            if let Some(model) = model {
+                profile.model = Some(model);
+                profile.source = workboard_core::LaunchProfileSource::ExplicitOverride;
+            }
+            if let Some(effort) = effort {
+                profile.effort = Some(effort.into());
+                profile.source = workboard_core::LaunchProfileSource::ExplicitOverride;
+            }
+            let preview = application
+                .batch_launches()
+                .preview(PreviewManagedLaunchBatch {
+                    feature_id: feature.id,
+                    work_item_ids: selected,
+                    tool,
+                    profile,
+                    idempotency_key: idempotency_key.unwrap_or_else(new_idempotency_key),
+                    created_at: time::OffsetDateTime::now_utc(),
+                })?;
+            output(
+                &preview,
+                cli.json,
+                format!(
+                    "Batch {} previews {} isolated launches. Confirm with: workboard work batch start {} --confirm {}",
+                    preview.batch_id,
+                    preview.children.len(),
+                    preview.batch_id,
+                    preview.confirmation_token,
+                ),
+            )
+        }
+        Some(Command::Work(WorkArgs {
+            command:
+                WorkCommand::Batch {
+                    command:
+                        WorkBatchCommand::Start {
+                            batch,
+                            confirm,
+                            terminal,
+                            native,
+                        },
+                },
+        })) => {
+            let workspace_id = resolve_workspace(&application, cli.workspace)?;
+            let snapshot = application.snapshot(workspace_id)?;
+            let reservation = application
+                .batch_launches()
+                .reserve(ConfirmManagedLaunchBatch {
+                    batch_id: batch,
+                    confirmation_token: confirm,
+                    confirmed_at: time::OffsetDateTime::now_utc(),
+                })?;
+            let outcome =
+                execute_batch_launches(&mut application, &snapshot, reservation, terminal, native)?;
+            output(
+                &outcome,
+                cli.json,
+                format!(
+                    "Managed launch batch {} is {}",
+                    outcome.batch_id, outcome.status
+                ),
+            )
+        }
+        Some(Command::Work(WorkArgs {
+            command:
+                WorkCommand::Batch {
+                    command:
+                        WorkBatchCommand::Resume {
+                            batch,
+                            terminal,
+                            native,
+                        },
+                },
+        })) => {
+            let workspace_id = resolve_workspace(&application, cli.workspace)?;
+            let snapshot = application.snapshot(workspace_id)?;
+            let reservation = application
+                .batch_launches()
+                .reconcile(&batch, time::OffsetDateTime::now_utc())?;
+            let outcome =
+                execute_batch_launches(&mut application, &snapshot, reservation, terminal, native)?;
+            output(
+                &outcome,
+                cli.json,
+                format!(
+                    "Managed launch batch {} is {}",
+                    outcome.batch_id, outcome.status
+                ),
+            )
+        }
+        Some(Command::Work(WorkArgs {
+            command:
+                WorkCommand::Batch {
+                    command: WorkBatchCommand::Status { batch },
+                },
+        })) => {
+            let outcome = application
+                .batch_launches()
+                .reconcile(&batch, time::OffsetDateTime::now_utc())?;
+            output(
+                &outcome,
+                cli.json,
+                format!(
+                    "Managed launch batch {} is {}",
+                    outcome.batch_id, outcome.status
+                ),
             )
         }
         Some(Command::Session(SessionArgs {
@@ -2900,6 +3077,141 @@ fn execute_work_launch(
     await_binding(application, prepared.intent_id)
 }
 
+fn execute_batch_launches(
+    application: &mut WorkboardApplication,
+    snapshot: &workboard_core::WorkspaceSnapshot,
+    reservation: ManagedLaunchBatchReservation,
+    terminal: Option<PathBuf>,
+    native: Option<PathBuf>,
+) -> Result<ManagedLaunchBatchReservation, AppError> {
+    if !matches!(
+        reservation.status.as_str(),
+        "reserved" | "launching" | "partial"
+    ) {
+        return Ok(reservation);
+    }
+    let now = time::OffsetDateTime::now_utc();
+    let terminal = terminal.unwrap_or_else(default_terminal_executable);
+    let mut awaiting = Vec::new();
+    for child in reservation
+        .children
+        .iter()
+        .filter(|child| child.status == "reserved")
+    {
+        let Some(checkout_id) = child.checkout_id else {
+            application.batch_launches().mark_failed(
+                &reservation.batch_id,
+                child.position,
+                "reserved batch child has no checkout",
+                now,
+            )?;
+            continue;
+        };
+        let Some(work_item) = snapshot
+            .work_items
+            .iter()
+            .find(|work_item| work_item.id == child.work_item_id)
+        else {
+            application.batch_launches().mark_failed(
+                &reservation.batch_id,
+                child.position,
+                "batch Work item is absent from the current workspace snapshot",
+                now,
+            )?;
+            continue;
+        };
+        let Some(repository) = snapshot
+            .repositories
+            .iter()
+            .find(|repository| repository.id == child.repository_id)
+        else {
+            application.batch_launches().mark_failed(
+                &reservation.batch_id,
+                child.position,
+                "batch repository is absent from the current workspace snapshot",
+                now,
+            )?;
+            continue;
+        };
+        let readiness = application
+            .checkout_service()
+            .readiness_for_checkout(checkout_id)?
+            .ok_or(AppError::ResumeCheckoutRequired)?;
+        application.remember_launch_profile(snapshot.workspace.id, &child.profile, now)?;
+        let request = BeginManagedSessionLaunch {
+            owner: HierarchyOwner::WorkItem(child.work_item_id),
+            role: child.profile.role,
+            tool: child.tool,
+            mode: ManagedLaunchMode::New,
+            checkout_id,
+            working_directory: readiness.path,
+            title: work_item.title.clone(),
+            terminal_window: Some(format!("workboard-feature-{}", reservation.feature_id)),
+            terminal_executable: terminal.clone(),
+            native_executable: native
+                .clone()
+                .unwrap_or_else(|| default_native_executable(child.tool)),
+            idempotency_key: format!("batch:{}:{}:launch", reservation.batch_id, child.position),
+            created_at: now,
+            expires_at: now + time::Duration::minutes(2),
+            resume_context: None,
+            profile: child.profile.clone(),
+            initial_prompt: Some(work_item_bootstrap_prompt(child.work_item_id)),
+            capability: capability_inputs(application, child.tool, repository.slug.as_str())?,
+        };
+        let prepared = match application.session_launch().begin(request) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                application.batch_launches().mark_failed(
+                    &reservation.batch_id,
+                    child.position,
+                    &error.to_string(),
+                    now,
+                )?;
+                continue;
+            }
+        };
+        application.batch_launches().mark_launched(
+            &reservation.batch_id,
+            child.position,
+            prepared.intent_id,
+            now,
+        )?;
+        if let Err(error) = application
+            .session_launch()
+            .execute(&prepared, &SystemLaunchExecutor)
+        {
+            application.batch_launches().mark_failed(
+                &reservation.batch_id,
+                child.position,
+                &error.to_string(),
+                time::OffsetDateTime::now_utc(),
+            )?;
+            continue;
+        }
+        awaiting.push((child.position, prepared.intent_id));
+    }
+    for (position, intent_id) in awaiting {
+        match await_binding(application, intent_id) {
+            Ok(binding) => application.batch_launches().mark_bound(
+                &reservation.batch_id,
+                position,
+                binding.session_id,
+                time::OffsetDateTime::now_utc(),
+            )?,
+            Err(error) => application.batch_launches().mark_failed(
+                &reservation.batch_id,
+                position,
+                &error.to_string(),
+                time::OffsetDateTime::now_utc(),
+            )?,
+        }
+    }
+    application
+        .batch_launches()
+        .reconcile(&reservation.batch_id, time::OffsetDateTime::now_utc())
+}
+
 fn work_launch_options(
     application: &mut WorkboardApplication,
     snapshot: &workboard_core::WorkspaceSnapshot,
@@ -3437,8 +3749,9 @@ mod tests {
     use crate::selector::SelectionCandidate;
 
     use super::{
-        Cli, Command as CliCommand, FeatureCommand, SessionCommand, Tool, WorkCommand,
-        codex_app_executable, default_native_executable, execute_from, select_candidate, slugify,
+        Cli, Command as CliCommand, FeatureCommand, SessionCommand, Tool, WorkBatchCommand,
+        WorkCommand, codex_app_executable, default_native_executable, execute_from,
+        select_candidate, slugify,
     };
 
     #[test]
@@ -3532,6 +3845,65 @@ mod tests {
             panic!("expected Work command");
         };
         assert!(matches!(continued.command, WorkCommand::Continue { .. }));
+    }
+
+    #[test]
+    fn managed_batch_requires_preview_confirmation_and_supports_resume() {
+        let preview = Cli::try_parse_from([
+            "workboard",
+            "work",
+            "batch",
+            "preview",
+            "feature-key",
+            "--work-item",
+            "root",
+            "--work-item",
+            "parallel",
+            "--tool",
+            "codex",
+        ])
+        .expect("batch preview");
+        let Some(CliCommand::Work(preview)) = preview.command else {
+            panic!("expected Work command");
+        };
+        assert!(matches!(
+            preview.command,
+            WorkCommand::Batch {
+                command: WorkBatchCommand::Preview { .. }
+            }
+        ));
+
+        let start = Cli::try_parse_from([
+            "workboard",
+            "work",
+            "batch",
+            "start",
+            "batch-id",
+            "--confirm",
+            "confirmation-token",
+        ])
+        .expect("batch start");
+        let Some(CliCommand::Work(start)) = start.command else {
+            panic!("expected Work command");
+        };
+        assert!(matches!(
+            start.command,
+            WorkCommand::Batch {
+                command: WorkBatchCommand::Start { .. }
+            }
+        ));
+
+        let resumed = Cli::try_parse_from(["workboard", "work", "batch", "resume", "batch-id"])
+            .expect("batch resume");
+        let Some(CliCommand::Work(resumed)) = resumed.command else {
+            panic!("expected Work command");
+        };
+        assert!(matches!(
+            resumed.command,
+            WorkCommand::Batch {
+                command: WorkBatchCommand::Resume { .. }
+            }
+        ));
     }
 
     #[test]

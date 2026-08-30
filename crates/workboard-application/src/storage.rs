@@ -12,7 +12,7 @@ use workboard_core::{ConversationId, LaunchLeaseId};
 
 use crate::AppError;
 
-const CURRENT_SCHEMA_VERSION: i64 = 38;
+const CURRENT_SCHEMA_VERSION: i64 = 39;
 const FOUNDATION_SCHEMA_CHECKSUM: &str = "agent-workboard-foundation-v1";
 const WORKSPACE_PLANNING_SCHEMA_CHECKSUM: &str = "agent-workboard-workspace-planning-v1";
 const WORK_ITEM_DEPENDENCY_SCHEMA_CHECKSUM: &str = "agent-workboard-work-item-dependency-v1";
@@ -24,6 +24,45 @@ const SESSION_BINDING_GENERATION_SCHEMA_CHECKSUM: &str =
 const SESSION_FOLLOW_UP_SCHEMA_CHECKSUM: &str = "agent-workboard-session-follow-up-v1";
 const WRITER_SESSION_RESERVATION_SCHEMA_CHECKSUM: &str =
     "agent-workboard-writer-session-reservation-v1";
+const MANAGED_LAUNCH_BATCH_SCHEMA_CHECKSUM: &str = "agent-workboard-managed-launch-batch-v1";
+const MANAGED_LAUNCH_BATCH_SQL: &str = r#"
+CREATE TABLE managed_launch_batches (
+    id TEXT PRIMARY KEY,
+    feature_id TEXT NOT NULL REFERENCES features(id) ON DELETE RESTRICT,
+    idempotency_key TEXT NOT NULL UNIQUE CHECK (idempotency_key <> ''),
+    selection_hash TEXT NOT NULL CHECK (length(selection_hash) = 64),
+    confirmation_token_hash TEXT NOT NULL UNIQUE CHECK (length(confirmation_token_hash) = 64),
+    status TEXT NOT NULL CHECK (
+        status IN ('previewed', 'reserved', 'launching', 'partial', 'completed', 'failed', 'cancelled')
+    ),
+    created_at TEXT NOT NULL,
+    confirmation_expires_at TEXT NOT NULL,
+    confirmed_at TEXT,
+    completed_at TEXT,
+    CHECK (confirmation_expires_at > created_at)
+);
+CREATE TABLE managed_launch_batch_children (
+    batch_id TEXT NOT NULL REFERENCES managed_launch_batches(id) ON DELETE RESTRICT,
+    position INTEGER NOT NULL CHECK (position >= 0),
+    work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE RESTRICT,
+    repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE RESTRICT,
+    dependency_layer INTEGER NOT NULL CHECK (dependency_layer >= 0),
+    provider TEXT NOT NULL CHECK (provider IN ('claude', 'codex')),
+    profile_json TEXT NOT NULL CHECK (profile_json <> ''),
+    checkout_id TEXT REFERENCES checkouts(id) ON DELETE RESTRICT,
+    launch_intent_id TEXT REFERENCES launch_intents(id) ON DELETE RESTRICT,
+    session_id TEXT REFERENCES native_sessions(id) ON DELETE RESTRICT,
+    status TEXT NOT NULL CHECK (
+        status IN ('selected', 'reserved', 'launched', 'bound', 'failed', 'skipped')
+    ),
+    failure TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (batch_id, position),
+    UNIQUE (batch_id, work_item_id, repository_id)
+);
+CREATE INDEX managed_launch_batch_children_status
+    ON managed_launch_batch_children (batch_id, status, position);
+"#;
 const WRITER_SESSION_RESERVATION_SQL: &str = r#"
 ALTER TABLE checkout_reconciliation_events RENAME TO checkout_reconciliation_events_v37;
 ALTER TABLE checkout_readiness RENAME TO checkout_readiness_v37;
@@ -2678,6 +2717,12 @@ fn migrate(connection: &Connection) -> Result<(), AppError> {
         WRITER_SESSION_RESERVATION_SCHEMA_CHECKSUM,
         WRITER_SESSION_RESERVATION_SQL,
     )?;
+    apply_migration(
+        connection,
+        39,
+        MANAGED_LAUNCH_BATCH_SCHEMA_CHECKSUM,
+        MANAGED_LAUNCH_BATCH_SQL,
+    )?;
     Ok(())
 }
 
@@ -3606,7 +3651,11 @@ fn health(connection: &Connection) -> Result<StorageHealth, AppError> {
 pub(crate) fn drop_workspace_planning_schema(connection: &Connection) {
     connection
         .execute_batch(
-            r#"DELETE FROM schema_migrations WHERE version = 38;
+            r#"DROP TABLE managed_launch_batch_children;
+            DROP TABLE managed_launch_batches;
+            DELETE FROM schema_migrations WHERE version = 39;
+
+            DELETE FROM schema_migrations WHERE version = 38;
 
             DROP TABLE session_follow_ups;
             DROP TABLE workflow_credentials;
@@ -3770,7 +3819,7 @@ mod tests {
                  ALTER TABLE managed_session_requests DROP COLUMN repository_id;
                  ALTER TABLE managed_session_requests DROP COLUMN readiness_generation;
                  ALTER TABLE managed_session_requests DROP COLUMN checkout_id;
-                 DELETE FROM schema_migrations WHERE version IN (31, 38);
+                 DELETE FROM schema_migrations WHERE version IN (31, 38, 39);
                  PRAGMA user_version = 30;",
             )
             .expect("remove checkout readiness schema");
@@ -4038,7 +4087,7 @@ mod tests {
                 "launch-intent".to_owned()
             )
         );
-        assert_eq!(store.health().expect("storage health").schema_version, 38);
+        assert_eq!(store.health().expect("storage health").schema_version, 39);
         assert!(store.health().expect("storage health").is_healthy());
     }
 
@@ -4737,7 +4786,7 @@ mod tests {
         assert_eq!(preserved_attestation, valid_attestation);
         assert_eq!(legacy_authority, "immutable_evidence");
         let health = store.health().expect("storage health");
-        assert_eq!(health.schema_version, 38);
+        assert_eq!(health.schema_version, 39);
         assert!(health.is_healthy());
         let audited_attestations: Vec<(String, String, String, String)> = store
             .read(|connection| {
@@ -4782,7 +4831,7 @@ mod tests {
             .expect("read upgraded schema 20 attestations");
         assert_eq!(upgraded_attestations, audited_attestations);
         let health = store.health().expect("upgraded storage health");
-        assert_eq!(health.schema_version, 38);
+        assert_eq!(health.schema_version, 39);
         assert!(health.is_healthy());
         drop(store);
 
