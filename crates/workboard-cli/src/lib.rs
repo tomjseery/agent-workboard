@@ -261,6 +261,25 @@ enum WorkCommand {
         #[arg(long)]
         idempotency_key: Option<String>,
     },
+    Continue {
+        work_item: Option<String>,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        repository: Option<String>,
+        #[arg(long, value_enum)]
+        tool: Option<ToolArg>,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long, value_enum)]
+        effort: Option<EffortArg>,
+        #[arg(long)]
+        terminal: Option<PathBuf>,
+        #[arg(long)]
+        native: Option<PathBuf>,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -820,10 +839,29 @@ fn execute(cli: Cli) -> Result<String, AppError> {
             let workspace_id = resolve_workspace(&application, cli.workspace)?;
             let snapshot = application.snapshot(workspace_id)?;
             let feature = select_feature(&snapshot, feature.as_deref(), cli.json)?;
+            let actions = workboard_application::actions::workflow_actions(
+                HierarchyOwner::Feature(feature.id),
+                feature.state,
+                0,
+            );
+            let guidance = actions
+                .actions
+                .iter()
+                .map(|action| action.label.as_str())
+                .collect::<Vec<_>>()
+                .join(" | ");
+            let suffix = if guidance.is_empty() {
+                String::new()
+            } else {
+                format!("\nAvailable actions: {guidance}")
+            };
             output(
-                feature,
+                &serde_json::json!({ "feature": feature, "availableActions": actions }),
                 cli.json,
-                format!("{} ({}) — {:?}", feature.title, feature.id, feature.state),
+                format!(
+                    "{} ({}) — {:?}{suffix}",
+                    feature.title, feature.id, feature.state
+                ),
             )
         }
         Some(Command::Feature(FeatureArgs {
@@ -915,12 +953,48 @@ fn execute(cli: Cli) -> Result<String, AppError> {
             let workspace_id = resolve_workspace(&application, cli.workspace)?;
             let snapshot = application.snapshot(workspace_id)?;
             let work_item = select_work_item(&snapshot, work_item.as_deref(), cli.json)?;
+            let projection = application.work_item_projection(work_item.id)?;
+            let sessions = projection
+                .sessions
+                .iter()
+                .map(|session| {
+                    format!(
+                        "{} {} {:?} {} {}",
+                        tool_title(session.provider),
+                        session.profile.model.as_deref().unwrap_or("unknown"),
+                        session.role,
+                        session.binding_status,
+                        session.checkout_path.display(),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            let actions = projection
+                .available_actions
+                .actions
+                .iter()
+                .map(|action| action.label.as_str())
+                .collect::<Vec<_>>()
+                .join(" | ");
+            let suffix = if actions.is_empty() {
+                String::new()
+            } else {
+                format!("\nAvailable actions: {actions}")
+            };
             output(
-                work_item,
+                &projection,
                 cli.json,
                 format!(
-                    "{} ({}) — {:?}",
-                    work_item.title, work_item.key, work_item.status
+                    "{} ({}) — {:?}\nSessions:\n{}{}",
+                    work_item.title,
+                    work_item.key,
+                    work_item.status,
+                    if sessions.is_empty() {
+                        "None"
+                    } else {
+                        &sessions
+                    },
+                    suffix,
                 ),
             )
         }
@@ -941,19 +1015,6 @@ fn execute(cli: Cli) -> Result<String, AppError> {
             let workspace_id = resolve_workspace(&application, cli.workspace)?;
             let snapshot = application.snapshot(workspace_id)?;
             let work_item = select_work_item(&snapshot, work_item.as_deref(), cli.json)?.clone();
-            let tool = Tool::from(tool);
-            let now = time::OffsetDateTime::now_utc();
-            let profile = accepted_launch_profile(
-                &mut application,
-                workspace_id,
-                tool,
-                ManagedSessionRole::WorkItemExecution,
-                None,
-                model,
-                effort,
-                now,
-            )?;
-            let launch_idempotency_key = idempotency_key.unwrap_or_else(new_idempotency_key);
             if checkout.is_some() {
                 return Err(AppError::CheckoutReconciliation {
                     code: "explicit_write_checkout_unsupported".to_owned(),
@@ -961,73 +1022,67 @@ fn execute(cli: Cli) -> Result<String, AppError> {
                         .to_owned(),
                 });
             }
-            let repository_id = if let Some(query) = repository {
-                let repository = select_repository(&snapshot, Some(&query), cli.json)?;
-                if !work_item.repository_ids.contains(&repository.id) {
-                    return Err(AppError::WorkItemRepositoryMismatch);
-                }
-                repository.id
-            } else {
-                let [repository_id] = work_item.repository_ids.as_slice() else {
-                    return Err(AppError::CheckoutReconciliation {
-                        code: "launch_repository_selection_required".to_owned(),
-                        message: "the Work item targets multiple repositories; select the launch repository"
-                            .to_owned(),
-                    });
-                };
-                *repository_id
-            };
-            let readiness =
-                application
-                    .checkout_service()
-                    .prepare_work_item(PrepareWorkItemCheckout {
-                        work_item_id: work_item.id,
-                        repository_id,
-                        idempotency_key: format!("{launch_idempotency_key}:checkout"),
-                        observed_at: now,
-                    })?;
-            let capability = capability_inputs(
-                &application,
-                tool,
-                snapshot
-                    .repositories
-                    .iter()
-                    .find(|candidate| candidate.id == repository_id)
-                    .map_or_else(|| repository_id.to_string(), |value| value.slug.to_string())
-                    .as_str(),
+            let binding = execute_work_launch(
+                &mut application,
+                &snapshot,
+                &work_item,
+                WorkLaunchInput {
+                    continue_existing: false,
+                    session: None,
+                    repository,
+                    tool: Some(tool),
+                    model,
+                    effort,
+                    terminal,
+                    native,
+                    idempotency_key,
+                    structured: cli.json,
+                },
             )?;
-            let request = BeginManagedSessionLaunch {
-                owner: HierarchyOwner::WorkItem(work_item.id),
-                role: ManagedSessionRole::WorkItemExecution,
-                tool,
-                mode: ManagedLaunchMode::New,
-                checkout_id: readiness.checkout_id,
-                working_directory: readiness.path,
-                title: work_item.title.clone(),
-                terminal_window: Some(format!("workboard-feature-{}", work_item.feature_id)),
-                terminal_executable: terminal.unwrap_or_else(default_terminal_executable),
-                native_executable: native.unwrap_or_else(|| default_native_executable(tool)),
-                idempotency_key: launch_idempotency_key,
-                created_at: now,
-                expires_at: now + time::Duration::minutes(2),
-                resume_context: None,
-                profile,
-                initial_prompt: Some(work_item_bootstrap_prompt(work_item.id)),
-                capability,
-            };
-            let prepared = application.session_launch().begin(request)?;
-            application
-                .session_launch()
-                .execute(&prepared, &SystemLaunchExecutor)?;
-            let binding = await_binding(&mut application, prepared.intent_id)?;
             output(
                 &binding,
                 cli.json,
-                format!(
-                    "Launched and bound {} session for {}",
-                    tool_title(tool),
-                    work_item.title
-                ),
+                format!("Launched and bound managed session for {}", work_item.title),
+            )
+        }
+        Some(Command::Work(WorkArgs {
+            command:
+                WorkCommand::Continue {
+                    work_item,
+                    session,
+                    repository,
+                    tool,
+                    model,
+                    effort,
+                    terminal,
+                    native,
+                    idempotency_key,
+                },
+        })) => {
+            let workspace_id = resolve_workspace(&application, cli.workspace)?;
+            let snapshot = application.snapshot(workspace_id)?;
+            let work_item = select_work_item(&snapshot, work_item.as_deref(), cli.json)?.clone();
+            let binding = execute_work_launch(
+                &mut application,
+                &snapshot,
+                &work_item,
+                WorkLaunchInput {
+                    continue_existing: true,
+                    session,
+                    repository,
+                    tool,
+                    model,
+                    effort,
+                    terminal,
+                    native,
+                    idempotency_key,
+                    structured: cli.json,
+                },
+            )?;
+            output(
+                &binding,
+                cli.json,
+                format!("Continued managed session for {}", work_item.title),
             )
         }
         Some(Command::Session(SessionArgs {
@@ -2539,6 +2594,370 @@ fn tool_title(tool: Tool) -> &'static str {
     }
 }
 
+struct WorkLaunchInput {
+    continue_existing: bool,
+    session: Option<String>,
+    repository: Option<String>,
+    tool: Option<ToolArg>,
+    model: Option<String>,
+    effort: Option<EffortArg>,
+    terminal: Option<PathBuf>,
+    native: Option<PathBuf>,
+    idempotency_key: Option<String>,
+    structured: bool,
+}
+
+fn execute_work_launch(
+    application: &mut WorkboardApplication,
+    snapshot: &workboard_core::WorkspaceSnapshot,
+    work_item: &WorkItem,
+    input: WorkLaunchInput,
+) -> Result<workboard_application::session_launch::ConfirmedSessionBinding, AppError> {
+    let now = time::OffsetDateTime::now_utc();
+    let projection = application.work_item_projection(work_item.id)?;
+    let repository_filter = input
+        .repository
+        .as_deref()
+        .map(|query| {
+            select_repository(snapshot, Some(query), input.structured).map(|value| value.id)
+        })
+        .transpose()?;
+    if repository_filter
+        .is_some_and(|repository_id| !work_item.repository_ids.contains(&repository_id))
+    {
+        return Err(AppError::WorkItemRepositoryMismatch);
+    }
+    let mut options = work_launch_options(
+        application,
+        snapshot,
+        &projection,
+        repository_filter,
+        input.tool.map(Tool::from),
+        input.model.clone(),
+        input.effort,
+    )?;
+    if let Some(query) = input.session.as_deref() {
+        let selected = select_workboard_session(&projection.sessions, query)?;
+        options.sort_by_key(|option| usize::from(option.session_id != Some(selected)));
+    } else if !input.continue_existing {
+        options.sort_by_key(|option| usize::from(option.session_id.is_some()));
+    }
+    let interactive = !input.structured && io::stdin().is_terminal() && io::stdout().is_terminal();
+    let selection = if interactive {
+        board::launch_picker(&format!("{} ({})", work_item.title, work_item.key), options)?
+            .ok_or_else(|| AppError::External {
+                code: "launch_cancelled".to_owned(),
+                message: "managed launch was cancelled".to_owned(),
+            })?
+    } else {
+        noninteractive_work_selection(
+            &projection.sessions,
+            options,
+            input.continue_existing,
+            input.session.as_deref(),
+        )?
+    };
+    let refreshed = application.work_item_projection(work_item.id)?;
+    if !refreshed.readiness.ready {
+        return Err(AppError::External {
+            code: "work_item_not_ready".to_owned(),
+            message: if refreshed.readiness.blocked_by.is_empty() {
+                "the Work item is not in a launchable state".to_owned()
+            } else {
+                format!(
+                    "the Work item is blocked by {} incomplete dependencies",
+                    refreshed.readiness.blocked_by.len()
+                )
+            },
+        });
+    }
+    selection
+        .profile
+        .validate_for_launch(selection.provider, selection.role)
+        .map_err(|error| AppError::Domain(error.to_string()))?;
+    application.remember_launch_profile(projection.workspace_id, &selection.profile, now)?;
+    let launch_idempotency_key = input.idempotency_key.unwrap_or_else(new_idempotency_key);
+    let repository_slug = snapshot
+        .repositories
+        .iter()
+        .find(|repository| repository.id == selection.repository_id)
+        .map_or_else(
+            || selection.repository_id.to_string(),
+            |repository| repository.slug.to_string(),
+        );
+    let terminal = input.terminal.unwrap_or_else(default_terminal_executable);
+    let native = input
+        .native
+        .unwrap_or_else(|| default_native_executable(selection.provider));
+    let request = if let Some(session_id) = selection.session_id {
+        let target = application.managed_session_target(session_id)?;
+        if target.owner != HierarchyOwner::WorkItem(work_item.id)
+            || target.tool != selection.provider
+            || target.checkout.repository_id != selection.repository_id
+        {
+            return Err(AppError::WorkflowOperationUnauthorized);
+        }
+        application
+            .checkout_service()
+            .reconcile_registered_checkout(target.checkout.checkout_id, now)?;
+        let context = application.native_sources().resume_context(
+            session_id,
+            target.checkout.path.clone(),
+            target.checkout.title.clone(),
+        )?;
+        BeginManagedSessionLaunch {
+            owner: target.owner,
+            role: target.role,
+            tool: target.tool,
+            mode: ManagedLaunchMode::Resume(target.native_id),
+            checkout_id: target.checkout.checkout_id,
+            working_directory: target.checkout.path,
+            title: work_item.title.clone(),
+            terminal_window: Some(format!("workboard-feature-{}", work_item.feature_id)),
+            terminal_executable: terminal,
+            native_executable: native,
+            idempotency_key: launch_idempotency_key,
+            created_at: now,
+            expires_at: now + time::Duration::minutes(2),
+            resume_context: Some(context),
+            profile: selection.profile,
+            initial_prompt: None,
+            capability: capability_inputs(application, target.tool, &repository_slug)?,
+        }
+    } else {
+        if selection.role == ManagedSessionRole::WorkItemExecution
+            && refreshed
+                .sessions
+                .iter()
+                .any(|session| session.primary_writer)
+        {
+            return Err(AppError::External {
+                code: "primary_writer_already_current".to_owned(),
+                message: "resume the current primary writer or choose a debugging/review role"
+                    .to_owned(),
+            });
+        }
+        let readiness =
+            application
+                .checkout_service()
+                .prepare_work_item(PrepareWorkItemCheckout {
+                    work_item_id: work_item.id,
+                    repository_id: selection.repository_id,
+                    idempotency_key: format!("{launch_idempotency_key}:checkout"),
+                    observed_at: now,
+                })?;
+        BeginManagedSessionLaunch {
+            owner: HierarchyOwner::WorkItem(work_item.id),
+            role: selection.role,
+            tool: selection.provider,
+            mode: ManagedLaunchMode::New,
+            checkout_id: readiness.checkout_id,
+            working_directory: readiness.path,
+            title: work_item.title.clone(),
+            terminal_window: Some(format!("workboard-feature-{}", work_item.feature_id)),
+            terminal_executable: terminal,
+            native_executable: native,
+            idempotency_key: launch_idempotency_key,
+            created_at: now,
+            expires_at: now + time::Duration::minutes(2),
+            resume_context: None,
+            profile: selection.profile,
+            initial_prompt: Some(work_item_bootstrap_prompt(work_item.id)),
+            capability: capability_inputs(application, selection.provider, &repository_slug)?,
+        }
+    };
+    let prepared = application.session_launch().begin(request)?;
+    application
+        .session_launch()
+        .execute(&prepared, &SystemLaunchExecutor)?;
+    await_binding(application, prepared.intent_id)
+}
+
+fn work_launch_options(
+    application: &WorkboardApplication,
+    snapshot: &workboard_core::WorkspaceSnapshot,
+    projection: &workboard_application::work_projection::WorkItemProjection,
+    repository_filter: Option<workboard_core::RepositoryId>,
+    requested_tool: Option<Tool>,
+    model: Option<String>,
+    effort: Option<EffortArg>,
+) -> Result<Vec<board::LaunchOption>, AppError> {
+    let mut options = projection
+        .sessions
+        .iter()
+        .filter(|session| repository_filter.is_none_or(|id| session.repository_id == id))
+        .map(|session| board::LaunchOption {
+            session_id: Some(session.session_id),
+            repository_id: session.repository_id,
+            provider: session.provider,
+            profile: session.profile.clone(),
+            role: session.role,
+            status: format!(
+                "{} / {}",
+                session.binding_status,
+                session
+                    .live_status
+                    .map_or_else(|| "unknown".to_owned(), |status| format!("{status:?}"))
+            ),
+            last_activity: session.last_activity,
+            checkout: session.checkout_path.clone(),
+            branch: session.branch.clone(),
+            resumability: session.resumability,
+        })
+        .collect::<Vec<_>>();
+    let mut providers = vec![Tool::Claude, Tool::Codex];
+    if let Some(requested) = requested_tool {
+        providers.sort_by_key(|tool| usize::from(*tool != requested));
+    }
+    for repository_id in projection
+        .work_item
+        .repository_ids
+        .iter()
+        .copied()
+        .filter(|id| repository_filter.is_none_or(|filter| *id == filter))
+    {
+        let (checkout, branch) = snapshot
+            .effective_checkouts
+            .iter()
+            .find(|checkout| {
+                checkout.work_item_id == Some(projection.work_item.id)
+                    && checkout.repository_id == repository_id
+            })
+            .and_then(|effective| {
+                snapshot
+                    .checkouts
+                    .iter()
+                    .find(|checkout| checkout.id == effective.checkout_id)
+            })
+            .map(|checkout| {
+                (
+                    checkout
+                        .paths
+                        .iter()
+                        .find(|path| path.observed_until.is_none())
+                        .map_or_else(
+                            || PathBuf::from("materialize on Start"),
+                            |path| path.path.clone(),
+                        ),
+                    checkout.branch.clone(),
+                )
+            })
+            .unwrap_or_else(|| (PathBuf::from("materialize on Start"), None));
+        for provider in &providers {
+            let mut profile = application.preferred_launch_profile(
+                projection.workspace_id,
+                *provider,
+                ManagedSessionRole::WorkItemExecution,
+            )?;
+            if requested_tool == Some(*provider) {
+                if let Some(model) = &model {
+                    profile.model = Some(model.clone());
+                    profile.source = workboard_core::LaunchProfileSource::ExplicitOverride;
+                }
+                if let Some(effort) = effort {
+                    profile.effort = Some(effort.into());
+                    profile.source = workboard_core::LaunchProfileSource::ExplicitOverride;
+                }
+            }
+            options.push(board::LaunchOption {
+                session_id: None,
+                repository_id,
+                provider: *provider,
+                profile,
+                role: ManagedSessionRole::WorkItemExecution,
+                status: if projection.readiness.ready {
+                    "ready".to_owned()
+                } else {
+                    format!(
+                        "blocked by {} dependencies",
+                        projection.readiness.blocked_by.len()
+                    )
+                },
+                last_activity: None,
+                checkout: checkout.clone(),
+                branch: branch.clone(),
+                resumability: workboard_core::Resumability::Unknown,
+            });
+        }
+    }
+    Ok(options)
+}
+
+fn noninteractive_work_selection(
+    sessions: &[workboard_application::work_projection::SessionChoice],
+    options: Vec<board::LaunchOption>,
+    continue_existing: bool,
+    session_query: Option<&str>,
+) -> Result<board::LaunchSelection, AppError> {
+    let selected_session = session_query
+        .map(|query| select_workboard_session(sessions, query))
+        .transpose()?;
+    if let Some(session_id) = selected_session {
+        return options
+            .into_iter()
+            .find(|option| option.session_id == Some(session_id))
+            .map(launch_selection)
+            .ok_or(AppError::ConversationNotFound);
+    }
+    if continue_existing {
+        let resumable = options
+            .iter()
+            .filter(|option| {
+                option.session_id.is_some()
+                    && option.resumability == workboard_core::Resumability::Validated
+            })
+            .collect::<Vec<_>>();
+        if let [only] = resumable.as_slice() {
+            return Ok(launch_selection((*only).clone()));
+        }
+        if !resumable.is_empty() {
+            return Err(AppError::External {
+                code: "session_selection_required".to_owned(),
+                message: "multiple Workboard sessions are resumable; select one with --session"
+                    .to_owned(),
+            });
+        }
+    }
+    options
+        .into_iter()
+        .find(|option| option.session_id.is_none())
+        .map(launch_selection)
+        .ok_or_else(|| AppError::External {
+            code: "launch_option_unavailable".to_owned(),
+            message: "no managed launch option is available".to_owned(),
+        })
+}
+
+fn launch_selection(option: board::LaunchOption) -> board::LaunchSelection {
+    board::LaunchSelection {
+        session_id: option.session_id,
+        repository_id: option.repository_id,
+        provider: option.provider,
+        profile: option.profile,
+        role: option.role,
+    }
+}
+
+fn select_workboard_session(
+    sessions: &[workboard_application::work_projection::SessionChoice],
+    query: &str,
+) -> Result<workboard_core::ConversationId, AppError> {
+    let query = query.trim();
+    let matches = sessions
+        .iter()
+        .filter(|session| session.session_id.to_string().starts_with(query))
+        .map(|session| session.session_id)
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [session_id] => Ok(*session_id),
+        [] => Err(AppError::ConversationNotFound),
+        _ => Err(AppError::External {
+            code: "session_selector_ambiguous".to_owned(),
+            message: "the Workboard session selector matches more than one session".to_owned(),
+        }),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn accepted_launch_profile(
     application: &mut WorkboardApplication,
@@ -2871,8 +3290,8 @@ mod tests {
     use crate::selector::SelectionCandidate;
 
     use super::{
-        Cli, Command as CliCommand, SessionCommand, codex_app_executable, execute_from,
-        select_candidate, slugify,
+        Cli, Command as CliCommand, SessionCommand, WorkCommand, codex_app_executable,
+        execute_from, select_candidate, slugify,
     };
 
     #[test]
@@ -2911,6 +3330,41 @@ mod tests {
             let cli = Cli::try_parse_from(["workboard", command]).expect("show command");
             assert!(matches!(cli.command, Some(CliCommand::Show)));
         }
+    }
+
+    #[test]
+    fn work_start_and_continue_accept_short_selectors_and_profile_overrides() {
+        let start = Cli::try_parse_from([
+            "workboard",
+            "work",
+            "start",
+            "abcd1234",
+            "--tool",
+            "claude",
+            "--model",
+            "opus",
+            "--effort",
+            "xhigh",
+        ])
+        .expect("start command");
+        let Some(CliCommand::Work(start)) = start.command else {
+            panic!("expected Work command");
+        };
+        assert!(matches!(start.command, WorkCommand::Start { .. }));
+
+        let continued = Cli::try_parse_from([
+            "workboard",
+            "work",
+            "continue",
+            "abcd1234",
+            "--session",
+            "ef567890",
+        ])
+        .expect("continue command");
+        let Some(CliCommand::Work(continued)) = continued.command else {
+            panic!("expected Work command");
+        };
+        assert!(matches!(continued.command, WorkCommand::Continue { .. }));
     }
 
     #[test]

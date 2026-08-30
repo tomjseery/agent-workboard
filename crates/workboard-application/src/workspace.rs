@@ -24,6 +24,7 @@ use crate::planning_workflow::PlanningWorkflowService;
 use crate::recovery::RecoveryService;
 use crate::session_launch::SessionLaunchService;
 use crate::storage::{SqliteStore, StorageHealth};
+use crate::work_projection::{WorkItemProjection, WorkProjectionService};
 use crate::workflow_operations::{AssignedContext, WorkflowOperationService};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -89,6 +90,13 @@ impl WorkboardApplication {
 
     pub fn checkout_service(&mut self) -> CheckoutService<'_> {
         CheckoutService::new(&mut self.store)
+    }
+
+    pub fn work_item_projection(
+        &self,
+        work_item_id: WorkItemId,
+    ) -> Result<WorkItemProjection, AppError> {
+        WorkProjectionService::new(&self.store).project(work_item_id)
     }
 
     pub fn preferred_launch_profile(
