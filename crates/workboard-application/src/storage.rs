@@ -12,7 +12,7 @@ use workboard_core::{ConversationId, LaunchLeaseId};
 
 use crate::AppError;
 
-const CURRENT_SCHEMA_VERSION: i64 = 39;
+const CURRENT_SCHEMA_VERSION: i64 = 40;
 const FOUNDATION_SCHEMA_CHECKSUM: &str = "agent-workboard-foundation-v1";
 const WORKSPACE_PLANNING_SCHEMA_CHECKSUM: &str = "agent-workboard-workspace-planning-v1";
 const WORK_ITEM_DEPENDENCY_SCHEMA_CHECKSUM: &str = "agent-workboard-work-item-dependency-v1";
@@ -25,6 +25,69 @@ const SESSION_FOLLOW_UP_SCHEMA_CHECKSUM: &str = "agent-workboard-session-follow-
 const WRITER_SESSION_RESERVATION_SCHEMA_CHECKSUM: &str =
     "agent-workboard-writer-session-reservation-v1";
 const MANAGED_LAUNCH_BATCH_SCHEMA_CHECKSUM: &str = "agent-workboard-managed-launch-batch-v1";
+const FEATURE_BRANCH_INTEGRATION_SCHEMA_CHECKSUM: &str =
+    "agent-workboard-feature-branch-integration-v1";
+const FEATURE_BRANCH_INTEGRATION_SQL: &str = r#"
+CREATE TABLE feature_integration_runs (
+    id TEXT PRIMARY KEY,
+    feature_id TEXT NOT NULL REFERENCES features(id) ON DELETE RESTRICT,
+    repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE RESTRICT,
+    feature_checkout_id TEXT NOT NULL REFERENCES checkouts(id) ON DELETE RESTRICT,
+    idempotency_key TEXT NOT NULL UNIQUE CHECK (idempotency_key <> ''),
+    status TEXT NOT NULL CHECK (
+        status IN ('previewed', 'running', 'completed', 'conflict', 'failed')
+    ),
+    expected_target_head TEXT NOT NULL CHECK (expected_target_head <> ''),
+    confirmation_token_hash TEXT NOT NULL UNIQUE CHECK (length(confirmation_token_hash) = 64),
+    confirmation_expires_at TEXT NOT NULL,
+    confirmed_at TEXT,
+    result_head TEXT,
+    failure TEXT,
+    started_at TEXT NOT NULL,
+    completed_at TEXT
+);
+CREATE UNIQUE INDEX feature_integration_one_running
+    ON feature_integration_runs (feature_id, repository_id) WHERE status = 'running';
+CREATE TABLE work_item_integrations (
+    work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE RESTRICT,
+    repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE RESTRICT,
+    source_checkout_id TEXT NOT NULL REFERENCES checkouts(id) ON DELETE RESTRICT,
+    source_head TEXT NOT NULL CHECK (source_head <> ''),
+    status TEXT NOT NULL CHECK (status IN ('pending', 'integrated', 'conflict')),
+    integration_run_id TEXT REFERENCES feature_integration_runs(id) ON DELETE RESTRICT,
+    expected_target_head TEXT,
+    result_head TEXT,
+    conflict TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (work_item_id, repository_id)
+);
+CREATE INDEX work_item_integrations_pending
+    ON work_item_integrations (repository_id, status, work_item_id);
+CREATE TABLE feature_integration_steps (
+    run_id TEXT NOT NULL REFERENCES feature_integration_runs(id) ON DELETE RESTRICT,
+    position INTEGER NOT NULL CHECK (position >= 0),
+    work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE RESTRICT,
+    source_checkout_id TEXT NOT NULL REFERENCES checkouts(id) ON DELETE RESTRICT,
+    dependency_layer INTEGER NOT NULL CHECK (dependency_layer >= 0),
+    expected_target_head TEXT NOT NULL CHECK (expected_target_head <> ''),
+    source_head TEXT NOT NULL CHECK (source_head <> ''),
+    result_head TEXT,
+    status TEXT NOT NULL CHECK (status IN ('pending', 'integrated', 'conflict', 'skipped')),
+    conflict TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (run_id, position),
+    UNIQUE (run_id, work_item_id)
+);
+INSERT INTO work_item_integrations (
+    work_item_id, repository_id, source_checkout_id, source_head, status, updated_at
+)
+SELECT item.id, effective.repository_id, effective.checkout_id, checkout.head, 'pending',
+       strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+FROM work_items item
+JOIN effective_work_item_checkouts effective ON effective.work_item_id = item.id
+JOIN checkouts checkout ON checkout.id = effective.checkout_id
+WHERE item.status IN ('review', 'done') AND checkout.head IS NOT NULL;
+"#;
 const MANAGED_LAUNCH_BATCH_SQL: &str = r#"
 CREATE TABLE managed_launch_batches (
     id TEXT PRIMARY KEY,
@@ -2723,6 +2786,12 @@ fn migrate(connection: &Connection) -> Result<(), AppError> {
         MANAGED_LAUNCH_BATCH_SCHEMA_CHECKSUM,
         MANAGED_LAUNCH_BATCH_SQL,
     )?;
+    apply_migration(
+        connection,
+        40,
+        FEATURE_BRANCH_INTEGRATION_SCHEMA_CHECKSUM,
+        FEATURE_BRANCH_INTEGRATION_SQL,
+    )?;
     Ok(())
 }
 
@@ -3651,7 +3720,12 @@ fn health(connection: &Connection) -> Result<StorageHealth, AppError> {
 pub(crate) fn drop_workspace_planning_schema(connection: &Connection) {
     connection
         .execute_batch(
-            r#"DROP TABLE managed_launch_batch_children;
+            r#"DROP TABLE feature_integration_steps;
+            DROP TABLE work_item_integrations;
+            DROP TABLE feature_integration_runs;
+            DELETE FROM schema_migrations WHERE version = 40;
+
+            DROP TABLE managed_launch_batch_children;
             DROP TABLE managed_launch_batches;
             DELETE FROM schema_migrations WHERE version = 39;
 
@@ -3819,7 +3893,7 @@ mod tests {
                  ALTER TABLE managed_session_requests DROP COLUMN repository_id;
                  ALTER TABLE managed_session_requests DROP COLUMN readiness_generation;
                  ALTER TABLE managed_session_requests DROP COLUMN checkout_id;
-                 DELETE FROM schema_migrations WHERE version IN (31, 38, 39);
+                 DELETE FROM schema_migrations WHERE version IN (31, 38, 39, 40);
                  PRAGMA user_version = 30;",
             )
             .expect("remove checkout readiness schema");
@@ -4087,7 +4161,7 @@ mod tests {
                 "launch-intent".to_owned()
             )
         );
-        assert_eq!(store.health().expect("storage health").schema_version, 39);
+        assert_eq!(store.health().expect("storage health").schema_version, 40);
         assert!(store.health().expect("storage health").is_healthy());
     }
 
@@ -4786,7 +4860,7 @@ mod tests {
         assert_eq!(preserved_attestation, valid_attestation);
         assert_eq!(legacy_authority, "immutable_evidence");
         let health = store.health().expect("storage health");
-        assert_eq!(health.schema_version, 39);
+        assert_eq!(health.schema_version, 40);
         assert!(health.is_healthy());
         let audited_attestations: Vec<(String, String, String, String)> = store
             .read(|connection| {
@@ -4831,7 +4905,7 @@ mod tests {
             .expect("read upgraded schema 20 attestations");
         assert_eq!(upgraded_attestations, audited_attestations);
         let health = store.health().expect("upgraded storage health");
-        assert_eq!(health.schema_version, 39);
+        assert_eq!(health.schema_version, 40);
         assert!(health.is_healthy());
         drop(store);
 

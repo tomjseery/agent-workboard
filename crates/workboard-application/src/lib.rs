@@ -7,6 +7,7 @@ pub mod capability_bundle;
 pub mod checkout;
 pub mod concertable_import;
 mod error;
+pub mod feature_integration;
 pub mod follow_up;
 pub mod git;
 pub mod hooks;
