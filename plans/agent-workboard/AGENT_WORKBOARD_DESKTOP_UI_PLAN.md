@@ -146,7 +146,7 @@ Each Work item starts from the latest accepted `origin/main`. Consume only merge
 
 ### 1. Establish the versioned Workboard client protocol and ordered daemon stream
 
-- Status: [ ]
+- Status: [x]
 - Slug: `establish-versioned-workboard-client-protocol`
 - Dependencies: none
 - Delivery type: Rust protocol/application/daemon foundation

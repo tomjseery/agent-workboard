@@ -641,14 +641,19 @@ fn execute(cli: Cli) -> Result<String, AppError> {
         .database
         .map(|path| absolute(&current_directory, &path))
         .map_or_else(default_database_path, Ok)?;
+    if cli.command.is_none() {
+        let snapshot = client_snapshot(&database, cli.workspace)?;
+        let human = board::plain(&snapshot);
+        return output(&snapshot, cli.json, human);
+    }
+    if matches!(cli.command.as_ref(), Some(Command::Show)) {
+        let snapshot = client_snapshot(&database, cli.workspace)?;
+        let title = snapshot.workspace.title.clone();
+        return output(&snapshot, cli.json, title);
+    }
     let mut application = WorkboardApplication::open(database)?;
     match cli.command {
-        None => {
-            let workspace_id = resolve_workspace(&application, cli.workspace)?;
-            let snapshot = application.snapshot(workspace_id)?;
-            let human = board::plain(&snapshot);
-            output(&snapshot, cli.json, human)
-        }
+        None => unreachable!(),
         Some(Command::Init(arguments)) => {
             let default_title = current_name(&current_directory)?;
             let title = arguments.title.unwrap_or(default_title);
@@ -1343,11 +1348,7 @@ fn execute(cli: Cli) -> Result<String, AppError> {
             let workspace_id = resolve_workspace(&application, cli.workspace)?;
             recovery::execute_recover(&mut application, workspace_id, arguments, cli.json)
         }
-        Some(Command::Show) => {
-            let workspace_id = resolve_workspace(&application, cli.workspace)?;
-            let snapshot = application.snapshot(workspace_id)?;
-            output(&snapshot, cli.json, snapshot.workspace.title.clone())
-        }
+        Some(Command::Show) => unreachable!(),
         Some(Command::Backup(arguments)) => {
             let destination = absolute(&current_directory, &arguments.destination);
             let health = application.backup_database(&destination)?;
@@ -1465,9 +1466,349 @@ fn run_interactive_board(cli: &Cli) -> Result<(), AppError> {
         .as_ref()
         .map(|path| absolute(&current_directory, path))
         .map_or_else(default_database_path, Ok)?;
-    let application = WorkboardApplication::open(database)?;
-    let workspace_id = resolve_workspace(&application, cli.workspace)?;
-    board::run(application.snapshot(workspace_id)?)
+    board::run(client_snapshot(&database, cli.workspace)?)
+}
+
+fn client_snapshot(
+    database: &Path,
+    requested: Option<WorkspaceId>,
+) -> Result<workboard_core::WorkspaceSnapshot, AppError> {
+    let client = workboard_client::WorkboardClient::discover(database).map_err(client_error)?;
+    let workspace_id = match requested {
+        Some(id) => workboard_client_protocol::WorkspaceId::from_uuid(*id.as_uuid()),
+        None => client.sole_workspace_id().map_err(client_error)?,
+    };
+    client
+        .board_snapshot(workspace_id)
+        .map_err(client_error)
+        .and_then(core_snapshot)
+}
+
+fn client_error(error: workboard_client::ClientError) -> AppError {
+    AppError::External {
+        code: error.code().to_owned(),
+        message: error.to_string(),
+    }
+}
+
+fn protocol_workspace_id(id: workboard_client_protocol::WorkspaceId) -> WorkspaceId {
+    WorkspaceId::from_uuid(*id.as_uuid())
+}
+
+fn core_snapshot(
+    snapshot: workboard_client_protocol::BoardSnapshot,
+) -> Result<workboard_core::WorkspaceSnapshot, AppError> {
+    Ok(workboard_core::WorkspaceSnapshot {
+        workspace: workboard_core::Workspace {
+            id: protocol_workspace_id(snapshot.workspace.id),
+            slug: workboard_core::Slug::new(snapshot.workspace.slug)
+                .map_err(|error| AppError::Domain(error.to_string()))?,
+            title: snapshot.workspace.title,
+            planning_store_repository_id: core_repository_id(
+                snapshot.workspace.planning_store_repository_id,
+            ),
+        },
+        repositories: snapshot
+            .repositories
+            .into_iter()
+            .map(|repository| {
+                Ok(workboard_core::Repository {
+                    id: core_repository_id(repository.id),
+                    workspace_id: protocol_workspace_id(repository.workspace_id),
+                    slug: workboard_core::Slug::new(repository.slug)
+                        .map_err(|error| AppError::Domain(error.to_string()))?,
+                    title: repository.title,
+                    git_common_directory: repository.git_common_directory.into(),
+                    default_branch: repository.default_branch,
+                    remotes: repository
+                        .remotes
+                        .into_iter()
+                        .map(|remote| workboard_core::RepositoryRemote {
+                            name: remote.name,
+                            url: remote.url,
+                        })
+                        .collect(),
+                    paths: repository
+                        .paths
+                        .into_iter()
+                        .map(|path| workboard_core::RepositoryPath {
+                            id: workboard_core::RepositoryPathId::from_uuid(*path.id.as_uuid()),
+                            path: path.path.into(),
+                            observed_at: path.observed_at,
+                            superseded_at: path.superseded_at,
+                        })
+                        .collect(),
+                })
+            })
+            .collect::<Result<Vec<_>, AppError>>()?,
+        epics: snapshot
+            .epics
+            .into_iter()
+            .map(|epic| {
+                Ok(workboard_core::Epic {
+                    id: core_epic_id(epic.id),
+                    workspace_id: protocol_workspace_id(epic.workspace_id),
+                    slug: workboard_core::Slug::new(epic.slug)
+                        .map_err(|error| AppError::Domain(error.to_string()))?,
+                    title: epic.title,
+                    document_id: core_document_id(epic.document_id),
+                })
+            })
+            .collect::<Result<Vec<_>, AppError>>()?,
+        features: snapshot
+            .features
+            .into_iter()
+            .map(|feature| {
+                Ok(workboard_core::Feature {
+                    id: core_feature_id(feature.id),
+                    epic_id: core_epic_id(feature.epic_id),
+                    slug: workboard_core::Slug::new(feature.slug)
+                        .map_err(|error| AppError::Domain(error.to_string()))?,
+                    title: feature.title,
+                    document_id: feature.document_id.map(core_document_id),
+                    state: core_workflow_state(feature.state),
+                })
+            })
+            .collect::<Result<Vec<_>, AppError>>()?,
+        work_items: snapshot
+            .work_items
+            .into_iter()
+            .map(|item| {
+                Ok(workboard_core::WorkItem {
+                    id: core_work_item_id(item.id),
+                    feature_id: core_feature_id(item.feature_id),
+                    key: workboard_core::WorkItemKey::new(item.key)
+                        .map_err(|error| AppError::Domain(error.to_string()))?,
+                    slug: workboard_core::Slug::new(item.slug)
+                        .map_err(|error| AppError::Domain(error.to_string()))?,
+                    title: item.title,
+                    status: core_work_item_status(item.status),
+                    document_id: core_document_id(item.document_id),
+                    repository_ids: item
+                        .repository_ids
+                        .into_iter()
+                        .map(core_repository_id)
+                        .collect(),
+                })
+            })
+            .collect::<Result<Vec<_>, AppError>>()?,
+        documents: snapshot
+            .documents
+            .into_iter()
+            .map(|document| workboard_core::MarkdownDocument {
+                id: core_document_id(document.id),
+                owner: core_owner(document.owner),
+                repository_id: core_repository_id(document.repository_id),
+                relative_path: document.relative_path.into(),
+                content_hash: document.content_hash,
+                observed_commit: document.observed_commit,
+            })
+            .collect(),
+        checkouts: snapshot
+            .checkouts
+            .into_iter()
+            .map(|checkout| workboard_core::Checkout {
+                id: core_checkout_id(checkout.id),
+                repository_id: core_repository_id(checkout.repository_id),
+                git_worktree_identity: checkout.git_worktree_identity,
+                branch: checkout.branch,
+                head: checkout.head,
+                availability: core_checkout_availability(checkout.availability),
+                replaces_checkout_id: checkout.replaces_checkout_id.map(core_checkout_id),
+                paths: checkout
+                    .paths
+                    .into_iter()
+                    .map(|path| workboard_core::CheckoutPathInterval {
+                        id: workboard_core::CheckoutPathId::from_uuid(*path.id.as_uuid()),
+                        checkout_id: core_checkout_id(path.checkout_id),
+                        path: path.path.into(),
+                        observed_from: path.observed_from,
+                        observed_until: path.observed_until,
+                    })
+                    .collect(),
+            })
+            .collect(),
+        effective_checkouts: snapshot
+            .effective_checkouts
+            .into_iter()
+            .map(|checkout| workboard_core::EffectiveCheckout {
+                feature_id: core_feature_id(checkout.feature_id),
+                work_item_id: checkout.work_item_id.map(core_work_item_id),
+                repository_id: core_repository_id(checkout.repository_id),
+                checkout_id: core_checkout_id(checkout.checkout_id),
+                inherited: checkout.inherited,
+            })
+            .collect(),
+        sessions: snapshot
+            .sessions
+            .into_iter()
+            .map(|session| {
+                Ok(workboard_core::NativeSession {
+                    id: workboard_core::ConversationId::from_uuid(*session.id.as_uuid()),
+                    native: workboard_core::ConversationRef::new(
+                        core_provider(session.native.tool),
+                        session.native.native_id,
+                    )
+                    .map_err(|error| AppError::Domain(error.to_string()))?,
+                    discovered_at: session.discovered_at,
+                })
+            })
+            .collect::<Result<Vec<_>, AppError>>()?,
+        associations: snapshot
+            .associations
+            .into_iter()
+            .map(|association| workboard_core::NativeSessionAssociation {
+                id: workboard_core::AssociationIntervalId::from_uuid(*association.id.as_uuid()),
+                session_id: workboard_core::ConversationId::from_uuid(
+                    *association.session_id.as_uuid(),
+                ),
+                owner: core_owner(association.owner),
+                role: core_role(association.role),
+                associated_from: association.associated_from,
+                associated_until: association.associated_until,
+            })
+            .collect(),
+    })
+}
+
+fn core_repository_id(id: workboard_client_protocol::RepositoryId) -> workboard_core::RepositoryId {
+    workboard_core::RepositoryId::from_uuid(*id.as_uuid())
+}
+
+fn core_epic_id(id: workboard_client_protocol::EpicId) -> workboard_core::EpicId {
+    workboard_core::EpicId::from_uuid(*id.as_uuid())
+}
+
+fn core_feature_id(id: workboard_client_protocol::FeatureId) -> workboard_core::FeatureId {
+    workboard_core::FeatureId::from_uuid(*id.as_uuid())
+}
+
+fn core_work_item_id(id: workboard_client_protocol::WorkItemId) -> workboard_core::WorkItemId {
+    workboard_core::WorkItemId::from_uuid(*id.as_uuid())
+}
+
+fn core_checkout_id(id: workboard_client_protocol::CheckoutId) -> workboard_core::CheckoutId {
+    workboard_core::CheckoutId::from_uuid(*id.as_uuid())
+}
+
+fn core_document_id(id: workboard_client_protocol::DocumentId) -> workboard_core::DocumentId {
+    workboard_core::DocumentId::from_uuid(*id.as_uuid())
+}
+
+fn core_owner(owner: workboard_client_protocol::OwnerProjection) -> HierarchyOwner {
+    match owner {
+        workboard_client_protocol::OwnerProjection::Epic(id) => {
+            HierarchyOwner::Epic(core_epic_id(id))
+        }
+        workboard_client_protocol::OwnerProjection::Feature(id) => {
+            HierarchyOwner::Feature(core_feature_id(id))
+        }
+        workboard_client_protocol::OwnerProjection::WorkItem(id) => {
+            HierarchyOwner::WorkItem(core_work_item_id(id))
+        }
+    }
+}
+
+fn core_provider(provider: workboard_client_protocol::Provider) -> Tool {
+    match provider {
+        workboard_client_protocol::Provider::Claude => Tool::Claude,
+        workboard_client_protocol::Provider::Codex => Tool::Codex,
+    }
+}
+
+fn core_role(role: workboard_client_protocol::ManagedSessionRole) -> ManagedSessionRole {
+    match role {
+        workboard_client_protocol::ManagedSessionRole::EpicNavigation => {
+            ManagedSessionRole::EpicNavigation
+        }
+        workboard_client_protocol::ManagedSessionRole::FeaturePlanning => {
+            ManagedSessionRole::FeaturePlanning
+        }
+        workboard_client_protocol::ManagedSessionRole::WorkItemExecution => {
+            ManagedSessionRole::WorkItemExecution
+        }
+        workboard_client_protocol::ManagedSessionRole::Debugging => ManagedSessionRole::Debugging,
+        workboard_client_protocol::ManagedSessionRole::Review => ManagedSessionRole::Review,
+    }
+}
+
+fn core_work_item_status(
+    status: workboard_client_protocol::WorkItemStatus,
+) -> workboard_core::WorkItemStatus {
+    match status {
+        workboard_client_protocol::WorkItemStatus::Backlog => {
+            workboard_core::WorkItemStatus::Backlog
+        }
+        workboard_client_protocol::WorkItemStatus::Ready => workboard_core::WorkItemStatus::Ready,
+        workboard_client_protocol::WorkItemStatus::InProgress => {
+            workboard_core::WorkItemStatus::InProgress
+        }
+        workboard_client_protocol::WorkItemStatus::Blocked => {
+            workboard_core::WorkItemStatus::Blocked
+        }
+        workboard_client_protocol::WorkItemStatus::Review => workboard_core::WorkItemStatus::Review,
+        workboard_client_protocol::WorkItemStatus::Done => workboard_core::WorkItemStatus::Done,
+        workboard_client_protocol::WorkItemStatus::Cancelled => {
+            workboard_core::WorkItemStatus::Cancelled
+        }
+    }
+}
+
+fn core_checkout_availability(
+    availability: workboard_client_protocol::CheckoutAvailability,
+) -> CheckoutAvailability {
+    match availability {
+        workboard_client_protocol::CheckoutAvailability::Available => {
+            CheckoutAvailability::Available
+        }
+        workboard_client_protocol::CheckoutAvailability::Missing => CheckoutAvailability::Missing,
+        workboard_client_protocol::CheckoutAvailability::Deleted => CheckoutAvailability::Deleted,
+        workboard_client_protocol::CheckoutAvailability::Replaced => CheckoutAvailability::Replaced,
+    }
+}
+
+fn core_workflow_state(
+    state: workboard_client_protocol::WorkflowState,
+) -> workboard_core::WorkflowState {
+    match state {
+        workboard_client_protocol::WorkflowState::Draft => workboard_core::WorkflowState::Draft,
+        workboard_client_protocol::WorkflowState::WorktreePending => {
+            workboard_core::WorkflowState::WorktreePending
+        }
+        workboard_client_protocol::WorkflowState::PlanningLaunchPending => {
+            workboard_core::WorkflowState::PlanningLaunchPending
+        }
+        workboard_client_protocol::WorkflowState::PlanningActive => {
+            workboard_core::WorkflowState::PlanningActive
+        }
+        workboard_client_protocol::WorkflowState::ProposalReady => {
+            workboard_core::WorkflowState::ProposalReady
+        }
+        workboard_client_protocol::WorkflowState::AwaitingApproval => {
+            workboard_core::WorkflowState::AwaitingApproval
+        }
+        workboard_client_protocol::WorkflowState::Publishing => {
+            workboard_core::WorkflowState::Publishing
+        }
+        workboard_client_protocol::WorkflowState::Planned => workboard_core::WorkflowState::Planned,
+        workboard_client_protocol::WorkflowState::WorkItemLaunchPending => {
+            workboard_core::WorkflowState::WorkItemLaunchPending
+        }
+        workboard_client_protocol::WorkflowState::WorkItemActive => {
+            workboard_core::WorkflowState::WorkItemActive
+        }
+        workboard_client_protocol::WorkflowState::ReconciliationRequired => {
+            workboard_core::WorkflowState::ReconciliationRequired
+        }
+        workboard_client_protocol::WorkflowState::Blocked => workboard_core::WorkflowState::Blocked,
+        workboard_client_protocol::WorkflowState::Paused => workboard_core::WorkflowState::Paused,
+        workboard_client_protocol::WorkflowState::Completed => {
+            workboard_core::WorkflowState::Completed
+        }
+        workboard_client_protocol::WorkflowState::Cancelled => {
+            workboard_core::WorkflowState::Cancelled
+        }
+    }
 }
 
 fn output<T: Serialize>(value: &T, json: bool, human: String) -> Result<String, AppError> {
@@ -2373,10 +2714,15 @@ fn markdown_title(body: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::process::Command;
 
     use clap::Parser;
+    use rusqlite::params;
     use tempfile::TempDir;
+    use workboard_application::workspace::WorkboardApplication;
+    use workboard_core::{RepositoryId, WorkspaceId};
+    use workboard_daemon::{DaemonServer, EndpointRegistration};
 
     use crate::selector::SelectionCandidate;
 
@@ -2389,6 +2735,63 @@ mod tests {
     fn derives_safe_slugs() {
         assert_eq!(slugify("Venue Availability API"), "venue-availability-api");
         assert_eq!(slugify("  Mixed___punctuation  "), "mixed-punctuation");
+    }
+
+    #[test]
+    fn migrated_bare_board_and_show_reads_require_the_daemon_client() {
+        let directory = TempDir::new().expect("temporary directory");
+        let database = directory.path().join("workboard.sqlite");
+        let application = WorkboardApplication::open(&database).expect("open application");
+        let workspace_id = WorkspaceId::generate();
+        let repository_id = RepositoryId::generate();
+        let mut connection = rusqlite::Connection::open(&database).expect("open fixture database");
+        connection
+            .pragma_update(None, "foreign_keys", "ON")
+            .expect("enable foreign keys");
+        let transaction = connection.transaction().expect("fixture transaction");
+        transaction
+            .execute(
+                "INSERT INTO workspaces (id, slug, title, planning_store_repository_id, created_at)
+                 VALUES (?1, 'workspace', 'Workspace', ?2, '2026-08-30T00:00:00Z')",
+                params![workspace_id.to_string(), repository_id.to_string()],
+            )
+            .expect("insert Workspace");
+        transaction
+            .execute(
+                "INSERT INTO repositories (
+                     id, workspace_id, slug, title, git_common_directory, default_branch,
+                     is_planning_store, created_at
+                 ) VALUES (
+                     ?1, ?2, 'planning', 'Planning', 'C:/planning/.git', 'main', 1,
+                     '2026-08-30T00:00:00Z'
+                 )",
+                params![repository_id.to_string(), workspace_id.to_string()],
+            )
+            .expect("insert repository");
+        transaction.commit().expect("commit fixture");
+        drop(connection);
+        let server = DaemonServer::start_application(
+            application,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+            "opaque-token",
+        )
+        .expect("start daemon");
+        let registration =
+            EndpointRegistration::claim(&database, &server.descriptor()).expect("publish endpoint");
+        let database_text = database.to_str().expect("database path");
+        let bare =
+            execute_from(["workboard", "--database", database_text, "--json"]).expect("bare board");
+        let shown = execute_from(["workboard", "--database", database_text, "--json", "show"])
+            .expect("structured show");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&bare).expect("bare JSON"),
+            serde_json::from_str::<serde_json::Value>(&shown).expect("show JSON")
+        );
+        drop(server);
+        let error = execute_from(["workboard", "--database", database_text, "--json", "show"])
+            .expect_err("no storage fallback");
+        assert_eq!(error.code(), "daemon_io");
+        drop(registration);
     }
 
     #[cfg(windows)]

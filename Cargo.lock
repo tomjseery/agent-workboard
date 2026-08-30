@@ -1782,6 +1782,7 @@ dependencies = [
  "uuid",
  "workboard-adapter-claude",
  "workboard-adapter-codex",
+ "workboard-client-protocol",
  "workboard-core",
  "workboard-native",
 ]
@@ -1794,13 +1795,37 @@ dependencies = [
  "crossterm",
  "directories",
  "ratatui",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
  "time",
  "workboard-application",
+ "workboard-client",
+ "workboard-client-protocol",
  "workboard-core",
  "workboard-daemon",
+]
+
+[[package]]
+name = "workboard-client"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "workboard-client-protocol",
+]
+
+[[package]]
+name = "workboard-client-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "time",
+ "uuid",
 ]
 
 [[package]]
@@ -1819,12 +1844,16 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "notify",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror",
+ "time",
  "uuid",
  "workboard-application",
+ "workboard-client",
+ "workboard-client-protocol",
  "workboard-core",
 ]
 

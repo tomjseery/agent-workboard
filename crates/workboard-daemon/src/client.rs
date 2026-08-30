@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use crate::error::DaemonError;
 use crate::protocol::{
-    MAX_MESSAGE_BYTES, PROTOCOL_VERSION, RequestEnvelope, ResponseEnvelope, WriteCommand,
+    LEGACY_PROTOCOL_VERSION, MAX_MESSAGE_BYTES, RequestEnvelope, ResponseEnvelope, WriteCommand,
 };
 
 #[derive(Debug, Clone)]
@@ -27,7 +27,7 @@ impl DaemonClient {
 
     pub fn request(&self, command: WriteCommand) -> Result<Value, DaemonError> {
         let request = RequestEnvelope {
-            protocol_version: PROTOCOL_VERSION,
+            protocol_version: LEGACY_PROTOCOL_VERSION,
             token: self.token.clone(),
             command,
         };
@@ -55,7 +55,7 @@ impl DaemonClient {
             )));
         }
         let response: ResponseEnvelope = serde_json::from_slice(&response)?;
-        if response.protocol_version != PROTOCOL_VERSION {
+        if response.protocol_version != LEGACY_PROTOCOL_VERSION {
             return Err(DaemonError::UnsupportedProtocol(response.protocol_version));
         }
         if let Some(error) = response.error {
