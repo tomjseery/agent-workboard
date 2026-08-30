@@ -6,4 +6,17 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 cargo test --workspace --all-targets
-exit $LASTEXITCODE
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+Push-Location (Join-Path $PSScriptRoot '..\apps\workboard-desktop')
+try {
+    npm run typecheck
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    npm test
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    npm run build
+    exit $LASTEXITCODE
+}
+finally {
+    Pop-Location
+}

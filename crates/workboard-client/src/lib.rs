@@ -4,23 +4,27 @@ mod error;
 pub mod framing;
 
 use std::fs;
-use std::net::{SocketAddr, TcpStream};
+use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
 pub use error::ClientError;
 use serde::{Deserialize, Serialize};
 use workboard_client_protocol::{
-    BoardSnapshot, CURRENT_PROTOCOL_VERSION, EventCursor, EventEnvelope, HandshakeRequest,
-    HandshakeResponse, HierarchyChildren, HierarchyRef, Operation, PREVIOUS_PROTOCOL_VERSION,
-    ProtocolError, ReadQuery, ReadQueryCode, RequestEnvelope, RequestId, ResponseEnvelope,
-    ResponseResult, ResyncReason, ResyncRequirement, SUPPORTED_READ_VERSIONS, ServerMessage,
-    SubscriptionRequest, WorkspaceId, WorkspaceSummary,
+    BoardSnapshot, CURRENT_PROTOCOL_VERSION, CommandOperation, EventCursor, EventEnvelope,
+    HandshakeRequest, HandshakeResponse, HierarchyChildren, HierarchyRef, Operation,
+    PREVIOUS_PROTOCOL_VERSION, ProtocolError, ReadQuery, ReadQueryCode, RequestEnvelope, RequestId,
+    ResponseEnvelope, ResponseResult, ResyncReason, ResyncRequirement, SUPPORTED_READ_VERSIONS,
+    ServerMessage, SubscriptionRequest, WorkspaceId, WorkspaceSummary,
 };
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 const RECONNECT_DELAY: Duration = Duration::from_millis(50);
+const MIN_SUBSCRIPTION_TIMEOUT_MS: u64 = 100;
+const MAX_SUBSCRIPTION_TIMEOUT_MS: u64 = 5_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -91,8 +95,11 @@ impl WorkboardClient {
         &self,
         workspace_id: WorkspaceId,
     ) -> Result<WorkspaceSummary, ClientError> {
-        match self.query(workspace_id, ReadQuery::WorkspaceSummary)? {
-            ResponseResult::WorkspaceSummary(summary) => Ok(summary),
+        match self
+            .query(workspace_id, ReadQuery::WorkspaceSummary)?
+            .result
+        {
+            Some(ResponseResult::WorkspaceSummary(summary)) => Ok(summary),
             _ => Err(ClientError::UnexpectedResponse),
         }
     }
@@ -102,15 +109,18 @@ impl WorkboardClient {
         workspace_id: WorkspaceId,
         parent: HierarchyRef,
     ) -> Result<HierarchyChildren, ClientError> {
-        match self.query(workspace_id, ReadQuery::HierarchyChildren { parent })? {
-            ResponseResult::HierarchyChildren(children) => Ok(children),
+        match self
+            .query(workspace_id, ReadQuery::HierarchyChildren { parent })?
+            .result
+        {
+            Some(ResponseResult::HierarchyChildren(children)) => Ok(children),
             _ => Err(ClientError::UnexpectedResponse),
         }
     }
 
     pub fn board_snapshot(&self, workspace_id: WorkspaceId) -> Result<BoardSnapshot, ClientError> {
-        match self.query(workspace_id, ReadQuery::BoardSnapshot)? {
-            ResponseResult::BoardSnapshot(snapshot) => Ok(snapshot),
+        match self.query(workspace_id, ReadQuery::BoardSnapshot)?.result {
+            Some(ResponseResult::BoardSnapshot(snapshot)) => Ok(snapshot),
             _ => Err(ClientError::UnexpectedResponse),
         }
     }
@@ -141,11 +151,11 @@ impl WorkboardClient {
         }
     }
 
-    fn query(
+    pub fn query(
         &self,
         workspace_id: WorkspaceId,
         query: ReadQuery,
-    ) -> Result<ResponseResult, ClientError> {
+    ) -> Result<ResponseEnvelope, ClientError> {
         let request = RequestEnvelope {
             protocol_version: self.handshake.negotiated_read_version,
             request_id: RequestId::generate(),
@@ -154,9 +164,25 @@ impl WorkboardClient {
             idempotency_key: None,
             operation: Operation::Query(query),
         };
-        self.send(&request)?
-            .result
-            .ok_or(ClientError::UnexpectedResponse)
+        self.send(&request)
+    }
+
+    pub fn execute(
+        &self,
+        workspace_id: WorkspaceId,
+        expected_revision: u64,
+        idempotency_key: String,
+        command: CommandOperation,
+    ) -> Result<ResponseEnvelope, ClientError> {
+        let request = RequestEnvelope {
+            protocol_version: CURRENT_PROTOCOL_VERSION,
+            request_id: RequestId::generate(),
+            workspace_id: Some(workspace_id),
+            expected_revision: Some(expected_revision),
+            idempotency_key: Some(idempotency_key),
+            operation: Operation::Command(command),
+        };
+        self.send(&request)
     }
 
     fn send(&self, request: &RequestEnvelope) -> Result<ResponseEnvelope, ClientError> {
@@ -204,6 +230,7 @@ pub struct Subscription {
     workspace_id: WorkspaceId,
     cursor: EventCursor,
     stream: TcpStream,
+    cancellation: Arc<SubscriptionCancellationState>,
 }
 
 impl Subscription {
@@ -212,7 +239,32 @@ impl Subscription {
         workspace_id: WorkspaceId,
         cursor: Option<EventCursor>,
     ) -> Result<Self, ClientError> {
+        Self::connect_with_cancellation(
+            client,
+            workspace_id,
+            cursor,
+            Arc::new(SubscriptionCancellationState::default()),
+        )
+    }
+
+    fn connect_with_cancellation(
+        client: WorkboardClient,
+        workspace_id: WorkspaceId,
+        cursor: Option<EventCursor>,
+        cancellation: Arc<SubscriptionCancellationState>,
+    ) -> Result<Self, ClientError> {
+        if cancellation.cancelled.load(Ordering::Acquire) {
+            return Err(ClientError::SubscriptionCancelled);
+        }
         let mut stream = client.open_stream()?;
+        let subscription_timeout = Duration::from_millis(
+            client
+                .handshake
+                .heartbeat_interval_ms
+                .saturating_mul(3)
+                .clamp(MIN_SUBSCRIPTION_TIMEOUT_MS, MAX_SUBSCRIPTION_TIMEOUT_MS),
+        );
+        stream.set_read_timeout(Some(subscription_timeout))?;
         let request = RequestEnvelope {
             protocol_version: client.handshake.negotiated_read_version,
             request_id: RequestId::generate(),
@@ -235,11 +287,13 @@ impl Subscription {
         let Some(ResponseResult::SubscriptionAccepted { cursor }) = response.result else {
             return Err(ClientError::UnexpectedResponse);
         };
+        cancellation.set_stream(&stream)?;
         Ok(Self {
             client,
             workspace_id,
             cursor,
             stream,
+            cancellation,
         })
     }
 
@@ -247,16 +301,39 @@ impl Subscription {
         self.cursor
     }
 
+    pub fn cancellation_handle(&self) -> SubscriptionCancellation {
+        SubscriptionCancellation {
+            state: Arc::clone(&self.cancellation),
+        }
+    }
+
     pub fn next_update(&mut self) -> Result<SubscriptionUpdate, ClientError> {
+        self.next_update_with_reconnect(true)
+    }
+
+    pub fn next_update_without_reconnect(&mut self) -> Result<SubscriptionUpdate, ClientError> {
+        self.next_update_with_reconnect(false)
+    }
+
+    fn next_update_with_reconnect(
+        &mut self,
+        reconnect: bool,
+    ) -> Result<SubscriptionUpdate, ClientError> {
         loop {
-            match framing::read_frame::<ServerMessage>(&mut self.stream) {
+            let result = framing::read_frame::<ServerMessage>(&mut self.stream);
+            if self.cancellation.cancelled.load(Ordering::Acquire) {
+                return Err(ClientError::SubscriptionCancelled);
+            }
+            match result {
                 Ok(ServerMessage::Event(event)) => return self.accept_event(*event),
                 Ok(ServerMessage::Heartbeat(_)) => {}
                 Ok(ServerMessage::ResyncRequired(requirement)) => {
                     return self.resync(requirement);
                 }
                 Ok(ServerMessage::Response(_)) => return Err(ClientError::UnexpectedResponse),
-                Err(ClientError::Io(error)) if is_disconnect(&error) => self.reconnect()?,
+                Err(ClientError::Io(error)) if reconnect && is_disconnect(&error) => {
+                    self.reconnect()?
+                }
                 Err(ClientError::Io(error))
                     if matches!(
                         error.kind(),
@@ -305,11 +382,19 @@ impl Subscription {
     fn reconnect(&mut self) -> Result<(), ClientError> {
         let mut last_error = None;
         for _ in 0..20 {
+            if self.cancellation.cancelled.load(Ordering::Acquire) {
+                return Err(ClientError::SubscriptionCancelled);
+            }
             thread::sleep(RECONNECT_DELAY);
             match self.client.perform_handshake() {
                 Ok(handshake) => {
                     self.client.handshake = handshake;
-                    match Self::connect(self.client.clone(), self.workspace_id, Some(self.cursor)) {
+                    match Self::connect_with_cancellation(
+                        self.client.clone(),
+                        self.workspace_id,
+                        Some(self.cursor),
+                        Arc::clone(&self.cancellation),
+                    ) {
                         Ok(replacement) => {
                             self.client = replacement.client;
                             self.stream = replacement.stream;
@@ -338,6 +423,44 @@ impl Subscription {
             requirement,
             snapshot,
         })
+    }
+}
+
+#[derive(Default)]
+struct SubscriptionCancellationState {
+    cancelled: AtomicBool,
+    stream: Mutex<Option<TcpStream>>,
+}
+
+impl SubscriptionCancellationState {
+    fn set_stream(&self, stream: &TcpStream) -> Result<(), ClientError> {
+        let cancellation_stream = stream.try_clone()?;
+        if self.cancelled.load(Ordering::Acquire) {
+            let _ = cancellation_stream.shutdown(Shutdown::Both);
+            return Err(ClientError::SubscriptionCancelled);
+        }
+        *self.stream.lock().expect("subscription stream lock") = Some(cancellation_stream);
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+pub struct SubscriptionCancellation {
+    state: Arc<SubscriptionCancellationState>,
+}
+
+impl SubscriptionCancellation {
+    pub fn cancel(&self) {
+        self.state.cancelled.store(true, Ordering::Release);
+        if let Some(stream) = self
+            .state
+            .stream
+            .lock()
+            .expect("subscription stream lock")
+            .take()
+        {
+            let _ = stream.shutdown(Shutdown::Both);
+        }
     }
 }
 
@@ -394,6 +517,7 @@ pub fn remote_error(error: ProtocolError) -> ClientError {
 #[cfg(test)]
 mod tests {
     use std::net::{IpAddr, Ipv4Addr, TcpListener};
+    use std::sync::mpsc;
     use std::thread;
 
     use workboard_client_protocol::{
@@ -541,6 +665,83 @@ mod tests {
         };
         assert_eq!(requirement.reason, ResyncReason::HeartbeatLost);
         assert_eq!(snapshot.workspace.id, workspace_id);
+        server.join().expect("fake server");
+    }
+
+    #[test]
+    fn cancellation_interrupts_a_blocking_subscription_read() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let address = listener.local_addr().expect("address");
+        let workspace_id = WorkspaceId::generate();
+        let daemon_instance_id = DaemonInstanceId::generate();
+        let (accepted_sender, accepted_receiver) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (mut handshake_stream, _) = listener.accept().expect("handshake connection");
+            let authenticated: TestAuthenticatedRequest =
+                framing::read_frame(&mut handshake_stream).expect("handshake frame");
+            let handshake = ResponseEnvelope::success(
+                CURRENT_PROTOCOL_VERSION,
+                &authenticated.request,
+                None,
+                ResponseResult::Handshake(HandshakeResponse {
+                    daemon_instance_id,
+                    negotiated_read_version: CURRENT_PROTOCOL_VERSION,
+                    compatible_command_versions: Vec::new(),
+                    workspaces: vec![WorkspaceReference {
+                        id: workspace_id,
+                        slug: "workspace".to_owned(),
+                        title: "Workspace".to_owned(),
+                    }],
+                    command_capabilities: Vec::new(),
+                    event_version: 1,
+                    heartbeat_interval_ms: 1_000,
+                    max_frame_bytes: workboard_client_protocol::MAX_FRAME_BYTES,
+                }),
+                Vec::new(),
+            );
+            framing::write_frame(
+                &mut handshake_stream,
+                &ServerMessage::Response(Box::new(handshake)),
+            )
+            .expect("handshake response");
+            let (mut subscription_stream, _) = listener.accept().expect("subscription connection");
+            let authenticated: TestAuthenticatedRequest =
+                framing::read_frame(&mut subscription_stream).expect("subscription frame");
+            let accepted = ResponseEnvelope::success(
+                CURRENT_PROTOCOL_VERSION,
+                &authenticated.request,
+                Some(0),
+                ResponseResult::SubscriptionAccepted {
+                    cursor: EventCursor {
+                        daemon_instance_id,
+                        sequence: 0,
+                    },
+                },
+                Vec::new(),
+            );
+            framing::write_frame(
+                &mut subscription_stream,
+                &ServerMessage::Response(Box::new(accepted)),
+            )
+            .expect("subscription response");
+            accepted_sender.send(()).expect("accepted signal");
+            thread::sleep(Duration::from_secs(1));
+        });
+        let client = WorkboardClient::connect(EndpointDescriptor {
+            protocol_version: CURRENT_PROTOCOL_VERSION,
+            address,
+            token: "opaque-token".to_owned(),
+        })
+        .expect("client");
+        let mut subscription = client.subscribe(workspace_id, None).expect("subscription");
+        let cancellation = subscription.cancellation_handle();
+        let worker = thread::spawn(move || subscription.next_update());
+        accepted_receiver.recv().expect("accepted subscription");
+        cancellation.cancel();
+        assert!(matches!(
+            worker.join().expect("subscription worker"),
+            Err(ClientError::SubscriptionCancelled)
+        ));
         server.join().expect("fake server");
     }
 }

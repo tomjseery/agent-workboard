@@ -9,6 +9,7 @@ members = [
     "crates/workboard-client",
     "crates/workboard-daemon",
     "crates/workboard-cli",
+    "apps/workboard-desktop/src-tauri",
 ]
 resolver = "3"
 
