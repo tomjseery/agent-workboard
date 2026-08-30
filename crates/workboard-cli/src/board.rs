@@ -31,6 +31,7 @@ enum BoardControl {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaunchOption {
     pub session_id: Option<ConversationId>,
+    pub writer_reservation_key: Option<String>,
     pub repository_id: RepositoryId,
     pub provider: Tool,
     pub profile: LaunchProfile,
@@ -45,6 +46,7 @@ pub struct LaunchOption {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaunchSelection {
     pub session_id: Option<ConversationId>,
+    pub writer_reservation_key: Option<String>,
     pub repository_id: RepositoryId,
     pub provider: Tool,
     pub profile: LaunchProfile,
@@ -136,6 +138,7 @@ impl LaunchPickerState {
     fn selection(&self) -> Option<LaunchSelection> {
         self.selected().map(|option| LaunchSelection {
             session_id: option.session_id,
+            writer_reservation_key: option.writer_reservation_key.clone(),
             repository_id: option.repository_id,
             provider: option.provider,
             profile: option.profile.clone(),
@@ -1250,6 +1253,7 @@ mod tests {
             title: "Start Work item".to_owned(),
             options: vec![LaunchOption {
                 session_id: None,
+                writer_reservation_key: None,
                 repository_id,
                 provider: Tool::Codex,
                 profile: LaunchProfile::suggested(
