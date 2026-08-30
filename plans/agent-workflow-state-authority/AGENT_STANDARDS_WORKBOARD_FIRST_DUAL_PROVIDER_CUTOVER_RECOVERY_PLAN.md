@@ -57,6 +57,54 @@ then-open Workboard gaps: scoped repository-instruction paths and structured ato
 
 Workboard item: `freeze-cutover-recovery-baseline`.
 
+Status: complete on 2026-08-30. The evidence was captured without changing Agent Standards canonical or
+generated implementation sources.
+
+Frozen identities:
+
+- Agent Standards head: `3cef65a492cc6ecb24f54d78cfbb299a19f891d1`.
+- Epic: `agent-workflow-state-authority`, document `c7502a6c-0308-4c65-a040-bd12ea7f2b4b`, content hash
+  `ca9fd891730f6381fb17aedfc0fa2ae4ab2c9b72f5a2986a45b9bcc134c74c76`.
+- Planning store: `5617f5b2c9db7124870b7bf0409a99eefee84880`. The Epic document itself remains observed at
+  `531ca002f9f07b71d09835911e4123682e3bf16a`; the later commit published this Feature and its Work items
+  without changing the Epic body.
+- Feature checkout: `3844560f-c2f7-46cd-af88-5d3a593881a1`, branch
+  `Feature/Agent-Standards-Workboard-First-Cutover-Recovery`, at the frozen head and present in Git.
+- Phase checkout: `44e17788-c13e-4ee1-ae87-2b0fd9b2805a`, branch
+  `work-item/bc6f9a65-303e-4f40-81b3-ad900cf8680b`, at the frozen head and present in Git.
+
+The two predecessors remain preserved. `workboard-managed-agent-standards-cutover` is `planning_active`,
+has no document, and retains Claude planning session `27479219-a0b5-48e0-80a2-509aa9fe10f6`.
+`agent-standards-dual-provider-workboard-cutover` is `planning_launch_pending`, has no document, and has no
+associated launch. Neither produced durable planning output, so this recovery supersedes or discards no
+artifact.
+
+Workboard nevertheless marks the absent `Feature-Agent-Standards-Dual-Provider-Cutover` and
+`Feature-Agent-Standards-Migration-Compatibility-Cutover` checkouts available. Git lists neither worktree.
+Reconciliation belongs to `frictionless-managed-work-item-launch-and-recovery/reconcile-checkout-liveness-before-launch`:
+observe each missing checkout, mark or replace its Workboard record through the owning lifecycle, and never
+transition or prune either predecessor from this Feature.
+
+Every canonical inventory entry was present and classified `unchanged`: `workflow_runtime.py`; Workflow v2
+provider, state, host, dispatch, and result schemas, compatibility metadata, and examples; the repository
+provider contract; the nine named plan-aware skills; the five named hook modules; Claude and Codex hook
+manifests; worktree tooling; the generated-copy script; and README contracts. The originally named Codex
+manifest path was corrected from nonexistent `.agents/hooks/codex-hooks.json` to canonical
+`.codex/hooks/codex-hooks.json`. Every generated mirror named in this plan was also present and `unchanged`.
+Nothing was classified `evolved` or `replaced` in this evidence-only phase.
+
+The two upstream limitations remain explicit. Scoped assigned context belongs to
+`frictionless-managed-work-item-launch-and-recovery/return-scoped-managed-assigned-context`.
+`work_checkpoint` still accepts only an opaque summary and coarse next-action enum; no published sibling Work
+item yet owns its structured atomic replacement, so later managed checkpoint work must retain this as an
+unresolved dependency rather than inventing a second authority. The globally installed Workboard
+`continue-roadmap` also still wins the bare skill name over the repository skill; Phase 4 owns that collision.
+
+Frozen-head PowerShell verification is green: Workflow verification reports one provider, eight examples,
+five schemas, and contract v2; the complete hook suite reports 424 tests passing with one skip; and the
+generated-copy check reports 299 files current, including 73 skills and 29 docs. Git Bash remains excluded
+from the baseline because MSYS executable resolution changes three environment-sensitive assertions.
+
 Record immutable repository, Epic, planning-store, checkout, and predecessor identities; classify every
 canonical and generated surface as unchanged, evolved, or replaced; inventory plan-aware skills, contracts,
 hooks, worktree tooling, generators, manifests, and documentation; assign every Workboard/Git divergence to
