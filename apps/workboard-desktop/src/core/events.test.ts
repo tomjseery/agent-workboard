@@ -6,6 +6,8 @@ import { applyWorkspaceEvent } from "./events";
 import { hierarchyQueryKeys } from "../features/hierarchy/api/hierarchyQueryKeys";
 import { savedViewQueryKeys } from "../features/saved-views/api/savedViewQueryKeys";
 import { workspaceQueryKeys } from "../features/workspace/api/workspaceQueryKeys";
+import { boardQueryKeys } from "../features/board/api/boardQueryKeys";
+import { createLargeBoardFixture } from "../features/board/fixtures/largeBoardFixture";
 
 const workspaceId = "20000000-0000-0000-0000-000000000001";
 const viewId = "a0000000-0000-0000-0000-000000000001";
@@ -13,11 +15,11 @@ const requestId = "10000000-0000-0000-0000-000000000001";
 const view: BoardViewDefinition = { id: viewId, workspaceId, title: "Service", filters: { query: null, repositoryIds: [], statuses: [] }, grouping: { kind: "hierarchy", lanes: [] }, sort: { field: "title", direction: "ascending" }, density: "comfortable", revision: 2 };
 
 function envelope(result: ResponseEnvelope["result"]): ResponseEnvelope {
-  return { protocolVersion: 3, requestId, correlationId: requestId, workspaceId, authoritativeRevision: 1, serverTimestamp: "2026-08-30T12:00:00Z", result, error: null, diagnostics: [], availableActions: [], partialOutcomes: [] };
+  return { protocolVersion: 4, requestId, correlationId: requestId, workspaceId, authoritativeRevision: 1, serverTimestamp: "2026-08-30T12:00:00Z", result, error: null, diagnostics: [], availableActions: [], partialOutcomes: [] };
 }
 
 function event(queries: EventEnvelope["invalidationScope"] extends infer Scope ? Scope extends { queries: infer Queries } ? Queries : never : never): EventEnvelope {
-  return { protocolVersion: 3, eventVersion: 1, workspaceId, sequence: 2, eventId: "90000000-0000-0000-0000-000000000001", occurredAt: "2026-08-30T12:00:01Z", owner: { kind: "workspace", id: workspaceId }, entityRevision: 2, kind: "board_view_saved", payload: { type: "board_view_saved", value: { view } }, invalidationScope: { queries, owners: [{ kind: "workspace", id: workspaceId }] }, operationCorrelationId: requestId, partialOutcomes: [] };
+  return { protocolVersion: 4, eventVersion: 1, workspaceId, sequence: 2, eventId: "90000000-0000-0000-0000-000000000001", occurredAt: "2026-08-30T12:00:01Z", owner: { kind: "workspace", id: workspaceId }, entityRevision: 2, kind: "board_view_saved", payload: { type: "board_view_saved", value: { view } }, invalidationScope: { queries, owners: [{ kind: "workspace", id: workspaceId }] }, operationCorrelationId: requestId, partialOutcomes: [] };
 }
 
 describe("ordered event cache updates", () => {
@@ -41,5 +43,34 @@ describe("ordered event cache updates", () => {
     applyWorkspaceEvent(queryClient, hierarchyEvent);
     expect(queryClient.getQueryState(hierarchyQueryKeys.workspace(workspaceId))?.isInvalidated).toBe(true);
     expect(queryClient.getQueryState(workspaceQueryKeys.detail(workspaceId))?.isInvalidated).toBe(false);
+  });
+
+  it("patches one card while preserving unrelated card and canonical query references", () => {
+    const queryClient = new QueryClient();
+    const fixture = createLargeBoardFixture();
+    const parameters = { limit: 200, query: null, repositoryIds: [], statuses: [], laneKeys: [], sort: { field: "key" as const, direction: "ascending" as const } };
+    const first = fixture.cards[0]!;
+    const untouched = fixture.cards[1]!;
+    const boardEnvelope = envelope({ type: "board", value: { lanes: fixture.lanes, cards: [first, untouched], nextCursor: null, totalCount: 2, revision: 1 } });
+    const boardKey = boardQueryKeys.board(workspaceId, parameters);
+    const unrelatedKey = boardQueryKeys.board(workspaceId, { ...parameters, statuses: ["done"] });
+    const attentionKey = boardQueryKeys.attentionList(workspaceId, { limit: 200, repositoryIds: [], reasonCodes: [] });
+    const unrelatedEnvelope = envelope({ type: "board", value: { lanes: fixture.lanes, cards: [untouched], nextCursor: null, totalCount: 1, revision: 1 } });
+    const unrelated = { pages: [unrelatedEnvelope], pageParams: [null] };
+    queryClient.setQueryData(boardKey, { pages: [boardEnvelope], pageParams: [null] });
+    queryClient.setQueryData(unrelatedKey, unrelated);
+    queryClient.setQueryData(attentionKey, { pages: [envelope({ type: "attention", value: { entries: fixture.attentionEntries.slice(0, 1), nextCursor: null, totalCount: fixture.attentionEntries.length, revision: 1 } })], pageParams: [null] });
+    const changed = { ...first, revision: first.revision + 1, workItem: { ...first.workItem, title: "Changed title" } };
+    const changedEvent = { ...event(["board", "attention"]), kind: "projection_changed" as const, payload: { type: "board_card_changed" as const, value: { card: changed } }, owner: { kind: "work_item" as const, id: first.workItem.id } };
+    applyWorkspaceEvent(queryClient, changedEvent);
+    const updated = queryClient.getQueryData<{ pages: ResponseEnvelope[] }>(boardKey)!;
+    const result = updated.pages[0]!.result;
+    expect(result?.type).toBe("board");
+    if (result?.type !== "board") throw new Error("board projection missing");
+    expect(result.value.cards[0]!.workItem.title).toBe("Changed title");
+    expect(result.value.cards[1]).toBe(untouched);
+    expect(queryClient.getQueryData(unrelatedKey)).toBe(unrelated);
+    expect(queryClient.getQueryState(boardKey)?.isInvalidated).toBe(false);
+    expect(queryClient.getQueryState(attentionKey)?.isInvalidated).toBe(true);
   });
 });

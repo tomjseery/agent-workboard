@@ -132,6 +132,63 @@
             "succeeded": false
           }
         }
+      },
+      {
+        "type": "board_card_changed",
+        "value": {
+          "card": {
+            "attentionReasons": [
+              {
+                "code": "checkpoint_due",
+                "message": "Checkpoint evidence is due",
+                "rank": 5
+              }
+            ],
+            "availableActions": [],
+            "blockedBy": [],
+            "dependencyReadiness": "ready",
+            "feature": {
+              "epicId": "40000000-0000-0000-0000-000000000001",
+              "id": "50000000-0000-0000-0000-000000000001",
+              "slug": "fixture-feature",
+              "title": "Fixture Feature"
+            },
+            "laneCount": 1,
+            "laneKey": "in_progress",
+            "lanePosition": 1,
+            "parallelReadiness": {
+              "groupKey": "fixture-ready",
+              "readyCount": 1,
+              "waitingCount": 0
+            },
+            "repositories": [
+              {
+                "id": "30000000-0000-0000-0000-000000000001",
+                "slug": "fixture-repository",
+                "title": "Fixture Repository",
+                "workspaceId": "20000000-0000-0000-0000-000000000001"
+              }
+            ],
+            "revision": 3,
+            "sessionSummary": {
+              "active": 1,
+              "idle": 0,
+              "providers": [
+                "codex"
+              ],
+              "total": 1,
+              "unknown": 0
+            },
+            "status": "in_progress",
+            "workItem": {
+              "featureId": "50000000-0000-0000-0000-000000000001",
+              "id": "60000000-0000-0000-0000-000000000001",
+              "key": "WI-1",
+              "slug": "fixture-work-item",
+              "title": "Fixture Work item"
+            }
+          }
+        }
       }
     ],
     "hierarchyNodes": [
@@ -228,6 +285,8 @@
       "workspace_hierarchy",
       "board_views",
       "board_view",
+      "board",
+      "attention",
       "board_snapshot"
     ],
     "readQueryCodes": [
@@ -236,6 +295,8 @@
       "workspace_hierarchy",
       "board_views",
       "board_view",
+      "board",
+      "attention",
       "board_snapshot"
     ],
     "responseResults": [
@@ -245,6 +306,8 @@
       "workspace_hierarchy",
       "board_views",
       "board_view",
+      "board",
+      "attention",
       "board_snapshot",
       "subscription_accepted",
       "command_accepted"
@@ -291,6 +354,48 @@
   },
   "fixtureVersion": 1,
   "frontendRequests": {
+    "attention": {
+      "query": {
+        "type": "attention",
+        "value": {
+          "query": {
+            "cursor": null,
+            "limit": 100,
+            "reasonCodes": [],
+            "repositoryIds": []
+          }
+        }
+      },
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    },
+    "board": {
+      "query": {
+        "type": "board",
+        "value": {
+          "query": {
+            "cursor": null,
+            "laneKeys": [
+              "ready",
+              "in_progress"
+            ],
+            "limit": 100,
+            "query": "fixture",
+            "repositoryIds": [
+              "30000000-0000-0000-0000-000000000001"
+            ],
+            "sort": {
+              "direction": "ascending",
+              "field": "key"
+            },
+            "statuses": [
+              "ready",
+              "in_progress"
+            ]
+          }
+        }
+      },
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    },
     "execute": {
       "command": {
         "type": "approve_feature",
@@ -373,7 +478,7 @@
           }
         }
       },
-      "protocolVersion": 2,
+      "protocolVersion": 3,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -389,7 +494,7 @@
           }
         }
       },
-      "protocolVersion": 2,
+      "protocolVersion": 3,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -405,7 +510,7 @@
           }
         }
       },
-      "protocolVersion": 2,
+      "protocolVersion": 3,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -421,7 +526,7 @@
           }
         }
       },
-      "protocolVersion": 2,
+      "protocolVersion": 3,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -437,7 +542,7 @@
           }
         }
       },
-      "protocolVersion": 2,
+      "protocolVersion": 3,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -453,7 +558,7 @@
           }
         }
       },
-      "protocolVersion": 2,
+      "protocolVersion": 3,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -469,7 +574,7 @@
           }
         }
       },
-      "protocolVersion": 2,
+      "protocolVersion": 3,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -485,7 +590,7 @@
           }
         }
       },
-      "protocolVersion": 2,
+      "protocolVersion": 3,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -501,7 +606,7 @@
           }
         }
       },
-      "protocolVersion": 2,
+      "protocolVersion": 3,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -517,7 +622,7 @@
           }
         }
       },
-      "protocolVersion": 2,
+      "protocolVersion": 3,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     }
@@ -543,7 +648,7 @@
     "reconciliationRequired": true,
     "succeeded": false
   },
-  "protocolVersion": 3,
+  "protocolVersion": 4,
   "readRequests": [
     {
       "expectedRevision": null,
@@ -552,15 +657,15 @@
         "type": "handshake",
         "value": {
           "supportedCommandVersions": [
-            3
+            4
           ],
           "supportedReadVersions": [
-            3,
-            2
+            4,
+            3
           ]
         }
       },
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": null
     },
@@ -573,7 +678,7 @@
           "type": "workspace_summary"
         }
       },
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -592,7 +697,7 @@
           }
         }
       },
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -605,7 +710,7 @@
           "type": "workspace_hierarchy"
         }
       },
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -618,7 +723,7 @@
           "type": "board_views"
         }
       },
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -634,7 +739,63 @@
           }
         }
       },
-      "protocolVersion": 3,
+      "protocolVersion": 4,
+      "requestId": "10000000-0000-0000-0000-000000000001",
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    },
+    {
+      "expectedRevision": null,
+      "idempotencyKey": null,
+      "operation": {
+        "type": "query",
+        "value": {
+          "type": "board",
+          "value": {
+            "query": {
+              "cursor": null,
+              "laneKeys": [
+                "ready",
+                "in_progress"
+              ],
+              "limit": 100,
+              "query": "fixture",
+              "repositoryIds": [
+                "30000000-0000-0000-0000-000000000001"
+              ],
+              "sort": {
+                "direction": "ascending",
+                "field": "key"
+              },
+              "statuses": [
+                "ready",
+                "in_progress"
+              ]
+            }
+          }
+        }
+      },
+      "protocolVersion": 4,
+      "requestId": "10000000-0000-0000-0000-000000000001",
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    },
+    {
+      "expectedRevision": null,
+      "idempotencyKey": null,
+      "operation": {
+        "type": "query",
+        "value": {
+          "type": "attention",
+          "value": {
+            "query": {
+              "cursor": null,
+              "limit": 100,
+              "reasonCodes": [],
+              "repositoryIds": []
+            }
+          }
+        }
+      },
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -647,7 +808,7 @@
           "type": "board_snapshot"
         }
       },
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -663,7 +824,7 @@
           }
         }
       },
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     }
@@ -686,7 +847,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "handshake",
@@ -696,7 +857,7 @@
               "available": false,
               "code": "save_board_view",
               "compatibleVersions": [
-                3
+                4
               ],
               "unavailableReason": {
                 "code": "not_accepted",
@@ -705,13 +866,13 @@
             }
           ],
           "compatibleCommandVersions": [
-            3
+            4
           ],
           "daemonInstanceId": "80000000-0000-0000-0000-000000000001",
           "eventVersion": 1,
           "heartbeatIntervalMs": 1000,
           "maxFrameBytes": 8388608,
-          "negotiatedReadVersion": 3,
+          "negotiatedReadVersion": 4,
           "workspaces": [
             {
               "id": "20000000-0000-0000-0000-000000000001",
@@ -741,7 +902,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "workspace_summary",
@@ -778,7 +939,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "hierarchy_children",
@@ -820,7 +981,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "workspace_hierarchy",
@@ -911,7 +1072,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "board_views",
@@ -968,7 +1129,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "board_view",
@@ -1023,7 +1184,210 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 3,
+      "protocolVersion": 4,
+      "requestId": "10000000-0000-0000-0000-000000000001",
+      "result": {
+        "type": "board",
+        "value": {
+          "cards": [
+            {
+              "attentionReasons": [
+                {
+                  "code": "checkpoint_due",
+                  "message": "Checkpoint evidence is due",
+                  "rank": 5
+                }
+              ],
+              "availableActions": [],
+              "blockedBy": [],
+              "dependencyReadiness": "ready",
+              "feature": {
+                "epicId": "40000000-0000-0000-0000-000000000001",
+                "id": "50000000-0000-0000-0000-000000000001",
+                "slug": "fixture-feature",
+                "title": "Fixture Feature"
+              },
+              "laneCount": 1,
+              "laneKey": "in_progress",
+              "lanePosition": 1,
+              "parallelReadiness": {
+                "groupKey": "fixture-ready",
+                "readyCount": 1,
+                "waitingCount": 0
+              },
+              "repositories": [
+                {
+                  "id": "30000000-0000-0000-0000-000000000001",
+                  "slug": "fixture-repository",
+                  "title": "Fixture Repository",
+                  "workspaceId": "20000000-0000-0000-0000-000000000001"
+                }
+              ],
+              "revision": 3,
+              "sessionSummary": {
+                "active": 1,
+                "idle": 0,
+                "providers": [
+                  "codex"
+                ],
+                "total": 1,
+                "unknown": 0
+              },
+              "status": "in_progress",
+              "workItem": {
+                "featureId": "50000000-0000-0000-0000-000000000001",
+                "id": "60000000-0000-0000-0000-000000000001",
+                "key": "WI-1",
+                "slug": "fixture-work-item",
+                "title": "Fixture Work item"
+              }
+            }
+          ],
+          "lanes": [
+            {
+              "key": "in_progress",
+              "position": 1,
+              "title": "In progress",
+              "totalCount": 1
+            }
+          ],
+          "nextCursor": null,
+          "revision": 41,
+          "totalCount": 1
+        }
+      },
+      "serverTimestamp": "2026-08-30T12:00:00Z",
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    },
+    {
+      "authoritativeRevision": 41,
+      "availableActions": [
+        {
+          "available": false,
+          "code": "approve_feature",
+          "expectedRevision": 41,
+          "unavailableReason": {
+            "code": "not_accepted",
+            "message": "The capability is not accepted."
+          }
+        }
+      ],
+      "correlationId": "10000000-0000-0000-0000-000000000002",
+      "diagnostics": [],
+      "error": null,
+      "partialOutcomes": [],
+      "protocolVersion": 4,
+      "requestId": "10000000-0000-0000-0000-000000000001",
+      "result": {
+        "type": "attention",
+        "value": {
+          "entries": [
+            {
+              "availableActions": [],
+              "card": {
+                "attentionReasons": [
+                  {
+                    "code": "checkpoint_due",
+                    "message": "Checkpoint evidence is due",
+                    "rank": 5
+                  }
+                ],
+                "availableActions": [],
+                "blockedBy": [],
+                "dependencyReadiness": "ready",
+                "feature": {
+                  "epicId": "40000000-0000-0000-0000-000000000001",
+                  "id": "50000000-0000-0000-0000-000000000001",
+                  "slug": "fixture-feature",
+                  "title": "Fixture Feature"
+                },
+                "laneCount": 1,
+                "laneKey": "in_progress",
+                "lanePosition": 1,
+                "parallelReadiness": {
+                  "groupKey": "fixture-ready",
+                  "readyCount": 1,
+                  "waitingCount": 0
+                },
+                "repositories": [
+                  {
+                    "id": "30000000-0000-0000-0000-000000000001",
+                    "slug": "fixture-repository",
+                    "title": "Fixture Repository",
+                    "workspaceId": "20000000-0000-0000-0000-000000000001"
+                  }
+                ],
+                "revision": 3,
+                "sessionSummary": {
+                  "active": 1,
+                  "idle": 0,
+                  "providers": [
+                    "codex"
+                  ],
+                  "total": 1,
+                  "unknown": 0
+                },
+                "status": "in_progress",
+                "workItem": {
+                  "featureId": "50000000-0000-0000-0000-000000000001",
+                  "id": "60000000-0000-0000-0000-000000000001",
+                  "key": "WI-1",
+                  "slug": "fixture-work-item",
+                  "title": "Fixture Work item"
+                }
+              },
+              "owner": {
+                "id": "60000000-0000-0000-0000-000000000001",
+                "kind": "work_item"
+              },
+              "position": 1,
+              "reasons": [
+                {
+                  "code": "checkpoint_due",
+                  "message": "Checkpoint evidence is due",
+                  "rank": 5
+                }
+              ],
+              "repositories": [
+                {
+                  "id": "30000000-0000-0000-0000-000000000001",
+                  "slug": "fixture-repository",
+                  "title": "Fixture Repository",
+                  "workspaceId": "20000000-0000-0000-0000-000000000001"
+                }
+              ],
+              "revision": 3,
+              "subtitle": "WI-1",
+              "title": "Fixture Work item",
+              "totalCount": 1
+            }
+          ],
+          "nextCursor": null,
+          "revision": 41,
+          "totalCount": 1
+        }
+      },
+      "serverTimestamp": "2026-08-30T12:00:00Z",
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    },
+    {
+      "authoritativeRevision": 41,
+      "availableActions": [
+        {
+          "available": false,
+          "code": "approve_feature",
+          "expectedRevision": 41,
+          "unavailableReason": {
+            "code": "not_accepted",
+            "message": "The capability is not accepted."
+          }
+        }
+      ],
+      "correlationId": "10000000-0000-0000-0000-000000000002",
+      "diagnostics": [],
+      "error": null,
+      "partialOutcomes": [],
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "board_snapshot",
@@ -1065,7 +1429,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "subscription_accepted",
@@ -1096,7 +1460,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "command_accepted",
@@ -1128,7 +1492,7 @@
         "diagnostics": [],
         "error": null,
         "partialOutcomes": [],
-        "protocolVersion": 3,
+        "protocolVersion": 4,
         "requestId": "10000000-0000-0000-0000-000000000001",
         "result": {
           "type": "workspace_summary",
@@ -1224,7 +1588,7 @@
             }
           }
         },
-        "protocolVersion": 3,
+        "protocolVersion": 4,
         "sequence": 42,
         "workspaceId": "20000000-0000-0000-0000-000000000001"
       }

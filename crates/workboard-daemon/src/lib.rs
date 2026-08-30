@@ -103,7 +103,11 @@ mod tests {
                 entity: EntityRef::Workspace(workspace),
             }),
             invalidation_scope: Some(InvalidationScope {
-                queries: vec![ReadQueryCode::BoardSnapshot],
+                queries: vec![
+                    ReadQueryCode::Board,
+                    ReadQueryCode::Attention,
+                    ReadQueryCode::BoardSnapshot,
+                ],
                 owners: Vec::new(),
             }),
             operation_correlation_id: RequestId::generate(),

@@ -45,7 +45,7 @@ describe("daemon facade", () => {
     };
     const response = { result: null } as ResponseEnvelope;
     const receipt: SubscriptionReceipt = { subscriptionId: 7 };
-    transport.responses.push(handshake, response, response, response, receipt, receipt);
+    transport.responses.push(handshake, response, response, response, response, response, receipt, receipt);
 
     await facade.handshake();
     await facade.workspaceSummary(workspaceId);
@@ -53,6 +53,8 @@ describe("daemon facade", () => {
       kind: "workspace",
       id: workspaceId,
     });
+    await facade.board(workspaceId, { cursor: null, limit: 200, query: null, repositoryIds: [], statuses: [], laneKeys: [], sort: { field: "key", direction: "ascending" } });
+    await facade.attention(workspaceId, { cursor: null, limit: 200, repositoryIds: [], reasonCodes: [] });
     await facade.execute({
       workspaceId,
       expectedRevision: 41,
@@ -73,6 +75,8 @@ describe("daemon facade", () => {
       "workboard_handshake",
       "workboard_query",
       "workboard_query",
+      "workboard_query",
+      "workboard_query",
       "workboard_execute",
       "workboard_subscribe",
       "workboard_subscribe",
@@ -83,11 +87,13 @@ describe("daemon facade", () => {
         query: { type: "workspace_summary" },
       },
     });
-    expect(transport.invocations[4]?.args?.request).toEqual({
+    expect(transport.invocations[3]?.args?.request).toMatchObject({ workspaceId, query: { type: "board" } });
+    expect(transport.invocations[4]?.args?.request).toMatchObject({ workspaceId, query: { type: "attention" } });
+    expect(transport.invocations[6]?.args?.request).toEqual({
       type: "start",
       value: { workspaceId, cursor: null },
     });
-    expect(transport.invocations[5]?.args?.request).toEqual({
+    expect(transport.invocations[7]?.args?.request).toEqual({
       type: "cancel",
       value: { subscriptionId: 7 },
     });

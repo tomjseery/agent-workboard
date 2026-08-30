@@ -2,6 +2,8 @@ import { Link, Navigate, Outlet, createRootRouteWithContext, createRoute, create
 import { useEffect } from "react";
 
 import type { WorkspaceId } from "../core/generated";
+import { AttentionPage } from "../features/board/pages/AttentionPage";
+import { BoardPage } from "../features/board/pages/BoardPage";
 import { EpicPage } from "../features/hierarchy/pages/EpicPage";
 import { FeaturePage } from "../features/hierarchy/pages/FeaturePage";
 import { RepositoryPage } from "../features/hierarchy/pages/RepositoryPage";
@@ -20,7 +22,7 @@ function AppLayout() {
   useEffect(() => {
     requestAnimationFrame(() => document.getElementById("main-content")?.focus());
   }, [pathname]);
-  return <div className="min-h-screen bg-[var(--canvas)] text-[var(--text)]"><header className="border-b border-[var(--border)] bg-[var(--surface)]"><div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-5 py-4"><Link to="/workspaces/$workspaceId" params={{ workspaceId }} search={{ q: "" }} className="text-lg font-semibold">Agent Workboard</Link><span className="rounded-full border border-[var(--success-muted)] px-3 py-1 text-xs font-semibold text-[var(--success)]">Daemon connected</span></div></header><main id="main-content" tabIndex={-1} className="mx-auto max-w-7xl px-5 py-7"><Outlet /></main></div>;
+  return <div className="min-h-screen bg-[var(--canvas)] text-[var(--text)]"><header className="border-b border-[var(--border)] bg-[var(--surface)]"><div className="mx-auto flex max-w-[96rem] flex-wrap items-center gap-4 px-5 py-4"><Link to="/workspaces/$workspaceId" params={{ workspaceId }} search={{ q: "" }} className="text-lg font-semibold">Agent Workboard</Link><nav aria-label="Primary" className="flex gap-3 text-sm"><Link to="/workspaces/$workspaceId/board" params={{ workspaceId }} activeProps={{ "aria-current": "page" }}>Board</Link><Link to="/workspaces/$workspaceId/attention" params={{ workspaceId }} activeProps={{ "aria-current": "page" }}>What needs me</Link></nav><span className="ml-auto rounded-full border border-[var(--success-muted)] px-3 py-1 text-xs font-semibold text-[var(--success)]">Daemon connected</span></div></header><main id="main-content" tabIndex={-1} className="mx-auto max-w-[96rem] px-5 py-7"><Outlet /></main></div>;
 }
 
 const rootRoute = createRootRouteWithContext<RouterContext>()({ component: AppLayout });
@@ -31,8 +33,10 @@ const epicRoute = createRoute({ getParentRoute: () => rootRoute, path: "/workspa
 const featureRoute = createRoute({ getParentRoute: () => rootRoute, path: "/workspaces/$workspaceId/features/$featureId", validateSearch: hierarchySearchSchema, component: () => { const { workspaceId, featureId } = featureRoute.useParams(); const { q } = featureRoute.useSearch(); const navigate = featureRoute.useNavigate(); return <FeaturePage workspaceId={workspaceId} featureId={featureId} query={q} onQueryChange={(value) => void navigate({ search: { q: value } })} />; } });
 const workItemRoute = createRoute({ getParentRoute: () => rootRoute, path: "/workspaces/$workspaceId/work-items/$workItemId", validateSearch: hierarchySearchSchema, component: () => { const { workspaceId, workItemId } = workItemRoute.useParams(); const { q } = workItemRoute.useSearch(); const navigate = workItemRoute.useNavigate(); return <WorkItemPage workspaceId={workspaceId} workItemId={workItemId} query={q} onQueryChange={(value) => void navigate({ search: { q: value } })} />; } });
 const savedViewRoute = createRoute({ getParentRoute: () => rootRoute, path: "/workspaces/$workspaceId/views/$viewId", validateSearch: hierarchySearchSchema, component: () => { const { workspaceId, viewId } = savedViewRoute.useParams(); const { q } = savedViewRoute.useSearch(); const navigate = savedViewRoute.useNavigate(); return <SavedViewPage workspaceId={workspaceId} viewId={viewId} query={q} onQueryChange={(value) => void navigate({ search: { q: value } })} />; } });
+const boardRoute = createRoute({ getParentRoute: () => rootRoute, path: "/workspaces/$workspaceId/board", component: () => { const { workspaceId } = boardRoute.useParams(); const navigate = boardRoute.useNavigate(); return <BoardPage workspaceId={workspaceId} onOpenWorkItem={(workItemId) => void navigate({ to: "/workspaces/$workspaceId/work-items/$workItemId", params: { workspaceId, workItemId }, search: { q: "" } })} />; } });
+const attentionRoute = createRoute({ getParentRoute: () => rootRoute, path: "/workspaces/$workspaceId/attention", component: () => { const { workspaceId } = attentionRoute.useParams(); const navigate = attentionRoute.useNavigate(); return <AttentionPage workspaceId={workspaceId} onOpenWorkItem={(workItemId) => void navigate({ to: "/workspaces/$workspaceId/work-items/$workItemId", params: { workspaceId, workItemId }, search: { q: "" } })} />; } });
 
-const routeTree = rootRoute.addChildren([indexRoute, workspaceRoute, repositoryRoute, epicRoute, featureRoute, workItemRoute, savedViewRoute]);
+const routeTree = rootRoute.addChildren([indexRoute, workspaceRoute, repositoryRoute, epicRoute, featureRoute, workItemRoute, savedViewRoute, boardRoute, attentionRoute]);
 export const router = createRouter({ routeTree, context: { workspaceId: "00000000-0000-0000-0000-000000000000" } });
 
 declare module "@tanstack/react-router" {

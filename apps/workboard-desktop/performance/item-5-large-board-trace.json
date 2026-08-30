@@ -1,0 +1,37 @@
+{
+  "traceVersion": 1,
+  "recordedAt": "2026-08-30T23:10:49+01:00",
+  "fixture": {
+    "repositories": 100,
+    "features": 1000,
+    "workItems": 10000,
+    "pageItems": 200,
+    "mixedProviders": ["claude", "codex"],
+    "attentionReasonCodes": 8
+  },
+  "browser": {
+    "engine": "chromium",
+    "zoomPercent": 200,
+    "mountedCardNodesUpperBound": 200,
+    "observedInteractionTraceMilliseconds": 985,
+    "interactions": ["select", "arrow_down", "arrow_right", "end", "open"]
+  },
+  "releaseBuild": {
+    "viteBuildMilliseconds": 3800,
+    "javascriptBytes": 452510,
+    "javascriptGzipBytes": 138960,
+    "cssBytes": 15850,
+    "cssGzipBytes": 4070
+  },
+  "scopedUpdate": {
+    "changedCards": 1,
+    "unrelatedCardReferencesPreserved": true,
+    "unrelatedCanonicalQueryReferencesPreserved": true,
+    "wholeBoardInvalidated": false
+  },
+  "timingThresholdEnforced": false,
+  "commands": [
+    "npx vitest run --config vitest.browser.config.ts src/features/board/components/BoardView.browser.test.tsx",
+    "npm run build"
+  ]
+}

@@ -300,6 +300,23 @@ impl FakeServer {
                 density: BoardViewDensity::Comfortable,
                 revision: 1,
             }),
+            ReadQuery::Board { .. } => {
+                ResponseResult::Board(workboard_client_protocol::BoardPage {
+                    lanes: Vec::new(),
+                    cards: Vec::new(),
+                    next_cursor: None,
+                    total_count: 0,
+                    revision: 0,
+                })
+            }
+            ReadQuery::Attention { .. } => {
+                ResponseResult::Attention(workboard_client_protocol::AttentionPage {
+                    entries: Vec::new(),
+                    next_cursor: None,
+                    total_count: 0,
+                    revision: 0,
+                })
+            }
         };
         write_message(
             stream,

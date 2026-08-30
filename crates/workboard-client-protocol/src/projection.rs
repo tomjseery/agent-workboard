@@ -3,8 +3,9 @@ use time::OffsetDateTime;
 use ts_rs::TS;
 
 use crate::{
-    AssociationId, BoardViewId, CheckoutId, CheckoutPathId, DocumentId, EntityRef, EpicId,
-    FeatureId, HierarchyRef, RepositoryId, RepositoryPathId, SessionId, WorkItemId, WorkspaceId,
+    AssociationId, AvailableAction, BoardViewId, CheckoutId, CheckoutPathId, DocumentId, EntityRef,
+    EpicId, FeatureId, HierarchyRef, RepositoryId, RepositoryPathId, SessionId, WorkItemId,
+    WorkspaceId,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -97,6 +98,144 @@ pub struct BoardViewDefinition {
     pub sort: BoardViewSort,
     pub density: BoardViewDensity,
     pub revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardQuery {
+    pub cursor: Option<String>,
+    pub limit: usize,
+    pub query: Option<String>,
+    pub repository_ids: Vec<RepositoryId>,
+    pub statuses: Vec<WorkItemStatus>,
+    pub lane_keys: Vec<String>,
+    pub sort: BoardViewSort,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AttentionQuery {
+    pub cursor: Option<String>,
+    pub limit: usize,
+    pub repository_ids: Vec<RepositoryId>,
+    pub reason_codes: Vec<AttentionReasonCode>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardPage {
+    pub lanes: Vec<BoardLaneProjection>,
+    pub cards: Vec<BoardCardProjection>,
+    pub next_cursor: Option<String>,
+    pub total_count: usize,
+    pub revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AttentionPage {
+    pub entries: Vec<AttentionEntryProjection>,
+    pub next_cursor: Option<String>,
+    pub total_count: usize,
+    pub revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardLaneProjection {
+    pub key: String,
+    pub title: String,
+    pub position: usize,
+    pub total_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardCardProjection {
+    pub work_item: WorkItemReference,
+    pub feature: FeatureReference,
+    pub status: WorkItemStatus,
+    pub lane_key: String,
+    pub lane_position: usize,
+    pub lane_count: usize,
+    pub dependency_readiness: DependencyReadiness,
+    pub blocked_by: Vec<BlockedByEvidence>,
+    pub parallel_readiness: ParallelReadiness,
+    pub repositories: Vec<RepositoryReference>,
+    pub session_summary: SessionSummary,
+    pub attention_reasons: Vec<AttentionReason>,
+    pub revision: u64,
+    pub available_actions: Vec<AvailableAction>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AttentionEntryProjection {
+    pub owner: EntityRef,
+    pub title: String,
+    pub subtitle: String,
+    pub repositories: Vec<RepositoryReference>,
+    pub card: Option<BoardCardProjection>,
+    pub reasons: Vec<AttentionReason>,
+    pub revision: u64,
+    pub available_actions: Vec<AvailableAction>,
+    pub position: usize,
+    pub total_count: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum DependencyReadiness {
+    Ready,
+    Waiting,
+    Blocked,
+    Complete,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockedByEvidence {
+    pub work_item: WorkItemReference,
+    pub status: WorkItemStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ParallelReadiness {
+    pub group_key: String,
+    pub ready_count: usize,
+    pub waiting_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionSummary {
+    pub total: usize,
+    pub active: usize,
+    pub idle: usize,
+    pub unknown: usize,
+    pub providers: Vec<Provider>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AttentionReason {
+    pub code: AttentionReasonCode,
+    pub rank: usize,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum AttentionReasonCode {
+    ApprovalRequired,
+    RevisionRequested,
+    ReconciliationRequired,
+    Blocked,
+    CheckpointDue,
+    InterruptedOperation,
+    RecoveryConflict,
+    StaleOrUnknownSession,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

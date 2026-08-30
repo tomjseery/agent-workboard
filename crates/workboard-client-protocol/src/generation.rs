@@ -2,18 +2,21 @@ use serde_json::{Value, json};
 use ts_rs::{Config, TS};
 
 use crate::{
-    AssociationId, AvailableAction, BoardViewDefinition, BoardViewDensity, BoardViewFilters,
-    BoardViewGrouping, BoardViewGroupingKind, BoardViewId, BoardViewLaneDefinition, BoardViewSort,
-    BoardViewSortDirection, BoardViewSortField, CURRENT_PROTOCOL_VERSION, CheckoutAvailability,
-    CheckoutId, CheckoutPathId, CommandCapability, CommandCode, CommandOperation, DaemonInstanceId,
-    Diagnostic, DocumentId, EffectiveCheckoutProjection, EntityRef, EpicId, EpicReference,
-    ErrorSeverity, EventCursor, EventEnvelope, EventId, EventKind, EventPayload, FeatureId,
-    FeatureReference, HandshakeRequest, HandshakeResponse, Heartbeat, HierarchyChildren,
-    HierarchyEpic, HierarchyFeature, HierarchyNode, HierarchyRef, HierarchyWorkItem,
-    InvalidationScope, ManagedSessionRole, Operation, OwnerProjection, PREVIOUS_PROTOCOL_VERSION,
-    PartialOutcome, ProtocolError, Provider, ReadQuery, ReadQueryCode, RepositoryId,
-    RepositoryPathId, RepositoryReference, RequestEnvelope, RequestId, ResponseEnvelope,
-    ResponseResult, ResyncReason, ResyncRequirement, ServerMessage, SessionId, SubscriptionRequest,
+    AssociationId, AttentionEntryProjection, AttentionPage, AttentionQuery, AttentionReason,
+    AttentionReasonCode, AvailableAction, BlockedByEvidence, BoardCardProjection,
+    BoardLaneProjection, BoardPage, BoardQuery, BoardViewDefinition, BoardViewDensity,
+    BoardViewFilters, BoardViewGrouping, BoardViewGroupingKind, BoardViewId,
+    BoardViewLaneDefinition, BoardViewSort, BoardViewSortDirection, BoardViewSortField,
+    CURRENT_PROTOCOL_VERSION, CheckoutAvailability, CheckoutId, CheckoutPathId, CommandCapability,
+    CommandCode, CommandOperation, DaemonInstanceId, DependencyReadiness, Diagnostic, DocumentId,
+    EffectiveCheckoutProjection, EntityRef, EpicId, EpicReference, ErrorSeverity, EventCursor,
+    EventEnvelope, EventId, EventKind, EventPayload, FeatureId, FeatureReference, HandshakeRequest,
+    HandshakeResponse, Heartbeat, HierarchyChildren, HierarchyEpic, HierarchyFeature,
+    HierarchyNode, HierarchyRef, HierarchyWorkItem, InvalidationScope, ManagedSessionRole,
+    Operation, OwnerProjection, PREVIOUS_PROTOCOL_VERSION, ParallelReadiness, PartialOutcome,
+    ProtocolError, Provider, ReadQuery, ReadQueryCode, RepositoryId, RepositoryPathId,
+    RepositoryReference, RequestEnvelope, RequestId, ResponseEnvelope, ResponseResult,
+    ResyncReason, ResyncRequirement, ServerMessage, SessionId, SessionSummary, SubscriptionRequest,
     UnavailableReason, ValidationField, WorkItemId, WorkItemReference, WorkItemStatus,
     WorkflowState, WorkspaceHierarchy, WorkspaceId, WorkspaceReference, WorkspaceSummary,
 };
@@ -47,6 +50,37 @@ fn board_view(revision: u64) -> Value {
         "sort": { "field": "title", "direction": "ascending" },
         "density": "comfortable",
         "revision": revision
+    })
+}
+
+fn board_query() -> Value {
+    json!({
+        "cursor": null,
+        "limit": 100,
+        "query": "fixture",
+        "repositoryIds": [REPOSITORY_ID],
+        "statuses": ["ready", "in_progress"],
+        "laneKeys": ["ready", "in_progress"],
+        "sort": { "field": "key", "direction": "ascending" }
+    })
+}
+
+fn board_card() -> Value {
+    json!({
+        "workItem": { "id": WORK_ITEM_ID, "featureId": FEATURE_ID, "key": "WI-1", "slug": "fixture-work-item", "title": "Fixture Work item" },
+        "feature": { "id": FEATURE_ID, "epicId": EPIC_ID, "slug": "fixture-feature", "title": "Fixture Feature" },
+        "status": "in_progress",
+        "laneKey": "in_progress",
+        "lanePosition": 1,
+        "laneCount": 1,
+        "dependencyReadiness": "ready",
+        "blockedBy": [],
+        "parallelReadiness": { "groupKey": "fixture-ready", "readyCount": 1, "waitingCount": 0 },
+        "repositories": [{ "id": REPOSITORY_ID, "workspaceId": WORKSPACE_ID, "slug": "fixture-repository", "title": "Fixture Repository" }],
+        "sessionSummary": { "total": 1, "active": 1, "idle": 0, "unknown": 0, "providers": ["codex"] },
+        "attentionReasons": [{ "code": "checkpoint_due", "rank": 5, "message": "Checkpoint evidence is due" }],
+        "revision": 3,
+        "availableActions": []
     })
 }
 
@@ -89,6 +123,19 @@ pub fn typescript_declarations() -> String {
     declaration!(HierarchyFeature);
     declaration!(HierarchyWorkItem);
     declaration!(BoardViewDefinition);
+    declaration!(BoardQuery);
+    declaration!(AttentionQuery);
+    declaration!(BoardPage);
+    declaration!(AttentionPage);
+    declaration!(BoardLaneProjection);
+    declaration!(BoardCardProjection);
+    declaration!(AttentionEntryProjection);
+    declaration!(DependencyReadiness);
+    declaration!(BlockedByEvidence);
+    declaration!(ParallelReadiness);
+    declaration!(SessionSummary);
+    declaration!(AttentionReason);
+    declaration!(AttentionReasonCode);
     declaration!(BoardViewFilters);
     declaration!(BoardViewGrouping);
     declaration!(BoardViewLaneDefinition);
@@ -172,6 +219,8 @@ pub fn conformance_fixture(protocol_version: u32) -> Value {
                 "type": "hierarchy_children",
                 "value": { "parent": { "kind": "workspace", "id": WORKSPACE_ID } }
             })),
+            "board": query_request(json!({ "type": "board", "value": { "query": board_query() } })),
+            "attention": query_request(json!({ "type": "attention", "value": { "query": { "cursor": null, "limit": 100, "repositoryIds": [], "reasonCodes": [] } } })),
             "execute": execute_request(),
             "subscribe": {
                 "type": "start",
@@ -209,7 +258,7 @@ fn request(operation: Value, protocol_version: u32, workspace_id: Option<&str>) 
 }
 
 fn read_requests(protocol_version: u32) -> Vec<Value> {
-    vec![
+    let mut requests = vec![
         request(
             json!({
                 "type": "handshake",
@@ -270,7 +319,12 @@ fn read_requests(protocol_version: u32) -> Vec<Value> {
             protocol_version,
             Some(WORKSPACE_ID),
         ),
-    ]
+    ];
+    if protocol_version == CURRENT_PROTOCOL_VERSION {
+        requests.insert(6, request(json!({ "type": "query", "value": { "type": "board", "value": { "query": board_query() } } }), protocol_version, Some(WORKSPACE_ID)));
+        requests.insert(7, request(json!({ "type": "query", "value": { "type": "attention", "value": { "query": { "cursor": null, "limit": 100, "repositoryIds": [], "reasonCodes": [] } } } }), protocol_version, Some(WORKSPACE_ID)));
+    }
+    requests
 }
 
 fn query_request(query: Value) -> Value {
@@ -342,7 +396,7 @@ fn response_envelope(protocol_version: u32, result: Value) -> Value {
 }
 
 fn response_results(protocol_version: u32) -> Vec<Value> {
-    vec![
+    let mut results = vec![
         response_envelope(
             protocol_version,
             json!({
@@ -479,7 +533,40 @@ fn response_results(protocol_version: u32) -> Vec<Value> {
                 "value": { "code": "approve_feature" }
             }),
         ),
-    ]
+    ];
+    if protocol_version == CURRENT_PROTOCOL_VERSION {
+        results.insert(6, response_envelope(protocol_version, json!({
+            "type": "board",
+            "value": {
+                "lanes": [{ "key": "in_progress", "title": "In progress", "position": 1, "totalCount": 1 }],
+                "cards": [board_card()],
+                "nextCursor": null,
+                "totalCount": 1,
+                "revision": 41
+            }
+        })));
+        results.insert(7, response_envelope(protocol_version, json!({
+            "type": "attention",
+            "value": {
+                "entries": [{
+                    "owner": { "kind": "work_item", "id": WORK_ITEM_ID },
+                    "title": "Fixture Work item",
+                    "subtitle": "WI-1",
+                    "repositories": [{ "id": REPOSITORY_ID, "workspaceId": WORKSPACE_ID, "slug": "fixture-repository", "title": "Fixture Repository" }],
+                    "card": board_card(),
+                    "reasons": [{ "code": "checkpoint_due", "rank": 5, "message": "Checkpoint evidence is due" }],
+                    "revision": 3,
+                    "availableActions": [],
+                    "position": 1,
+                    "totalCount": 1
+                }],
+                "nextCursor": null,
+                "totalCount": 1,
+                "revision": 41
+            }
+        })));
+    }
+    results
 }
 
 fn typed_errors() -> Vec<Value> {
@@ -597,7 +684,7 @@ fn server_messages(protocol_version: u32) -> Vec<Value> {
 fn discriminants() -> Value {
     json!({
         "operations": ["handshake", "query", "command", "subscribe"],
-        "readQueries": ["workspace_summary", "hierarchy_children", "workspace_hierarchy", "board_views", "board_view", "board_snapshot"],
+        "readQueries": ["workspace_summary", "hierarchy_children", "workspace_hierarchy", "board_views", "board_view", "board", "attention", "board_snapshot"],
         "responseResults": [
             "handshake",
             "workspace_summary",
@@ -605,6 +692,8 @@ fn discriminants() -> Value {
             "workspace_hierarchy",
             "board_views",
             "board_view",
+            "board",
+            "attention",
             "board_snapshot",
             "subscription_accepted",
             "command_accepted"
@@ -635,6 +724,7 @@ fn discriminants() -> Value {
             { "type": "board_view_saved", "value": { "view": board_view(1) }},
             { "type": "native_sessions_refreshed", "value": { "sessionCount": 1 }},
             { "type": "partial_outcome", "value": { "outcome": partial_outcome() }}
+            ,{ "type": "board_card_changed", "value": { "card": board_card() }}
         ],
         "resyncReasons": [
             "gap",
@@ -644,7 +734,7 @@ fn discriminants() -> Value {
             "heartbeat_lost"
         ],
         "errorSeverities": ["info", "warning", "error", "fatal"],
-        "readQueryCodes": ["workspace_summary", "hierarchy_children", "workspace_hierarchy", "board_views", "board_view", "board_snapshot"],
+        "readQueryCodes": ["workspace_summary", "hierarchy_children", "workspace_hierarchy", "board_views", "board_view", "board", "attention", "board_snapshot"],
         "hierarchyRefs": [
             { "kind": "workspace", "id": WORKSPACE_ID },
             { "kind": "epic", "id": EPIC_ID },

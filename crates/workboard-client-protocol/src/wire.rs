@@ -3,9 +3,9 @@ use time::OffsetDateTime;
 use ts_rs::TS;
 
 use crate::{
-    BoardSnapshot, BoardViewDefinition, BoardViewId, DaemonInstanceId, EntityRef, EventId,
-    HierarchyChildren, HierarchyRef, RequestId, WorkspaceHierarchy, WorkspaceId,
-    WorkspaceReference, WorkspaceSummary,
+    AttentionPage, AttentionQuery, BoardCardProjection, BoardPage, BoardQuery, BoardSnapshot,
+    BoardViewDefinition, BoardViewId, DaemonInstanceId, EntityRef, EventId, HierarchyChildren,
+    HierarchyRef, RequestId, WorkspaceHierarchy, WorkspaceId, WorkspaceReference, WorkspaceSummary,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -74,7 +74,22 @@ impl RequestEnvelope {
                     )));
                 }
             }
-            Operation::Query(_) | Operation::Subscribe(_) => {
+            Operation::Query(query) => {
+                if self.workspace_id.is_none() {
+                    return Err(Box::new(ProtocolError::validation(
+                        "workspace_id",
+                        "workspace_required",
+                    )));
+                }
+                if self.expected_revision.is_some() || self.idempotency_key.is_some() {
+                    return Err(Box::new(ProtocolError::validation(
+                        "operation",
+                        "invalid_read_fields",
+                    )));
+                }
+                validate_read_query(query)?;
+            }
+            Operation::Subscribe(_) => {
                 if self.workspace_id.is_none() {
                     return Err(Box::new(ProtocolError::validation(
                         "workspace_id",
@@ -102,6 +117,53 @@ impl RequestEnvelope {
         }
         Ok(())
     }
+}
+
+fn validate_read_query(query: &ReadQuery) -> Result<(), Box<ProtocolError>> {
+    let (limit, cursor, collection_lengths, text) = match query {
+        ReadQuery::Board { query } => (
+            query.limit,
+            query.cursor.as_deref(),
+            vec![
+                query.repository_ids.len(),
+                query.statuses.len(),
+                query.lane_keys.len(),
+            ],
+            query.query.as_deref(),
+        ),
+        ReadQuery::Attention { query } => (
+            query.limit,
+            query.cursor.as_deref(),
+            vec![query.repository_ids.len(), query.reason_codes.len()],
+            None,
+        ),
+        _ => return Ok(()),
+    };
+    if !(1..=crate::MAX_QUERY_PAGE_ITEMS).contains(&limit) {
+        return Err(Box::new(ProtocolError::validation(
+            "limit",
+            "invalid_page_limit",
+        )));
+    }
+    if collection_lengths.into_iter().any(|length| length > 128) {
+        return Err(Box::new(ProtocolError::validation(
+            "query",
+            "collection_too_large",
+        )));
+    }
+    if cursor.is_some_and(|value| value.len() > 200 || value.chars().any(char::is_control)) {
+        return Err(Box::new(ProtocolError::validation(
+            "cursor",
+            "invalid_cursor",
+        )));
+    }
+    if text.is_some_and(|value| value.len() > 500 || value.chars().any(char::is_control)) {
+        return Err(Box::new(ProtocolError::validation(
+            "query",
+            "invalid_search_query",
+        )));
+    }
+    Ok(())
 }
 
 fn validate_versions(versions: &[u32]) -> Result<(), Box<ProtocolError>> {
@@ -136,6 +198,8 @@ pub enum ReadQuery {
     WorkspaceHierarchy,
     BoardViews,
     BoardView { view_id: BoardViewId },
+    Board { query: BoardQuery },
+    Attention { query: AttentionQuery },
     BoardSnapshot,
 }
 
@@ -291,6 +355,8 @@ pub enum ResponseResult {
     WorkspaceHierarchy(WorkspaceHierarchy),
     BoardViews(Vec<BoardViewDefinition>),
     BoardView(BoardViewDefinition),
+    Board(BoardPage),
+    Attention(AttentionPage),
     BoardSnapshot(#[ts(type = "unknown")] BoardSnapshot),
     SubscriptionAccepted { cursor: EventCursor },
     CommandAccepted { code: CommandCode },
@@ -441,6 +507,7 @@ pub enum EventPayload {
     BoardViewSaved { view: BoardViewDefinition },
     NativeSessionsRefreshed { session_count: usize },
     PartialOutcome { outcome: PartialOutcome },
+    BoardCardChanged { card: Box<BoardCardProjection> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -458,6 +525,8 @@ pub enum ReadQueryCode {
     WorkspaceHierarchy,
     BoardViews,
     BoardView,
+    Board,
+    Attention,
     BoardSnapshot,
 }
 
@@ -597,6 +666,39 @@ mod tests {
     }
 
     #[test]
+    fn board_and_attention_queries_reject_unbounded_pages_before_dispatch() {
+        let request = RequestEnvelope {
+            protocol_version: CURRENT_PROTOCOL_VERSION,
+            request_id: RequestId::generate(),
+            workspace_id: Some(WorkspaceId::generate()),
+            expected_revision: None,
+            idempotency_key: None,
+            operation: Operation::Query(ReadQuery::Board {
+                query: crate::BoardQuery {
+                    cursor: None,
+                    limit: crate::MAX_QUERY_PAGE_ITEMS + 1,
+                    query: None,
+                    repository_ids: Vec::new(),
+                    statuses: Vec::new(),
+                    lane_keys: Vec::new(),
+                    sort: crate::BoardViewSort {
+                        field: crate::BoardViewSortField::Key,
+                        direction: crate::BoardViewSortDirection::Ascending,
+                    },
+                },
+            }),
+        };
+        assert_eq!(
+            request
+                .validate()
+                .expect_err("unbounded page")
+                .validation_fields[0]
+                .code,
+            "invalid_page_limit"
+        );
+    }
+
+    #[test]
     fn malformed_ids_unknown_operations_and_control_keys_fail_closed() {
         let invalid_id = json!({
             "protocolVersion": CURRENT_PROTOCOL_VERSION,
@@ -664,6 +766,28 @@ mod tests {
             ReadQuery::BoardView {
                 view_id: crate::BoardViewId::generate(),
             },
+            ReadQuery::Board {
+                query: crate::BoardQuery {
+                    cursor: None,
+                    limit: 100,
+                    query: None,
+                    repository_ids: Vec::new(),
+                    statuses: Vec::new(),
+                    lane_keys: Vec::new(),
+                    sort: crate::BoardViewSort {
+                        field: crate::BoardViewSortField::Key,
+                        direction: crate::BoardViewSortDirection::Ascending,
+                    },
+                },
+            },
+            ReadQuery::Attention {
+                query: crate::AttentionQuery {
+                    cursor: None,
+                    limit: 100,
+                    repository_ids: Vec::new(),
+                    reason_codes: Vec::new(),
+                },
+            },
             ReadQuery::BoardSnapshot,
         ];
         assert_eq!(
@@ -677,6 +801,8 @@ mod tests {
                 json!("workspace_hierarchy"),
                 json!("board_views"),
                 json!("board_view"),
+                json!("board"),
+                json!("attention"),
                 json!("board_snapshot"),
             ]
         );

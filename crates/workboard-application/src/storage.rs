@@ -14,9 +14,10 @@ use workboard_core::{ConversationId, LaunchLeaseId, WorkspaceId};
 
 use crate::AppError;
 
-const CURRENT_SCHEMA_VERSION: i64 = 33;
+const CURRENT_SCHEMA_VERSION: i64 = 34;
 const CLIENT_EVENT_JOURNAL_SCHEMA_CHECKSUM: &str = "agent-workboard-client-event-journal-v1";
 const BOARD_VIEW_DEFINITION_SCHEMA_CHECKSUM: &str = "agent-workboard-board-view-definition-v1";
+const WORK_ITEM_DEPENDENCY_SCHEMA_CHECKSUM: &str = "agent-workboard-work-item-dependency-v1";
 const FOUNDATION_SCHEMA_CHECKSUM: &str = "agent-workboard-foundation-v1";
 const LAUNCH_LEASE_SCHEMA_CHECKSUM: &str = "agent-workboard-launch-leases-v1";
 const WORKBOARD_DOMAIN_SCHEMA_CHECKSUM: &str = "agent-workboard-domain-v1";
@@ -2409,6 +2410,28 @@ fn migrate(connection: &Connection) -> Result<(), AppError> {
              UNIQUE (workspace_id, title)
          );",
     )?;
+    apply_migration(
+        connection,
+        34,
+        WORK_ITEM_DEPENDENCY_SCHEMA_CHECKSUM,
+        "CREATE TABLE IF NOT EXISTS work_item_dependencies (
+             work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE RESTRICT,
+             depends_on_work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE RESTRICT,
+             PRIMARY KEY (work_item_id, depends_on_work_item_id),
+             CHECK (work_item_id <> depends_on_work_item_id)
+         );
+         CREATE INDEX IF NOT EXISTS work_item_dependencies_prerequisite
+             ON work_item_dependencies (depends_on_work_item_id, work_item_id);
+         INSERT OR IGNORE INTO work_item_dependencies (work_item_id, depends_on_work_item_id)
+         SELECT json_extract(item.value, '$.work_item_id'),
+                json_extract(prerequisite.value, '$.work_item_id')
+         FROM feature_planning_proposals proposal
+         JOIN json_each(proposal.proposal_json, '$.work_items') item
+         JOIN json_each(item.value, '$.proposal.dependencies') dependency
+         JOIN json_each(proposal.proposal_json, '$.work_items') prerequisite
+           ON json_extract(prerequisite.value, '$.proposal.slug') = dependency.value
+         WHERE proposal.status = 'published';",
+    )?;
     Ok(())
 }
 
@@ -4117,7 +4140,7 @@ mod tests {
         assert_eq!(preserved_attestation, valid_attestation);
         assert_eq!(legacy_authority, "immutable_evidence");
         let health = store.health().expect("storage health");
-        assert_eq!(health.schema_version, 33);
+        assert_eq!(health.schema_version, 34);
         assert!(health.is_healthy());
         let audited_attestations: Vec<(String, String, String, String)> = store
             .read(|connection| {
@@ -4162,7 +4185,7 @@ mod tests {
             .expect("read upgraded schema 20 attestations");
         assert_eq!(upgraded_attestations, audited_attestations);
         let health = store.health().expect("upgraded storage health");
-        assert_eq!(health.schema_version, 33);
+        assert_eq!(health.schema_version, 34);
         assert!(health.is_healthy());
         drop(store);
 

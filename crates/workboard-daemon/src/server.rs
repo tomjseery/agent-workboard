@@ -256,6 +256,26 @@ fn execute_protocol(
                 ReadQuery::BoardView { view_id } => application
                     .client_board_view(core_id, *view_id)
                     .map(ResponseResult::BoardView),
+                ReadQuery::Board { query }
+                    if request.protocol_version == CURRENT_PROTOCOL_VERSION =>
+                {
+                    application
+                        .client_board(core_id, query.clone())
+                        .map(ResponseResult::Board)
+                }
+                ReadQuery::Attention { query }
+                    if request.protocol_version == CURRENT_PROTOCOL_VERSION =>
+                {
+                    application
+                        .client_attention(core_id, query.clone())
+                        .map(ResponseResult::Attention)
+                }
+                ReadQuery::Board { .. } | ReadQuery::Attention { .. } => Err(AppError::External {
+                    code: "projection_version_unavailable".to_owned(),
+                    message:
+                        "the requested projection is unavailable for the negotiated read version"
+                            .to_owned(),
+                }),
                 ReadQuery::BoardSnapshot => application
                     .client_board_snapshot(core_id)
                     .map(ResponseResult::BoardSnapshot),
@@ -368,6 +388,10 @@ fn response_within_limits(result: &ResponseResult) -> bool {
         }
         ResponseResult::BoardViews(value) => value.len() <= MAX_COLLECTION_ITEMS,
         ResponseResult::BoardView(_) => true,
+        ResponseResult::Board(value) => {
+            value.lanes.len() <= MAX_COLLECTION_ITEMS && value.cards.len() <= MAX_COLLECTION_ITEMS
+        }
+        ResponseResult::Attention(value) => value.entries.len() <= MAX_COLLECTION_ITEMS,
         ResponseResult::BoardSnapshot(value) => {
             value.repositories.len() <= MAX_COLLECTION_ITEMS
                 && value.epics.len() <= MAX_COLLECTION_ITEMS

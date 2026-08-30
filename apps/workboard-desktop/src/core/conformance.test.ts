@@ -97,6 +97,8 @@ describe("generated protocol conformance", () => {
       "workspace_hierarchy",
       "board_views",
       "board_view",
+      "board",
+      "attention",
       "board_snapshot",
     ] satisfies Array<ReadQuery["type"]>;
     const responseResults = [
@@ -106,6 +108,8 @@ describe("generated protocol conformance", () => {
       "workspace_hierarchy",
       "board_views",
       "board_view",
+      "board",
+      "attention",
       "board_snapshot",
       "subscription_accepted",
       "command_accepted",
@@ -127,6 +131,7 @@ describe("generated protocol conformance", () => {
       "board_view_saved",
       "native_sessions_refreshed",
       "partial_outcome",
+      "board_card_changed",
     ] satisfies Array<EventPayload["type"]>;
     const resyncReasons = [
       "gap",
@@ -147,6 +152,8 @@ describe("generated protocol conformance", () => {
       "workspace_hierarchy",
       "board_views",
       "board_view",
+      "board",
+      "attention",
       "board_snapshot",
     ] satisfies ReadQueryCode[];
     const providers = ["claude", "codex"] satisfies Provider[];
@@ -237,7 +244,7 @@ describe("generated protocol conformance", () => {
       succeeded: false,
       reconciliationRequired: true,
     });
-    expect(previous.protocolVersion).toBe(2);
-    expect(current.protocolVersion).toBe(3);
+    expect(previous.protocolVersion).toBe(3);
+    expect(current.protocolVersion).toBe(4);
   });
 });

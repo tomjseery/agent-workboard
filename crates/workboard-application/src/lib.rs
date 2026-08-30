@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod board_projection;
 pub mod caller;
 pub mod checkout;
 pub mod concertable_import;

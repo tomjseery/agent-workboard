@@ -133,6 +133,8 @@ impl<'a> NativeSourceService<'a> {
                         invalidation_scope: Some(InvalidationScope {
                             queries: vec![
                                 ReadQueryCode::WorkspaceSummary,
+                                ReadQueryCode::Board,
+                                ReadQueryCode::Attention,
                                 ReadQueryCode::BoardSnapshot,
                             ],
                             owners: Vec::new(),
