@@ -2543,10 +2543,9 @@ fn execute_managed_session_request(
     preflight_capability_injection(application, request.tool, now)?;
     let hierarchy = application.assigned_hierarchy(workflow_token, now)?;
     let work_item = hierarchy
-        .snapshot
-        .work_items
-        .iter()
-        .find(|item| item.id == request.work_item_id)
+        .work_item
+        .as_ref()
+        .filter(|item| item.id == request.work_item_id)
         .ok_or(AppError::WorkItemNotFound)?;
     let repository_id = if let Some(repository_id) = request.repository_id {
         if !work_item.repository_ids.contains(&repository_id) {
@@ -2564,10 +2563,7 @@ fn execute_managed_session_request(
         };
         *repository_id
     };
-    let terminal_window = terminal_window_key(
-        &hierarchy.snapshot,
-        HierarchyOwner::WorkItem(request.work_item_id),
-    );
+    let terminal_window = format!("workboard-feature-{}", work_item.feature_id);
     let idempotency_key = request.idempotency_key.clone();
     let terminal = request.terminal.unwrap_or_else(default_terminal_executable);
     let native = request

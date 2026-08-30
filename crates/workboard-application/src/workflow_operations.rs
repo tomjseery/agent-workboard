@@ -6,9 +6,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 use workboard_core::{
-    CheckoutId, ConversationId, HierarchyOwner, ManagedSessionRequestId, ManagedSessionRole,
-    NextActionKind, RepositoryId, Tool, WorkItemCheckpointId, WorkItemId, WorkItemStatus,
-    WorkspaceId, WorkspaceSnapshot,
+    CheckoutAccessMode, CheckoutAvailability, CheckoutId, CheckoutPurpose, ConversationId,
+    DocumentKind, Epic, Feature, HierarchyOwner, LiveStatus, ManagedSessionRequestId,
+    ManagedSessionRole, MarkdownDocument, NextActionKind, RepositoryId, Resumability, Tool,
+    WorkItem, WorkItemCheckpointId, WorkItemId, WorkItemStatus, WorkspaceId,
 };
 
 use crate::AppError;
@@ -25,11 +26,16 @@ pub struct WorkflowPrincipal {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AssignedHierarchy {
+pub struct AssignedContext {
     pub schema_version: u32,
     pub principal: WorkflowPrincipal,
-    pub repository: AssignedRepository,
-    pub snapshot: WorkspaceSnapshot,
+    pub epic: Option<Epic>,
+    pub feature: Option<Feature>,
+    pub work_item: Option<WorkItem>,
+    pub dependencies: Vec<AssignedDependency>,
+    pub repositories: Vec<AssignedRepository>,
+    pub documents: Vec<AssignedDocument>,
+    pub sessions: Vec<AssignedSession>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,7 +46,42 @@ pub struct AssignedRepository {
     pub git_worktree_identity: String,
     pub branch: Option<String>,
     pub head: String,
+    pub availability: CheckoutAvailability,
+    pub purpose: Option<CheckoutPurpose>,
+    pub access_mode: Option<CheckoutAccessMode>,
+    pub parent_feature_checkout_id: Option<CheckoutId>,
+    pub isolation_generation: Option<u64>,
+    pub reconciliation_generation: Option<u64>,
     pub instructions: Vec<RepositoryInstruction>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssignedDocument {
+    pub document: MarkdownDocument,
+    pub kind: DocumentKind,
+    pub path: PathBuf,
+    pub revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssignedDependency {
+    pub work_item: WorkItem,
+    pub document: AssignedDocument,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssignedSession {
+    pub session_id: ConversationId,
+    pub provider: Tool,
+    pub role: ManagedSessionRole,
+    pub managed_status: String,
+    pub live_status: Option<LiveStatus>,
+    pub last_activity: Option<OffsetDateTime>,
+    pub checkout_id: CheckoutId,
+    pub checkout_path: PathBuf,
+    pub branch: Option<String>,
+    pub resumability: Resumability,
+    pub primary: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,7 +162,8 @@ impl<'a> WorkflowOperationService<'a> {
         self.store.read(|connection| {
             let row = connection
                 .query_row(
-                    "SELECT intent.epic_id, intent.feature_id, intent.work_item_id,
+                    "SELECT intent.workspace_id, intent.epic_id, intent.feature_id,
+                            intent.work_item_id, association.workspace_id,
                             association.epic_id, association.feature_id,
                             association.work_item_id, managed.role, intent.provider,
                             managed.session_id, managed.checkout_id
@@ -142,18 +184,22 @@ impl<'a> WorkflowOperationService<'a> {
                             row.get::<_, Option<String>>(3)?,
                             row.get::<_, Option<String>>(4)?,
                             row.get::<_, Option<String>>(5)?,
-                            row.get::<_, String>(6)?,
-                            row.get::<_, String>(7)?,
+                            row.get::<_, Option<String>>(6)?,
+                            row.get::<_, Option<String>>(7)?,
                             row.get::<_, String>(8)?,
                             row.get::<_, String>(9)?,
+                            row.get::<_, String>(10)?,
+                            row.get::<_, String>(11)?,
                         ))
                     },
                 )
                 .optional()?;
             let Some((
+                intent_workspace,
                 intent_epic,
                 intent_feature,
                 intent_work_item,
+                associated_workspace,
                 associated_epic,
                 associated_feature,
                 associated_work_item,
@@ -165,9 +211,18 @@ impl<'a> WorkflowOperationService<'a> {
             else {
                 return Err(AppError::WorkflowOperationUnauthorized);
             };
-            let intended = parse_owner(intent_epic, intent_feature, intent_work_item)?;
-            let associated =
-                parse_owner(associated_epic, associated_feature, associated_work_item)?;
+            let intended = parse_association_owner(
+                intent_workspace,
+                intent_epic,
+                intent_feature,
+                intent_work_item,
+            )?;
+            let associated = parse_association_owner(
+                associated_workspace,
+                associated_epic,
+                associated_feature,
+                associated_work_item,
+            )?;
             if intended != associated {
                 return Err(AppError::WorkflowOperationUnauthorized);
             }
@@ -186,17 +241,32 @@ impl<'a> WorkflowOperationService<'a> {
         &self,
         principal: &WorkflowPrincipal,
     ) -> Result<AssignedRepository, AppError> {
+        self.assigned_repository_checkout(principal, principal.checkout_id)
+    }
+
+    pub fn assigned_repository_checkout(
+        &self,
+        principal: &WorkflowPrincipal,
+        checkout_id: CheckoutId,
+    ) -> Result<AssignedRepository, AppError> {
         let row = self.store.read(|connection| {
             connection
                 .query_row(
                     "SELECT checkout.repository_id, path.path,
                             checkout.git_worktree_identity, checkout.branch,
-                            checkout.head, checkout.availability
+                            checkout.head, checkout.availability,
+                            readiness.purpose, readiness.access_mode,
+                            readiness.owner_kind, readiness.owner_id,
+                            readiness.parent_feature_checkout_id,
+                            readiness.isolation_generation,
+                            readiness.reconciliation_generation
                      FROM checkouts checkout
                      JOIN checkout_paths path
                        ON path.checkout_id = checkout.id AND path.observed_until IS NULL
+                     LEFT JOIN checkout_readiness readiness
+                       ON readiness.checkout_id = checkout.id
                      WHERE checkout.id = ?1",
-                    [principal.checkout_id.to_string()],
+                    [checkout_id.to_string()],
                     |row| {
                         Ok((
                             row.get::<_, String>(0)?,
@@ -205,13 +275,34 @@ impl<'a> WorkflowOperationService<'a> {
                             row.get::<_, Option<String>>(3)?,
                             row.get::<_, Option<String>>(4)?,
                             row.get::<_, String>(5)?,
+                            row.get::<_, Option<String>>(6)?,
+                            row.get::<_, Option<String>>(7)?,
+                            row.get::<_, Option<String>>(8)?,
+                            row.get::<_, Option<String>>(9)?,
+                            row.get::<_, Option<String>>(10)?,
+                            row.get::<_, Option<i64>>(11)?,
+                            row.get::<_, Option<i64>>(12)?,
                         ))
                     },
                 )
                 .optional()
                 .map_err(Into::into)
         })?;
-        let Some((repository_id, path, git_worktree_identity, branch, head, availability)) = row
+        let Some((
+            repository_id,
+            path,
+            git_worktree_identity,
+            branch,
+            head,
+            availability,
+            purpose,
+            access_mode,
+            readiness_owner_kind,
+            readiness_owner_id,
+            parent_feature_checkout_id,
+            isolation_generation,
+            reconciliation_generation,
+        )) = row
         else {
             return Err(assigned_context_error(
                 "assigned_checkout_missing",
@@ -223,6 +314,17 @@ impl<'a> WorkflowOperationService<'a> {
                 "assigned_checkout_unavailable",
                 "the managed session checkout is not available",
             ));
+        }
+        if let HierarchyOwner::WorkItem(work_item_id) = principal.owner {
+            let expected_owner_id = work_item_id.to_string();
+            if readiness_owner_kind.as_deref() != Some("work_item")
+                || readiness_owner_id.as_deref() != Some(expected_owner_id.as_str())
+            {
+                return Err(assigned_context_error(
+                    "assigned_checkout_readiness_mismatch",
+                    "the managed Work-item checkout readiness belongs to another owner",
+                ));
+            }
         }
         let repository_id = parse_id(&repository_id)?;
         let path = PathBuf::from(path);
@@ -238,12 +340,334 @@ impl<'a> WorkflowOperationService<'a> {
         let instructions = repository_instructions(&root, principal.tool, &head)?;
         Ok(AssignedRepository {
             repository_id,
-            checkout_id: principal.checkout_id,
+            checkout_id,
             path: root,
             git_worktree_identity,
             branch,
             head,
+            availability: CheckoutAvailability::Available,
+            purpose: purpose.as_deref().map(parse_wire).transpose()?,
+            access_mode: access_mode.as_deref().map(parse_wire).transpose()?,
+            parent_feature_checkout_id: parent_feature_checkout_id
+                .as_deref()
+                .map(parse_id)
+                .transpose()?,
+            isolation_generation: isolation_generation
+                .map(u64::try_from)
+                .transpose()
+                .map_err(|error| AppError::Domain(error.to_string()))?,
+            reconciliation_generation: reconciliation_generation
+                .map(u64::try_from)
+                .transpose()
+                .map_err(|error| AppError::Domain(error.to_string()))?,
             instructions,
+        })
+    }
+
+    pub fn assigned_documents(
+        &self,
+        principal: &WorkflowPrincipal,
+        owners: &[HierarchyOwner],
+    ) -> Result<Vec<AssignedDocument>, AppError> {
+        self.store.read(|connection| {
+            let planning_root = connection
+                .query_row(
+                    "SELECT path.path FROM repositories repository
+                     JOIN repository_paths path
+                       ON path.repository_id = repository.id AND path.observed_until IS NULL
+                     WHERE repository.workspace_id = ?1 AND repository.is_planning_store = 1",
+                    [principal.workspace_id.to_string()],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?
+                .ok_or_else(|| {
+                    assigned_context_error(
+                        "assigned_planning_store_missing",
+                        "the assigned workspace has no current planning-store path",
+                    )
+                })?;
+            let planning_root = canonical_checkout_root(Path::new(&planning_root))?;
+            let mut statement = connection.prepare(
+                "SELECT document.id, document.repository_id, document.epic_id,
+                        document.feature_id, document.work_item_id, document.kind,
+                        document.relative_path, document.content_hash,
+                        document.observed_commit,
+                        COALESCE(MAX(revision.revision), 1)
+                 FROM documents document
+                 JOIN repositories repository ON repository.id = document.repository_id
+                 LEFT JOIN document_revisions revision ON revision.document_id = document.id
+                 WHERE repository.workspace_id = ?1
+                 GROUP BY document.id, document.repository_id, document.epic_id,
+                          document.feature_id, document.work_item_id, document.kind,
+                          document.relative_path, document.content_hash,
+                          document.observed_commit
+                 ORDER BY document.kind, document.relative_path",
+            )?;
+            let rows = statement
+                .query_map([principal.workspace_id.to_string()], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, String>(7)?,
+                        row.get::<_, Option<String>>(8)?,
+                        row.get::<_, i64>(9)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows.into_iter()
+                .filter_map(
+                    |(
+                        id,
+                        repository_id,
+                        epic_id,
+                        feature_id,
+                        work_item_id,
+                        kind,
+                        relative_path,
+                        content_hash,
+                        observed_commit,
+                        revision,
+                    )| {
+                        let owner = match parse_owner(epic_id, feature_id, work_item_id) {
+                            Ok(owner) => owner,
+                            Err(error) => return Some(Err(error)),
+                        };
+                        if !owners.contains(&owner) {
+                            return None;
+                        }
+                        let relative_path = PathBuf::from(relative_path);
+                        if relative_path.is_absolute()
+                            || relative_path.components().any(|component| {
+                                matches!(
+                                    component,
+                                    std::path::Component::ParentDir
+                                        | std::path::Component::RootDir
+                                        | std::path::Component::Prefix(_)
+                                )
+                            })
+                        {
+                            return Some(Err(assigned_context_error(
+                                "assigned_document_path_invalid",
+                                "an assigned document path is not safely relative",
+                            )));
+                        }
+                        let path = planning_root.join(&relative_path);
+                        let resolved = match fs::canonicalize(&path) {
+                            Ok(path) if path.starts_with(&planning_root) && path.is_file() => path,
+                            Ok(_) => {
+                                return Some(Err(assigned_context_error(
+                                    "assigned_document_path_invalid",
+                                    format!(
+                                        "an assigned document escapes the planning store: {}",
+                                        path.display()
+                                    ),
+                                )));
+                            }
+                            Err(error) => {
+                                return Some(Err(assigned_context_error(
+                                    "assigned_document_missing",
+                                    format!(
+                                        "failed to resolve assigned document {}: {error}",
+                                        path.display()
+                                    ),
+                                )));
+                            }
+                        };
+                        let bytes = match fs::read(&resolved) {
+                            Ok(bytes) => bytes,
+                            Err(error) => {
+                                return Some(Err(assigned_context_error(
+                                    "assigned_document_invalid",
+                                    format!(
+                                        "failed to read assigned document {}: {error}",
+                                        resolved.display()
+                                    ),
+                                )));
+                            }
+                        };
+                        if format!("{:x}", Sha256::digest(bytes)) != content_hash {
+                            return Some(Err(assigned_context_error(
+                                "assigned_document_hash_mismatch",
+                                format!(
+                                    "assigned document content changed: {}",
+                                    resolved.display()
+                                ),
+                            )));
+                        }
+                        Some((|| {
+                            Ok(AssignedDocument {
+                                document: MarkdownDocument {
+                                    id: parse_id(&id)?,
+                                    owner,
+                                    repository_id: parse_id(&repository_id)?,
+                                    relative_path,
+                                    content_hash,
+                                    observed_commit,
+                                },
+                                kind: parse_wire(&kind)?,
+                                path: resolved,
+                                revision: u64::try_from(revision)
+                                    .map_err(|error| AppError::Domain(error.to_string()))?,
+                            })
+                        })())
+                    },
+                )
+                .collect()
+        })
+    }
+
+    pub fn assigned_dependency_ids(
+        &self,
+        work_item_id: WorkItemId,
+    ) -> Result<Vec<WorkItemId>, AppError> {
+        self.store.read(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT dependency_work_item_id FROM work_item_dependencies
+                 WHERE work_item_id = ?1 ORDER BY dependency_order",
+            )?;
+            statement
+                .query_map([work_item_id.to_string()], |row| row.get::<_, String>(0))?
+                .map(|row| parse_id(&row?))
+                .collect()
+        })
+    }
+
+    pub fn assigned_sessions(
+        &self,
+        principal: &WorkflowPrincipal,
+        owners: &[HierarchyOwner],
+    ) -> Result<Vec<AssignedSession>, AppError> {
+        self.store.read(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT session.id, session.provider, association.workspace_id,
+                        association.epic_id, association.feature_id,
+                        association.work_item_id, association.role,
+                        association.associated_until, managed.status,
+                        managed.managed_until, live.status, live.observed_at,
+                        managed.checkout_id, path.path, checkout.branch,
+                        CASE
+                          WHEN EXISTS (
+                            SELECT 1 FROM native_session_sources source
+                            WHERE source.session_id = session.id AND source.missing = 0
+                          ) THEN 'validated'
+                          WHEN EXISTS (
+                            SELECT 1 FROM native_session_sources source
+                            WHERE source.session_id = session.id
+                          ) THEN 'missing'
+                          ELSE 'unknown'
+                        END
+                 FROM native_session_associations association
+                 JOIN native_sessions session ON session.id = association.session_id
+                 JOIN managed_sessions managed ON managed.session_id = session.id
+                 JOIN checkouts checkout ON checkout.id = managed.checkout_id
+                 JOIN checkout_paths path
+                   ON path.checkout_id = checkout.id AND path.observed_until IS NULL
+                 LEFT JOIN live_observations live ON live.id = (
+                   SELECT candidate.id FROM live_observations candidate
+                   WHERE candidate.session_id = session.id
+                   ORDER BY candidate.observed_at DESC, candidate.id DESC LIMIT 1
+                 )
+                 WHERE association.workspace_id = ?1
+                    OR association.epic_id IN (
+                      SELECT id FROM epics WHERE workspace_id = ?1
+                    )
+                    OR association.feature_id IN (
+                      SELECT feature.id FROM features feature
+                      JOIN epics epic ON epic.id = feature.epic_id
+                      WHERE epic.workspace_id = ?1
+                    )
+                    OR association.work_item_id IN (
+                      SELECT item.id FROM work_items item
+                      JOIN features feature ON feature.id = item.feature_id
+                      JOIN epics epic ON epic.id = feature.epic_id
+                      WHERE epic.workspace_id = ?1
+                    )
+                 ORDER BY association.associated_until IS NULL DESC,
+                          live.observed_at DESC, session.id",
+            )?;
+            let rows = statement
+                .query_map([principal.workspace_id.to_string()], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, Option<String>>(7)?,
+                        row.get::<_, String>(8)?,
+                        row.get::<_, Option<String>>(9)?,
+                        row.get::<_, Option<String>>(10)?,
+                        row.get::<_, Option<String>>(11)?,
+                        row.get::<_, String>(12)?,
+                        row.get::<_, String>(13)?,
+                        row.get::<_, Option<String>>(14)?,
+                        row.get::<_, String>(15)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows.into_iter()
+                .filter_map(
+                    |(
+                        session_id,
+                        provider,
+                        workspace_id,
+                        epic_id,
+                        feature_id,
+                        work_item_id,
+                        role,
+                        associated_until,
+                        managed_status,
+                        managed_until,
+                        live_status,
+                        last_activity,
+                        checkout_id,
+                        checkout_path,
+                        branch,
+                        resumability,
+                    )| {
+                        let owner = match parse_association_owner(
+                            workspace_id,
+                            epic_id,
+                            feature_id,
+                            work_item_id,
+                        ) {
+                            Ok(owner) => owner,
+                            Err(error) => return Some(Err(error)),
+                        };
+                        if !owners.contains(&owner) {
+                            return None;
+                        }
+                        Some((|| {
+                            let role = parse_role(&role)?;
+                            Ok(AssignedSession {
+                                session_id: parse_id(&session_id)?,
+                                provider: parse_tool(&provider)?,
+                                role,
+                                managed_status,
+                                live_status: live_status.as_deref().map(parse_wire).transpose()?,
+                                last_activity: last_activity
+                                    .as_deref()
+                                    .map(parse_time)
+                                    .transpose()?,
+                                checkout_id: parse_id(&checkout_id)?,
+                                checkout_path: PathBuf::from(checkout_path),
+                                branch,
+                                resumability: parse_wire(&resumability)?,
+                                primary: role == ManagedSessionRole::WorkItemExecution
+                                    && associated_until.is_none()
+                                    && managed_until.is_none(),
+                            })
+                        })())
+                    },
+                )
+                .collect()
         })
     }
 
@@ -791,8 +1215,22 @@ fn parse_owner(
     }
 }
 
+fn parse_association_owner(
+    workspace_id: Option<String>,
+    epic_id: Option<String>,
+    feature_id: Option<String>,
+    work_item_id: Option<String>,
+) -> Result<HierarchyOwner, AppError> {
+    match (workspace_id, epic_id, feature_id, work_item_id) {
+        (Some(id), None, None, None) => Ok(HierarchyOwner::Workspace(parse_id(&id)?)),
+        (None, epic_id, feature_id, work_item_id) => parse_owner(epic_id, feature_id, work_item_id),
+        _ => Err(AppError::WorkflowOperationUnauthorized),
+    }
+}
+
 fn parse_role(value: &str) -> Result<ManagedSessionRole, AppError> {
     match value {
+        "workspace_planning" => Ok(ManagedSessionRole::WorkspacePlanning),
         "epic_navigation" => Ok(ManagedSessionRole::EpicNavigation),
         "feature_planning" => Ok(ManagedSessionRole::FeaturePlanning),
         "work_item_execution" => Ok(ManagedSessionRole::WorkItemExecution),
@@ -800,6 +1238,14 @@ fn parse_role(value: &str) -> Result<ManagedSessionRole, AppError> {
         "review" => Ok(ManagedSessionRole::Review),
         _ => Err(AppError::WorkflowOperationUnauthorized),
     }
+}
+
+fn parse_time(value: &str) -> Result<OffsetDateTime, AppError> {
+    let nanoseconds = value
+        .parse::<i128>()
+        .map_err(|error| AppError::Domain(error.to_string()))?;
+    OffsetDateTime::from_unix_timestamp_nanos(nanoseconds)
+        .map_err(|error| AppError::Domain(error.to_string()))
 }
 
 fn parse_tool(value: &str) -> Result<Tool, AppError> {
@@ -832,6 +1278,13 @@ fn wire_name<T: Serialize>(value: T) -> Result<String, AppError> {
         .ok_or_else(|| AppError::Domain("workflow wire value is invalid".to_owned()))
 }
 
+fn parse_wire<T>(value: &str) -> Result<T, AppError>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    serde_json::from_value(serde_json::Value::String(value.to_owned())).map_err(Into::into)
+}
+
 fn token_hash(token: &str) -> String {
     format!("{:x}", Sha256::digest(token.as_bytes()))
 }
@@ -855,12 +1308,14 @@ mod tests {
     use std::path::PathBuf;
 
     use rusqlite::params;
+    use sha2::{Digest, Sha256};
     use tempfile::TempDir;
     use time::OffsetDateTime;
     use workboard_core::{
-        AssociationIntervalId, CheckoutId, CheckoutPathId, ConversationId, EpicId, FeatureId,
-        HierarchyOwner, LaunchIntentId, ManagedSessionId, ManagedSessionRole, NextActionKind,
-        RepositoryId, Tool, WorkItemId, WorkItemStatus, WorkspaceId,
+        AssociationIntervalId, CheckoutId, CheckoutPathId, ConversationId, DocumentId, EpicId,
+        FeatureId, HierarchyOwner, LaunchIntentId, ManagedSessionId, ManagedSessionRole,
+        NextActionKind, RepositoryId, RepositoryPathId, Tool, WorkItemId, WorkItemStatus,
+        WorkspaceId,
     };
 
     use super::{
@@ -869,12 +1324,14 @@ mod tests {
     };
     use crate::AppError;
     use crate::storage::SqliteStore;
+    use crate::workspace::WorkboardApplication;
 
     struct Fixture {
         _directory: TempDir,
         store: SqliteStore,
         work_item_id: WorkItemId,
         repository_id: RepositoryId,
+        database: PathBuf,
         checkout_path: PathBuf,
         at: OffsetDateTime,
         token: String,
@@ -888,15 +1345,37 @@ mod tests {
             .expect("Codex instructions");
         std::fs::write(checkout_path.join("CLAUDE.md"), "# Claude instructions\n")
             .expect("Claude instructions");
-        let mut store =
-            SqliteStore::open(directory.path().join("workboard.sqlite")).expect("open store");
+        let planning_path = directory.path().join("planning-store");
+        let epic_relative = PathBuf::from("workspaces/demo/epics/launch/EPIC.md");
+        let feature_relative =
+            PathBuf::from("workspaces/demo/epics/launch/features/availability/FEATURE.md");
+        let work_item_relative =
+            PathBuf::from("workspaces/demo/epics/launch/features/availability/work-items/api.md");
+        let dependency_relative = PathBuf::from(
+            "workspaces/demo/epics/launch/features/availability/work-items/foundation.md",
+        );
+        for (relative, body) in [
+            (&epic_relative, "# Launch\n"),
+            (&feature_relative, "# Availability\n"),
+            (&work_item_relative, "# Availability API\n"),
+            (&dependency_relative, "# Foundation\n"),
+        ] {
+            let path = planning_path.join(relative);
+            std::fs::create_dir_all(path.parent().expect("document parent"))
+                .expect("document parent");
+            std::fs::write(path, body).expect("planning document");
+        }
+        let database = directory.path().join("workboard.sqlite");
+        let mut store = SqliteStore::open(&database).expect("open store");
         let workspace_id = WorkspaceId::generate();
         let planning_repository_id = RepositoryId::generate();
         let repository_id = RepositoryId::generate();
         let epic_id = EpicId::generate();
         let feature_id = FeatureId::generate();
         let work_item_id = WorkItemId::generate();
+        let dependency_work_item_id = WorkItemId::generate();
         let checkout_id = CheckoutId::generate();
+        let checkout_path_id = CheckoutPathId::generate();
         let session_id = ConversationId::generate();
         let intent_id = LaunchIntentId::generate();
         let token = "scoped-workflow-token".to_owned();
@@ -932,6 +1411,17 @@ mod tests {
                     ],
                 )?;
                 transaction.execute(
+                    "INSERT INTO repository_paths (
+                         id, repository_id, path, observed_from, observed_until
+                     ) VALUES (?1, ?2, ?3, ?4, NULL)",
+                    params![
+                        RepositoryPathId::generate().to_string(),
+                        planning_repository_id.to_string(),
+                        planning_path.to_string_lossy(),
+                        now,
+                    ],
+                )?;
+                transaction.execute(
                     "INSERT INTO epics (id, workspace_id, slug, title, created_at)
                      VALUES (?1, ?2, 'launch', 'Launch', ?3)",
                     params![epic_id.to_string(), workspace_id.to_string(), now],
@@ -950,9 +1440,100 @@ mod tests {
                     params![work_item_id.to_string(), feature_id.to_string(), now],
                 )?;
                 transaction.execute(
+                    "INSERT INTO work_items (
+                         id, feature_id, key, slug, title, status, created_at,
+                         proposal_order
+                     ) VALUES (?1, ?2, 'launch/availability/foundation',
+                               'foundation', 'Foundation', 'done', ?3, 0)",
+                    params![
+                        dependency_work_item_id.to_string(),
+                        feature_id.to_string(),
+                        now,
+                    ],
+                )?;
+                transaction.execute(
+                    "UPDATE work_items SET proposal_order = 1 WHERE id = ?1",
+                    [work_item_id.to_string()],
+                )?;
+                transaction.execute(
                     "INSERT INTO work_item_repositories (work_item_id, repository_id)
                      VALUES (?1, ?2)",
                     params![work_item_id.to_string(), repository_id.to_string()],
+                )?;
+                transaction.execute(
+                    "INSERT INTO work_item_repositories (work_item_id, repository_id)
+                     VALUES (?1, ?2)",
+                    params![
+                        dependency_work_item_id.to_string(),
+                        repository_id.to_string()
+                    ],
+                )?;
+                for (document_id, epic, feature, work_item, kind, relative, body) in [
+                    (
+                        DocumentId::generate().to_string(),
+                        Some(epic_id.to_string()),
+                        None,
+                        None,
+                        "epic",
+                        epic_relative.as_path(),
+                        "# Launch\n",
+                    ),
+                    (
+                        DocumentId::generate().to_string(),
+                        None,
+                        Some(feature_id.to_string()),
+                        None,
+                        "feature",
+                        feature_relative.as_path(),
+                        "# Availability\n",
+                    ),
+                    (
+                        DocumentId::generate().to_string(),
+                        None,
+                        None,
+                        Some(work_item_id.to_string()),
+                        "work_item",
+                        work_item_relative.as_path(),
+                        "# Availability API\n",
+                    ),
+                    (
+                        DocumentId::generate().to_string(),
+                        None,
+                        None,
+                        Some(dependency_work_item_id.to_string()),
+                        "work_item",
+                        dependency_relative.as_path(),
+                        "# Foundation\n",
+                    ),
+                ] {
+                    transaction.execute(
+                        "INSERT INTO documents (
+                             id, repository_id, epic_id, feature_id, work_item_id,
+                             kind, relative_path, content_hash, observed_commit,
+                             observed_at
+                         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
+                                   'planning-head', ?9)",
+                        params![
+                            document_id,
+                            planning_repository_id.to_string(),
+                            epic,
+                            feature,
+                            work_item,
+                            kind,
+                            relative.to_string_lossy(),
+                            format!("{:x}", Sha256::digest(body.as_bytes())),
+                            now,
+                        ],
+                    )?;
+                }
+                transaction.execute(
+                    "INSERT INTO work_item_dependencies (
+                         work_item_id, dependency_work_item_id, dependency_order
+                     ) VALUES (?1, ?2, 0)",
+                    params![
+                        work_item_id.to_string(),
+                        dependency_work_item_id.to_string()
+                    ],
                 )?;
                 transaction.execute(
                     "INSERT INTO checkouts (
@@ -967,8 +1548,30 @@ mod tests {
                          id, checkout_id, path, observed_from, observed_until
                      ) VALUES (?1, ?2, ?3, ?4, NULL)",
                     params![
-                        CheckoutPathId::generate().to_string(),
+                        checkout_path_id.to_string(),
                         checkout_id.to_string(),
+                        checkout_path.to_string_lossy(),
+                        now,
+                    ],
+                )?;
+                transaction.execute(
+                    "INSERT INTO checkout_readiness (
+                         checkout_id, schema_version, repository_id, checkout_path_id,
+                         purpose, access_mode, owner_kind, owner_id, session_id,
+                         session_key, parent_feature_checkout_id, base_revision,
+                         source_revision, path, git_worktree_identity, branch, head,
+                         availability, isolation_generation, reconciliation_generation,
+                         evidence_json, observed_at
+                     ) VALUES (?1, 1, ?2, ?3, 'work_item_write', 'write_isolated',
+                               'work_item', ?4, NULL, '', NULL, 'fixture-head',
+                               'fixture-head', ?5, 'feature-checkout',
+                               'feature/availability', 'fixture-head', 'available',
+                               1, 1, '[]', ?6)",
+                    params![
+                        checkout_id.to_string(),
+                        repository_id.to_string(),
+                        checkout_path_id.to_string(),
+                        work_item_id.to_string(),
                         checkout_path.to_string_lossy(),
                         now,
                     ],
@@ -1038,6 +1641,7 @@ mod tests {
             store,
             work_item_id,
             repository_id,
+            database,
             checkout_path,
             at,
             token,
@@ -1071,6 +1675,28 @@ mod tests {
                 .expect("canonical instruction path")
         );
         assert!(assigned.instructions[0].required);
+        let mut application =
+            WorkboardApplication::open(&fixture.database).expect("open application");
+        let context = application
+            .assigned_hierarchy(&fixture.token, fixture.at + time::Duration::minutes(3))
+            .expect("read assigned context");
+        assert_eq!(context.schema_version, 2);
+        assert_eq!(
+            context.work_item.as_ref().map(|item| item.id),
+            Some(fixture.work_item_id)
+        );
+        assert_eq!(context.repositories.len(), 1);
+        assert_eq!(context.documents.len(), 4);
+        assert_eq!(context.dependencies.len(), 1);
+        assert_eq!(
+            context.dependencies[0].work_item.slug.as_str(),
+            "foundation"
+        );
+        assert_eq!(context.sessions.len(), 1);
+        assert_eq!(context.sessions[0].session_id, principal.session_id);
+        assert!(context.sessions[0].primary);
+        let encoded = serde_json::to_string(&context).expect("serialize assigned context");
+        assert!(!encoded.contains("thread-one"));
         assert!(matches!(
             WorkflowOperationService::new(&mut fixture.store)
                 .authenticate("wrong", fixture.at + time::Duration::minutes(3)),

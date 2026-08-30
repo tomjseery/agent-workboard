@@ -23,7 +23,7 @@ use crate::planning_workflow::PlanningWorkflowService;
 use crate::recovery::RecoveryService;
 use crate::session_launch::SessionLaunchService;
 use crate::storage::{SqliteStore, StorageHealth};
-use crate::workflow_operations::{AssignedHierarchy, WorkflowOperationService};
+use crate::workflow_operations::{AssignedContext, WorkflowOperationService};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InitialiseWorkspace {
@@ -144,17 +144,162 @@ impl WorkboardApplication {
         &mut self,
         workflow_token: &str,
         observed_at: OffsetDateTime,
-    ) -> Result<AssignedHierarchy, AppError> {
+    ) -> Result<AssignedContext, AppError> {
         let principal = self
             .workflow_operations()
             .authenticate(workflow_token, observed_at)?;
-        let repository = self.workflow_operations().assigned_repository(&principal)?;
         let snapshot = self.snapshot(principal.workspace_id)?;
-        Ok(AssignedHierarchy {
-            schema_version: 1,
+        let (epic, feature, work_item) = match principal.owner {
+            HierarchyOwner::Workspace(_) => (None, None, None),
+            HierarchyOwner::Epic(epic_id) => (
+                Some(
+                    snapshot
+                        .epics
+                        .iter()
+                        .find(|epic| epic.id == epic_id)
+                        .cloned()
+                        .ok_or_else(|| missing_assigned_entity("epic"))?,
+                ),
+                None,
+                None,
+            ),
+            HierarchyOwner::Feature(feature_id) => {
+                let feature = snapshot
+                    .features
+                    .iter()
+                    .find(|feature| feature.id == feature_id)
+                    .cloned()
+                    .ok_or_else(|| missing_assigned_entity("feature"))?;
+                let epic = snapshot
+                    .epics
+                    .iter()
+                    .find(|epic| epic.id == feature.epic_id)
+                    .cloned()
+                    .ok_or_else(|| missing_assigned_entity("epic"))?;
+                (Some(epic), Some(feature), None)
+            }
+            HierarchyOwner::WorkItem(work_item_id) => {
+                let work_item = snapshot
+                    .work_items
+                    .iter()
+                    .find(|item| item.id == work_item_id)
+                    .cloned()
+                    .ok_or(AppError::WorkItemNotFound)?;
+                let feature = snapshot
+                    .features
+                    .iter()
+                    .find(|feature| feature.id == work_item.feature_id)
+                    .cloned()
+                    .ok_or_else(|| missing_assigned_entity("feature"))?;
+                let epic = snapshot
+                    .epics
+                    .iter()
+                    .find(|epic| epic.id == feature.epic_id)
+                    .cloned()
+                    .ok_or_else(|| missing_assigned_entity("epic"))?;
+                (Some(epic), Some(feature), Some(work_item))
+            }
+        };
+        let lineage_owners = epic
+            .iter()
+            .map(|epic| HierarchyOwner::Epic(epic.id))
+            .chain(
+                feature
+                    .iter()
+                    .map(|feature| HierarchyOwner::Feature(feature.id)),
+            )
+            .chain(
+                work_item
+                    .iter()
+                    .map(|item| HierarchyOwner::WorkItem(item.id)),
+            )
+            .collect::<Vec<_>>();
+        let dependency_items = if let Some(work_item) = &work_item {
+            self.workflow_operations()
+                .assigned_dependency_ids(work_item.id)?
+                .into_iter()
+                .map(|dependency_id| {
+                    snapshot
+                        .work_items
+                        .iter()
+                        .find(|item| item.id == dependency_id)
+                        .cloned()
+                        .ok_or(AppError::WorkItemNotFound)
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            Vec::new()
+        };
+        let mut document_owners = lineage_owners.clone();
+        document_owners.extend(
+            dependency_items
+                .iter()
+                .map(|item| HierarchyOwner::WorkItem(item.id)),
+        );
+        let checkout_ids = if let Some(work_item) = &work_item {
+            let mut checkout_ids = snapshot
+                .effective_checkouts
+                .iter()
+                .filter(|checkout| checkout.work_item_id == Some(work_item.id))
+                .map(|checkout| checkout.checkout_id)
+                .collect::<Vec<_>>();
+            checkout_ids.sort_by_key(ToString::to_string);
+            checkout_ids.dedup();
+            if checkout_ids.len() != work_item.repository_ids.len()
+                || !checkout_ids.contains(&principal.checkout_id)
+            {
+                return Err(AppError::ResumeCheckoutRequired);
+            }
+            checkout_ids
+        } else {
+            vec![principal.checkout_id]
+        };
+        let repositories = checkout_ids
+            .into_iter()
+            .map(|checkout_id| {
+                self.workflow_operations()
+                    .assigned_repository_checkout(&principal, checkout_id)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let documents = self
+            .workflow_operations()
+            .assigned_documents(&principal, &document_owners)?;
+        if documents.len() != document_owners.len() {
+            return Err(AppError::External {
+                code: "assigned_document_missing".to_owned(),
+                message: "the authenticated hierarchy does not have every required document"
+                    .to_owned(),
+            });
+        }
+        let sessions = self
+            .workflow_operations()
+            .assigned_sessions(&principal, &lineage_owners)?;
+        let dependencies = dependency_items
+            .into_iter()
+            .map(|dependency| {
+                let document = documents
+                    .iter()
+                    .find(|document| {
+                        document.document.owner == HierarchyOwner::WorkItem(dependency.id)
+                    })
+                    .cloned()
+                    .ok_or_else(|| missing_assigned_entity("dependency_document"))?;
+                Ok(crate::workflow_operations::AssignedDependency {
+                    work_item: dependency,
+                    document,
+                })
+            })
+            .collect::<Result<Vec<_>, AppError>>()?;
+        Ok(AssignedContext {
+            schema_version: 2,
             principal,
-            repository,
-            snapshot,
+            epic,
+            feature,
+            work_item,
+            dependencies,
+            repositories,
+            documents,
+            sessions,
         })
     }
 
@@ -1408,6 +1553,13 @@ fn validate_title(title: &str, kind: &str) -> Result<(), AppError> {
         return Err(AppError::Domain(format!("{kind} title cannot be blank")));
     }
     Ok(())
+}
+
+fn missing_assigned_entity(kind: &str) -> AppError {
+    AppError::External {
+        code: format!("assigned_{kind}_missing"),
+        message: format!("the authenticated {kind} is missing from its workspace"),
+    }
 }
 
 fn epic_template(title: &str) -> String {

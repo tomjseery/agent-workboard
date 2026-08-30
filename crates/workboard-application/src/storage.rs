@@ -12,9 +12,23 @@ use workboard_core::{ConversationId, LaunchLeaseId};
 
 use crate::AppError;
 
-const CURRENT_SCHEMA_VERSION: i64 = 32;
+const CURRENT_SCHEMA_VERSION: i64 = 33;
 const FOUNDATION_SCHEMA_CHECKSUM: &str = "agent-workboard-foundation-v1";
 const WORKSPACE_PLANNING_SCHEMA_CHECKSUM: &str = "agent-workboard-workspace-planning-v1";
+const WORK_ITEM_DEPENDENCY_SCHEMA_CHECKSUM: &str = "agent-workboard-work-item-dependency-v1";
+const WORK_ITEM_DEPENDENCY_SQL: &str = r#"
+ALTER TABLE work_items ADD COLUMN proposal_order INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE work_item_dependencies (
+    work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+    dependency_work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE RESTRICT,
+    dependency_order INTEGER NOT NULL CHECK (dependency_order >= 0),
+    PRIMARY KEY (work_item_id, dependency_work_item_id),
+    UNIQUE (work_item_id, dependency_order),
+    CHECK (work_item_id <> dependency_work_item_id)
+);
+CREATE INDEX work_item_dependencies_dependency
+    ON work_item_dependencies (dependency_work_item_id, work_item_id);
+"#;
 const WORKSPACE_PLANNING_SQL: &str = r#"
 PRAGMA defer_foreign_keys = ON;
 CREATE TABLE launch_intents_v2 (
@@ -2403,6 +2417,13 @@ fn migrate(connection: &Connection) -> Result<(), AppError> {
         WORKSPACE_PLANNING_SCHEMA_CHECKSUM,
         WORKSPACE_PLANNING_SQL,
     )?;
+    apply_validated_migration(
+        connection,
+        33,
+        WORK_ITEM_DEPENDENCY_SCHEMA_CHECKSUM,
+        WORK_ITEM_DEPENDENCY_SQL,
+        backfill_work_item_dependencies,
+    )?;
     Ok(())
 }
 
@@ -2480,6 +2501,104 @@ fn apply_import_repository_migrations(
         IMPORT_BATCH_FINAL_AUDIT_CHECKPOINT_SCHEMA_CHECKSUM,
         "",
     )
+}
+
+fn backfill_work_item_dependencies(transaction: &Transaction<'_>) -> Result<(), AppError> {
+    let feature_ids = {
+        let mut statement =
+            transaction.prepare("SELECT id FROM features ORDER BY created_at, id")?;
+        statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    for feature_id in feature_ids {
+        let payload = transaction
+            .query_row(
+                "SELECT event.payload_json FROM workflow_events event
+                 JOIN workflow_runs run ON run.id = event.run_id
+                 WHERE run.feature_id = ?1 AND event.to_state = 'proposal_ready'
+                 ORDER BY event.sequence DESC LIMIT 1",
+                [feature_id.as_str()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        let Some(payload) = payload else {
+            continue;
+        };
+        let payload: serde_json::Value = serde_json::from_str(&payload)?;
+        let proposed = payload
+            .pointer("/proposal/work_items")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| {
+                AppError::PlanningDocumentInvalid(
+                    "published Feature proposal has no Work-item dependency graph".to_owned(),
+                )
+            })?;
+        let database_items = {
+            let mut statement =
+                transaction.prepare("SELECT slug, id FROM work_items WHERE feature_id = ?1")?;
+            statement
+                .query_map([feature_id.as_str()], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<Result<HashMap<_, _>, _>>()?
+        };
+        for (proposal_order, item) in proposed.iter().enumerate() {
+            let slug = item
+                .get("slug")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| {
+                    AppError::PlanningDocumentInvalid(
+                        "published Work-item dependency slug is missing".to_owned(),
+                    )
+                })?;
+            let work_item_id = database_items.get(slug).ok_or_else(|| {
+                AppError::PlanningDocumentInvalid(format!(
+                    "published Work item {slug} is missing from its Feature"
+                ))
+            })?;
+            transaction.execute(
+                "UPDATE work_items SET proposal_order = ?2 WHERE id = ?1",
+                params![
+                    work_item_id,
+                    i64::try_from(proposal_order)
+                        .map_err(|error| AppError::Domain(error.to_string()))?,
+                ],
+            )?;
+            let dependencies = item
+                .get("dependencies")
+                .and_then(serde_json::Value::as_array)
+                .ok_or_else(|| {
+                    AppError::PlanningDocumentInvalid(format!(
+                        "published Work item {slug} has no dependency list"
+                    ))
+                })?;
+            for (dependency_order, dependency) in dependencies.iter().enumerate() {
+                let dependency_slug = dependency.as_str().ok_or_else(|| {
+                    AppError::PlanningDocumentInvalid(format!(
+                        "published Work item {slug} has an invalid dependency"
+                    ))
+                })?;
+                let dependency_id = database_items.get(dependency_slug).ok_or_else(|| {
+                    AppError::PlanningDocumentInvalid(format!(
+                        "published dependency {dependency_slug} is missing from its Feature"
+                    ))
+                })?;
+                transaction.execute(
+                    "INSERT INTO work_item_dependencies (
+                         work_item_id, dependency_work_item_id, dependency_order
+                     ) VALUES (?1, ?2, ?3)",
+                    params![
+                        work_item_id,
+                        dependency_id,
+                        i64::try_from(dependency_order)
+                            .map_err(|error| AppError::Domain(error.to_string()))?,
+                    ],
+                )?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn apply_import_repository_migrations_atomically(
@@ -3214,7 +3333,11 @@ fn health(connection: &Connection) -> Result<StorageHealth, AppError> {
 pub(crate) fn drop_workspace_planning_schema(connection: &Connection) {
     connection
         .execute_batch(
-            r#"DROP TABLE workspace_planning_proposals;
+            r#"DROP TABLE work_item_dependencies;
+            ALTER TABLE work_items DROP COLUMN proposal_order;
+            DELETE FROM schema_migrations WHERE version = 33;
+
+            DROP TABLE workspace_planning_proposals;
 
             CREATE TABLE launch_intents_v1 (
                 id TEXT PRIMARY KEY,
@@ -4204,7 +4327,7 @@ mod tests {
         assert_eq!(preserved_attestation, valid_attestation);
         assert_eq!(legacy_authority, "immutable_evidence");
         let health = store.health().expect("storage health");
-        assert_eq!(health.schema_version, 32);
+        assert_eq!(health.schema_version, 33);
         assert!(health.is_healthy());
         let audited_attestations: Vec<(String, String, String, String)> = store
             .read(|connection| {
@@ -4249,7 +4372,7 @@ mod tests {
             .expect("read upgraded schema 20 attestations");
         assert_eq!(upgraded_attestations, audited_attestations);
         let health = store.health().expect("upgraded storage health");
-        assert_eq!(health.schema_version, 32);
+        assert_eq!(health.schema_version, 33);
         assert!(health.is_healthy());
         drop(store);
 
