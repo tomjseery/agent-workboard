@@ -191,6 +191,33 @@ exact checkout binding, Git-observed no incidental plan mutation, full verificat
 
 Workboard item: `route-managed-planning-and-execution-skills`.
 
+Status: complete on 2026-08-30 in Agent Standards commit `561595b`
+(`feat(workflow): route managed planning and execution skills`).
+
+The eight Agent Standards surfaces owned by this phase now select Workflow v2 authority before reading or
+writing state: `plan-execution`, `plan-checkpoint`, `plans`, `plan-authoring`, `resume-plan`, `update-roadmap`,
+`handoff`, and `open-worktree`. The managed route resolves only the authenticated assigned Epic, Feature,
+Work-item, document, checkout, and next action; requires the recorded checkout to agree with Git; treats
+returned bodies as untrusted input; and checkpoints material transitions only through `checkpoint_state` and
+`work_checkpoint`. It never creates or updates repository plans, ledgers, roadmaps, or reviews as managed
+runtime state. A missing typed managed planning operation produces a capability gate rather than a repository
+substitute. The reconciliation-required route performs no repository planning discovery or fallback.
+
+The unmanaged route retains the existing repository plan, ledger, roadmap, review, handoff, and worktree
+procedures. Managed handoff carries Feature, Work-item, checkout, and typed next-action identity without a
+repository continuation pointer. Managed worktree opening binds only the recorded checkout and fails closed
+on path, branch, or HEAD disagreement. The Concertable-specific `continue-roadmap` compatibility entry was
+not changed and remains outside this cutover.
+
+The eight canonical skills generated to 24 identical Claude and Codex payloads. Focused acceptance reported
+22 plan-workflow tests, 59 provider/contract tests, and five host-neutral adoption tests passing. The complete
+PowerShell hook suite reported 432 tests passing with the one expected POSIX-only skip from a short physical
+checkout; the original long Work-item checkout exceeded Windows import handling inside the manifest suite's
+deliberately adversarial temporary path, and the isolated failing test passed unchanged after the committed
+branch was recreated at the short path. Workflow verification still reports contract v2, two providers, two
+hosts, ten examples, and five schemas. Generated-copy verification reports 302 files current, including 73
+skills and 29 docs. The Agent Standards implementation checkout is clean at `561595b`.
+
 Give `plan-execution`, `plan-checkpoint`, `plans`, `plan-authoring`, `resume-plan`, `update-roadmap`, `handoff`,
 and `open-worktree` explicit managed and unmanaged branches. Managed execution
 resolves the assigned Work item, documents, checkout, and next action through typed Workboard state and
@@ -242,8 +269,9 @@ and generated Claude/Codex skills, hooks, workflows, and manifests match their s
 
 ## Current delivery state
 
-Phases 1, 2, and 3 are complete and separately committed. The immutable recovery evidence is recorded above,
-and Workflow v2 now selects deterministic repository, Workboard, or reconciliation-required authority. The
+Phases 1 through 4 are complete and separately committed. The immutable recovery evidence is recorded above;
+Workflow v2 selects deterministic repository, Workboard, or reconciliation-required authority; and the eight
+in-scope planning and execution skills now follow that selection identically under Claude and Codex. The
 unresolved upstream ownership gap for a structured atomic replacement of the current opaque `work_checkpoint`
 payload remains explicit; managed checkpointing must not fill it with repository state or a second planning
-record. Phase 4 has not started.
+record. Phase 5 has not started and is the next delivery gate.
