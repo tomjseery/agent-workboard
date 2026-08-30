@@ -4,6 +4,7 @@ mod hierarchy;
 mod identity;
 mod launch;
 mod live;
+mod profile;
 mod workflow;
 
 pub use association::{
@@ -39,6 +40,10 @@ pub use launch::{
 pub use live::{
     ConversationLifecycle, LiveEvidenceSource, LiveStatus, ProcessIdentity, ProcessIdentityError,
     Resumability,
+};
+pub use profile::{
+    LAUNCH_PROFILE_SCHEMA_VERSION, LaunchProfile, LaunchProfileError, LaunchProfileSource,
+    ReasoningEffort,
 };
 pub use workflow::{
     DocumentKind, GitOperationKind, IntentStatus, ManagedSessionRole, NextActionKind,

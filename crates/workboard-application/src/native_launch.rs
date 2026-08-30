@@ -10,9 +10,9 @@ use time::OffsetDateTime;
 use workboard_adapter_claude::ClaudeAdapterV1;
 use workboard_adapter_codex::CodexAdapterV1;
 use workboard_core::{
-    ConversationLifecycle, ConversationRef, LiveEvidenceSource, LiveStatus, ManagedLaunchMode,
-    ManagedLaunchRequest, ManagedLaunchSpec, ProcessIdentity, Resumability, ResumeLaunchSpec,
-    TerminalKind, Tool,
+    ConversationLifecycle, ConversationRef, LaunchProfile, LiveEvidenceSource, LiveStatus,
+    ManagedLaunchMode, ManagedLaunchRequest, ManagedLaunchSpec, ProcessIdentity, Resumability,
+    ResumeLaunchSpec, TerminalKind, Tool,
 };
 use workboard_native::AdapterFailureKind;
 
@@ -100,6 +100,7 @@ pub struct PrepareManagedLaunch {
     pub launch_token: String,
     pub workflow_token: Option<String>,
     pub capability_environment: Vec<(String, String)>,
+    pub profile: LaunchProfile,
     pub initial_prompt: Option<String>,
 }
 
@@ -266,6 +267,15 @@ pub fn prepare_managed_launch(
     let (terminal_kind, terminal) = resolve_terminal(&request.terminal)?;
     let native = resolve_executable(&request.native)
         .ok_or_else(|| AppError::NativeExecutableUnavailable(request.native.clone()))?;
+    request
+        .profile
+        .validate_for_launch(request.tool, request.profile.role)
+        .map_err(|error| AppError::Domain(error.to_string()))?;
+    let profile_arguments = match request.tool {
+        Tool::Claude => workboard_adapter_claude::launch_profile_arguments(&request.profile),
+        Tool::Codex => workboard_adapter_codex::launch_profile_arguments(&request.profile),
+    }
+    .map_err(|error| AppError::Domain(error.to_string()))?;
     let launch = ManagedLaunchSpec::new(ManagedLaunchRequest {
         terminal_kind,
         terminal_executable: terminal,
@@ -278,6 +288,7 @@ pub fn prepare_managed_launch(
         launch_token: request.launch_token,
         workflow_token: request.workflow_token,
         capability_environment: request.capability_environment,
+        profile_arguments,
         initial_prompt: request.initial_prompt,
     })
     .map_err(|error| AppError::Domain(error.to_string()))?;

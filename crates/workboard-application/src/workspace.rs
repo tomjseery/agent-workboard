@@ -7,10 +7,11 @@ use time::format_description::well_known::Rfc3339;
 use workboard_core::{
     AssociationIntervalId, Checkout, CheckoutAvailability, CheckoutId, CheckoutPathId,
     CheckoutPathInterval, ConversationId, ConversationRef, DocumentId, EffectiveCheckout, Epic,
-    EpicId, Feature, HierarchyOwner, ManagedSessionRole, MarkdownDocument, NativeSession,
-    NativeSessionAssociation, Repository, RepositoryId, RepositoryPath, RepositoryPathId,
-    RepositoryRemote, Slug, Tool, WorkItem, WorkItemId, WorkItemKey, WorkItemStatus, WorkflowState,
-    Workspace, WorkspaceId, WorkspaceSnapshot,
+    EpicId, Feature, HierarchyOwner, LaunchProfile, LaunchProfileSource, ManagedSessionRole,
+    MarkdownDocument, NativeSession, NativeSessionAssociation, ReasoningEffort, Repository,
+    RepositoryId, RepositoryPath, RepositoryPathId, RepositoryRemote, Slug, Tool, WorkItem,
+    WorkItemId, WorkItemKey, WorkItemStatus, WorkflowState, Workspace, WorkspaceId,
+    WorkspaceSnapshot,
 };
 
 use crate::AppError;
@@ -63,6 +64,7 @@ pub struct ManagedSessionTarget {
     pub role: ManagedSessionRole,
     pub tool: Tool,
     pub native_id: String,
+    pub profile: LaunchProfile,
     pub checkout: ManagedCheckout,
 }
 
@@ -87,6 +89,99 @@ impl WorkboardApplication {
 
     pub fn checkout_service(&mut self) -> CheckoutService<'_> {
         CheckoutService::new(&mut self.store)
+    }
+
+    pub fn preferred_launch_profile(
+        &self,
+        workspace_id: WorkspaceId,
+        tool: Tool,
+        role: ManagedSessionRole,
+    ) -> Result<LaunchProfile, AppError> {
+        let stored = self.store.read(|connection| {
+            connection
+                .query_row(
+                    "SELECT profile.schema_version, profile.model, profile.effort
+                     FROM launch_profile_preferences preference
+                     JOIN launch_profiles profile ON profile.id = preference.profile_id
+                     WHERE preference.workspace_id = ?1 AND preference.provider = ?2
+                       AND preference.role = ?3",
+                    params![
+                        workspace_id.to_string(),
+                        tool_name(tool),
+                        session_role_name(role)?,
+                    ],
+                    |row| {
+                        Ok((
+                            row.get::<_, u32>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                        ))
+                    },
+                )
+                .optional()
+                .map_err(Into::into)
+        })?;
+        stored.map_or_else(
+            || Ok(LaunchProfile::suggested(tool, role)),
+            |(schema_version, model, effort)| {
+                let profile = LaunchProfile {
+                    schema_version,
+                    tool,
+                    model: Some(model),
+                    effort: Some(parse_reasoning_effort(&effort)?),
+                    role,
+                    source: LaunchProfileSource::Preference,
+                };
+                profile
+                    .validate_for_launch(tool, role)
+                    .map_err(|error| AppError::Domain(error.to_string()))?;
+                Ok(profile)
+            },
+        )
+    }
+
+    pub fn remember_launch_profile(
+        &mut self,
+        workspace_id: WorkspaceId,
+        profile: &LaunchProfile,
+        updated_at: OffsetDateTime,
+    ) -> Result<(), AppError> {
+        profile
+            .validate_for_launch(profile.tool, profile.role)
+            .map_err(|error| AppError::Domain(error.to_string()))?;
+        let profile_id = uuid::Uuid::new_v4().to_string();
+        self.store.write(|transaction| {
+            transaction.execute(
+                "INSERT INTO launch_profiles (
+                     id, schema_version, provider, model, effort, role, source, created_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'preference', ?7)",
+                params![
+                    profile_id,
+                    i64::from(profile.schema_version),
+                    tool_name(profile.tool),
+                    profile.model.as_deref(),
+                    profile.effort.map(ReasoningEffort::as_str),
+                    session_role_name(profile.role)?,
+                    updated_at.unix_timestamp_nanos().to_string(),
+                ],
+            )?;
+            transaction.execute(
+                "INSERT INTO launch_profile_preferences (
+                     workspace_id, provider, role, profile_id, updated_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(workspace_id, provider, role) DO UPDATE SET
+                     profile_id = excluded.profile_id,
+                     updated_at = excluded.updated_at",
+                params![
+                    workspace_id.to_string(),
+                    tool_name(profile.tool),
+                    session_role_name(profile.role)?,
+                    profile_id,
+                    updated_at.unix_timestamp_nanos().to_string(),
+                ],
+            )?;
+            Ok(())
+        })
     }
 
     pub fn native_sources(&mut self) -> NativeSourceService<'_> {
@@ -562,12 +657,14 @@ impl WorkboardApplication {
                 .query_row(
                     "SELECT association.epic_id, association.feature_id,
                             association.work_item_id, managed.role,
-                            session.provider, session.native_id
+                            session.provider, session.native_id,
+                            profile.schema_version, profile.model, profile.effort, profile.source
                      FROM native_sessions session
                      JOIN native_session_associations association
                        ON association.session_id = session.id
                       AND association.associated_until IS NULL
                      JOIN managed_sessions managed ON managed.session_id = session.id
+                     LEFT JOIN launch_profiles profile ON profile.id = managed.profile_id
                      WHERE session.id = ?1
                      ORDER BY managed.managed_from DESC LIMIT 1",
                     [session_id.to_string()],
@@ -579,18 +676,46 @@ impl WorkboardApplication {
                             row.get::<_, String>(3)?,
                             row.get::<_, String>(4)?,
                             row.get::<_, String>(5)?,
+                            row.get::<_, Option<u32>>(6)?,
+                            row.get::<_, Option<String>>(7)?,
+                            row.get::<_, Option<String>>(8)?,
+                            row.get::<_, Option<String>>(9)?,
                         ))
                     },
                 )
                 .optional()?;
-            let (epic_id, feature_id, work_item_id, role, tool, native_id) =
-                row.ok_or(AppError::ConversationNotFound)?;
+            let (
+                epic_id,
+                feature_id,
+                work_item_id,
+                role,
+                tool,
+                native_id,
+                profile_schema,
+                model,
+                effort,
+                profile_source,
+            ) = row.ok_or(AppError::ConversationNotFound)?;
+            let tool = parse_tool(&tool)?;
+            let role = parse_session_role(&role)?;
+            let profile = match (profile_schema, model, effort, profile_source) {
+                (Some(schema_version), Some(model), Some(effort), Some(source)) => LaunchProfile {
+                    schema_version,
+                    tool,
+                    model: Some(model),
+                    effort: Some(parse_reasoning_effort(&effort)?),
+                    role,
+                    source: parse_profile_source(&source)?,
+                },
+                _ => LaunchProfile::legacy_unknown(tool, role),
+            };
             Ok(ManagedSessionTarget {
                 session_id,
                 owner: parse_hierarchy_owner(epic_id, feature_id, work_item_id)?,
-                role: parse_session_role(&role)?,
-                tool: parse_tool(&tool)?,
+                role,
+                tool,
                 native_id,
+                profile,
                 checkout,
             })
         })
@@ -1633,7 +1758,29 @@ fn parse_tool(value: &str) -> Result<Tool, AppError> {
     }
 }
 
+fn tool_name(tool: Tool) -> &'static str {
+    match tool {
+        Tool::Claude => "claude",
+        Tool::Codex => "codex",
+    }
+}
+
+fn session_role_name(role: ManagedSessionRole) -> Result<String, AppError> {
+    serde_json::to_value(role)?
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| AppError::Domain("managed session role has no wire name".to_owned()))
+}
+
 fn parse_session_role(value: &str) -> Result<ManagedSessionRole, AppError> {
+    serde_json::from_value(serde_json::Value::String(value.to_owned())).map_err(Into::into)
+}
+
+fn parse_reasoning_effort(value: &str) -> Result<ReasoningEffort, AppError> {
+    serde_json::from_value(serde_json::Value::String(value.to_owned())).map_err(Into::into)
+}
+
+fn parse_profile_source(value: &str) -> Result<LaunchProfileSource, AppError> {
     serde_json::from_value(serde_json::Value::String(value.to_owned())).map_err(Into::into)
 }
 
@@ -1727,6 +1874,41 @@ mod tests {
                 planning_store_path: planning_path.clone(),
             })
             .expect("initialise workspace");
+        let suggested = application
+            .preferred_launch_profile(
+                snapshot.workspace.id,
+                workboard_core::Tool::Claude,
+                workboard_core::ManagedSessionRole::WorkItemExecution,
+            )
+            .expect("suggested launch profile");
+        assert_eq!(suggested.model.as_deref(), Some("sonnet"));
+        let preferred = workboard_core::LaunchProfile::new(
+            workboard_core::Tool::Claude,
+            "opus",
+            workboard_core::ReasoningEffort::Xhigh,
+            workboard_core::ManagedSessionRole::WorkItemExecution,
+            workboard_core::LaunchProfileSource::ExplicitOverride,
+        )
+        .expect("preferred launch profile");
+        application
+            .remember_launch_profile(
+                snapshot.workspace.id,
+                &preferred,
+                time::OffsetDateTime::now_utc(),
+            )
+            .expect("remember launch profile");
+        let remembered = application
+            .preferred_launch_profile(
+                snapshot.workspace.id,
+                workboard_core::Tool::Claude,
+                workboard_core::ManagedSessionRole::WorkItemExecution,
+            )
+            .expect("remembered launch profile");
+        assert_eq!(remembered.model.as_deref(), Some("opus"));
+        assert_eq!(
+            remembered.source,
+            workboard_core::LaunchProfileSource::Preference
+        );
         let code_path = directory.path().join("code");
         fs::create_dir(&code_path).expect("create code repository");
         assert!(

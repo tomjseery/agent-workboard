@@ -7,9 +7,9 @@ use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 use workboard_core::{
     CheckoutAccessMode, CheckoutAvailability, CheckoutId, CheckoutPurpose, ConversationId,
-    DocumentKind, Epic, Feature, HierarchyOwner, LiveStatus, ManagedSessionRequestId,
-    ManagedSessionRole, MarkdownDocument, NextActionKind, RepositoryId, Resumability, Tool,
-    WorkItem, WorkItemCheckpointId, WorkItemId, WorkItemStatus, WorkspaceId,
+    DocumentKind, Epic, Feature, HierarchyOwner, LaunchProfile, LiveStatus,
+    ManagedSessionRequestId, ManagedSessionRole, MarkdownDocument, NextActionKind, RepositoryId,
+    Resumability, Tool, WorkItem, WorkItemCheckpointId, WorkItemId, WorkItemStatus, WorkspaceId,
 };
 
 use crate::AppError;
@@ -73,6 +73,7 @@ pub struct AssignedDependency {
 pub struct AssignedSession {
     pub session_id: ConversationId,
     pub provider: Tool,
+    pub profile: LaunchProfile,
     pub role: ManagedSessionRole,
     pub managed_status: String,
     pub live_status: Option<LiveStatus>,
@@ -560,10 +561,12 @@ impl<'a> WorkflowOperationService<'a> {
                             WHERE source.session_id = session.id
                           ) THEN 'missing'
                           ELSE 'unknown'
-                        END
+                        END,
+                        profile.schema_version, profile.model, profile.effort, profile.source
                  FROM native_session_associations association
                  JOIN native_sessions session ON session.id = association.session_id
                  JOIN managed_sessions managed ON managed.session_id = session.id
+                 LEFT JOIN launch_profiles profile ON profile.id = managed.profile_id
                  JOIN checkouts checkout ON checkout.id = managed.checkout_id
                  JOIN checkout_paths path
                    ON path.checkout_id = checkout.id AND path.observed_until IS NULL
@@ -609,6 +612,10 @@ impl<'a> WorkflowOperationService<'a> {
                         row.get::<_, String>(13)?,
                         row.get::<_, Option<String>>(14)?,
                         row.get::<_, String>(15)?,
+                        row.get::<_, Option<u32>>(16)?,
+                        row.get::<_, Option<String>>(17)?,
+                        row.get::<_, Option<String>>(18)?,
+                        row.get::<_, Option<String>>(19)?,
                     ))
                 })?
                 .collect::<Result<Vec<_>, _>>()?;
@@ -631,6 +638,10 @@ impl<'a> WorkflowOperationService<'a> {
                         checkout_path,
                         branch,
                         resumability,
+                        profile_schema,
+                        model,
+                        effort,
+                        profile_source,
                     )| {
                         let owner = match parse_association_owner(
                             workspace_id,
@@ -646,9 +657,24 @@ impl<'a> WorkflowOperationService<'a> {
                         }
                         Some((|| {
                             let role = parse_role(&role)?;
+                            let provider = parse_tool(&provider)?;
+                            let profile = match (profile_schema, model, effort, profile_source) {
+                                (Some(schema_version), Some(model), Some(effort), Some(source)) => {
+                                    LaunchProfile {
+                                        schema_version,
+                                        tool: provider,
+                                        model: Some(model),
+                                        effort: Some(parse_wire(&effort)?),
+                                        role,
+                                        source: parse_wire(&source)?,
+                                    }
+                                }
+                                _ => LaunchProfile::legacy_unknown(provider, role),
+                            };
                             Ok(AssignedSession {
                                 session_id: parse_id(&session_id)?,
-                                provider: parse_tool(&provider)?,
+                                provider,
+                                profile,
                                 role,
                                 managed_status,
                                 live_status: live_status.as_deref().map(parse_wire).transpose()?,
