@@ -97,6 +97,7 @@ pub struct ConfirmedSessionBinding {
     pub owner: HierarchyOwner,
     pub role: ManagedSessionRole,
     pub tool: Tool,
+    #[serde(skip_serializing)]
     pub native_id: String,
     pub session_id: ConversationId,
     pub checkout_id: CheckoutId,
@@ -2068,6 +2069,9 @@ mod tests {
         );
         assert_eq!(binding.checkout_id, fixture.checkout_id);
         assert!(binding.restore_membership_id.is_some());
+        let public_binding = serde_json::to_string(&binding).expect("public binding");
+        assert!(!public_binding.contains("thread-one"));
+        assert!(!public_binding.contains("native_id"));
         assert_eq!(
             SessionLaunchService::new(&mut fixture.store)
                 .binding_for_intent(prepared.intent_id)

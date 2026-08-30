@@ -1714,6 +1714,14 @@ mod tests {
         assert_eq!(context.repositories.len(), 1);
         assert_eq!(context.documents.len(), 4);
         assert_eq!(context.dependencies.len(), 1);
+        let projection = application
+            .work_item_projection(fixture.work_item_id)
+            .expect("project Work-item launch state");
+        assert!(projection.readiness.ready);
+        assert_eq!(projection.readiness.layer, 1);
+        assert_eq!(projection.sessions.len(), 1);
+        let public_projection = serde_json::to_string(&projection).expect("public projection");
+        assert!(!public_projection.contains("thread-one"));
         assert_eq!(
             context.dependencies[0].work_item.slug.as_str(),
             "foundation"

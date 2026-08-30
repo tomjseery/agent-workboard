@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod actions;
 pub mod caller;
 pub mod capability_bundle;
 pub mod checkout;
@@ -17,6 +18,7 @@ pub mod planning_workflow;
 pub mod recovery;
 pub mod session_launch;
 pub mod storage;
+pub mod work_projection;
 mod workflow_contract;
 pub mod workflow_operations;
 pub mod workspace;

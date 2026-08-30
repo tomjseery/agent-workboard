@@ -1,3 +1,4 @@
+mod actions;
 mod association;
 mod conversation;
 mod hierarchy;
@@ -7,6 +8,9 @@ mod live;
 mod profile;
 mod workflow;
 
+pub use actions::{
+    AVAILABLE_ACTIONS_SCHEMA_VERSION, AvailableAction, AvailableActionKind, AvailableActions,
+};
 pub use association::{
     AssociationAction, AssociationAuthority, AssociationEvent, AssociationEventError,
     AssociationEventVersion, AssociationEvidence, AssociationEvidenceError,
