@@ -100,7 +100,8 @@ impl<'a> WorkProjectionService<'a> {
             .cloned()
             .ok_or(AppError::WorkItemNotFound)?;
         let edges = self.feature_edges(feature_id)?;
-        let readiness = readiness(&work_item, &items, &edges)?;
+        let integration_blockers = self.integration_blockers(feature_id)?;
+        let readiness = readiness(&work_item, &items, &edges, &integration_blockers)?;
         let sessions = self.sessions(work_item_id)?;
         let available_actions = work_item_actions(&work_item, &readiness, &sessions);
         Ok(WorkItemProjection {
@@ -176,6 +177,24 @@ impl<'a> WorkProjectionService<'a> {
                     let (item, dependency) = row?;
                     Ok((parse_id(&item)?, parse_id(&dependency)?))
                 })
+                .collect()
+        })
+    }
+
+    fn integration_blockers(
+        &self,
+        feature_id: workboard_core::FeatureId,
+    ) -> Result<HashSet<WorkItemId>, AppError> {
+        self.store.read(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT DISTINCT integration.work_item_id
+                 FROM work_item_integrations integration
+                 JOIN work_items item ON item.id = integration.work_item_id
+                 WHERE item.feature_id = ?1 AND integration.status IN ('pending', 'conflict')",
+            )?;
+            statement
+                .query_map([feature_id.to_string()], |row| row.get::<_, String>(0))?
+                .map(|row| parse_id(&row?))
                 .collect()
         })
     }
@@ -349,6 +368,7 @@ fn readiness(
     work_item: &WorkItem,
     items: &[WorkItem],
     edges: &[(WorkItemId, WorkItemId)],
+    integration_blockers: &HashSet<WorkItemId>,
 ) -> Result<WorkItemReadiness, AppError> {
     let dependencies = edges
         .iter()
@@ -356,7 +376,8 @@ fn readiness(
         .filter_map(|(_, dependency)| items.iter().find(|item| item.id == *dependency))
         .cloned()
         .map(|work_item| WorkItemDependencyFact {
-            satisfied: dependency_satisfied(work_item.status),
+            satisfied: dependency_satisfied(work_item.status)
+                && !integration_blockers.contains(&work_item.id),
             work_item,
         })
         .collect::<Vec<_>>();
@@ -579,10 +600,13 @@ mod tests {
         let items = vec![root.clone(), middle.clone(), leaf.clone()];
         let edges = vec![(middle.id, root.id), (leaf.id, middle.id)];
 
-        let middle_readiness = readiness(&middle, &items, &edges).expect("middle readiness");
+        let middle_readiness =
+            readiness(&middle, &items, &edges, &std::collections::HashSet::new())
+                .expect("middle readiness");
         assert!(middle_readiness.ready);
         assert_eq!(middle_readiness.layer, 1);
-        let leaf_readiness = readiness(&leaf, &items, &edges).expect("leaf readiness");
+        let leaf_readiness = readiness(&leaf, &items, &edges, &std::collections::HashSet::new())
+            .expect("leaf readiness");
         assert!(!leaf_readiness.ready);
         assert_eq!(leaf_readiness.blocked_by, [middle.id]);
         assert_eq!(

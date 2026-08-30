@@ -20,6 +20,9 @@ use workboard_application::checkout::{
 use workboard_application::concertable_import::{
     ConcertableImportPreview, preview_concertable_plans,
 };
+use workboard_application::feature_integration::{
+    ConfirmFeatureIntegration, IntegrateFeatureBranches,
+};
 use workboard_application::follow_up::{SendSessionFollowUp, SystemFollowUpExecutor};
 use workboard_application::hooks::{HookIngestionMutation, MAX_HOOK_INPUT_BYTES};
 use workboard_application::integration::{
@@ -292,6 +295,10 @@ enum WorkCommand {
         #[arg(long)]
         idempotency_key: Option<String>,
     },
+    Integrate {
+        #[command(subcommand)]
+        command: WorkIntegrationCommand,
+    },
     Batch {
         #[command(subcommand)]
         command: WorkBatchCommand,
@@ -331,6 +338,28 @@ enum WorkBatchCommand {
     },
     Status {
         batch: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum WorkIntegrationCommand {
+    Preview {
+        feature: Option<String>,
+        #[arg(long)]
+        repository: Option<String>,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    Start {
+        run: String,
+        #[arg(long)]
+        confirm: String,
+    },
+    Resume {
+        run: String,
+    },
+    Status {
+        run: String,
     },
 }
 
@@ -1309,6 +1338,98 @@ fn execute(cli: Cli) -> Result<String, AppError> {
                 format!(
                     "Managed launch batch {} is {}",
                     outcome.batch_id, outcome.status
+                ),
+            )
+        }
+        Some(Command::Work(WorkArgs {
+            command:
+                WorkCommand::Integrate {
+                    command:
+                        WorkIntegrationCommand::Preview {
+                            feature,
+                            repository,
+                            idempotency_key,
+                        },
+                },
+        })) => {
+            let workspace_id = resolve_workspace(&application, cli.workspace)?;
+            let snapshot = application.snapshot(workspace_id)?;
+            let feature = select_feature(&snapshot, feature.as_deref(), cli.json)?.clone();
+            let repository = select_repository(&snapshot, repository.as_deref(), cli.json)?;
+            let preview = application
+                .feature_integrations()
+                .preview(IntegrateFeatureBranches {
+                    feature_id: feature.id,
+                    repository_id: repository.id,
+                    idempotency_key: idempotency_key.unwrap_or_else(new_idempotency_key),
+                    observed_at: time::OffsetDateTime::now_utc(),
+                })?;
+            output(
+                &preview,
+                cli.json,
+                format!(
+                    "Integration {} previews {} ordered branches. Confirm with: workboard work integrate start {} --confirm {}",
+                    preview.run.run_id,
+                    preview.run.steps.len(),
+                    preview.run.run_id,
+                    preview.confirmation_token,
+                ),
+            )
+        }
+        Some(Command::Work(WorkArgs {
+            command:
+                WorkCommand::Integrate {
+                    command: WorkIntegrationCommand::Start { run, confirm },
+                },
+        })) => {
+            let outcome =
+                application
+                    .feature_integrations()
+                    .confirm(ConfirmFeatureIntegration {
+                        run_id: run,
+                        confirmation_token: confirm,
+                        confirmed_at: time::OffsetDateTime::now_utc(),
+                    })?;
+            output(
+                &outcome,
+                cli.json,
+                format!(
+                    "Feature integration {} is {}",
+                    outcome.run_id, outcome.status
+                ),
+            )
+        }
+        Some(Command::Work(WorkArgs {
+            command:
+                WorkCommand::Integrate {
+                    command: WorkIntegrationCommand::Resume { run },
+                },
+        })) => {
+            let outcome = application
+                .feature_integrations()
+                .resume(&run, time::OffsetDateTime::now_utc())?;
+            output(
+                &outcome,
+                cli.json,
+                format!(
+                    "Feature integration {} is {}",
+                    outcome.run_id, outcome.status
+                ),
+            )
+        }
+        Some(Command::Work(WorkArgs {
+            command:
+                WorkCommand::Integrate {
+                    command: WorkIntegrationCommand::Status { run },
+                },
+        })) => {
+            let outcome = application.feature_integrations().outcome(&run)?;
+            output(
+                &outcome,
+                cli.json,
+                format!(
+                    "Feature integration {} is {}",
+                    outcome.run_id, outcome.status
                 ),
             )
         }
@@ -3750,8 +3871,8 @@ mod tests {
 
     use super::{
         Cli, Command as CliCommand, FeatureCommand, SessionCommand, Tool, WorkBatchCommand,
-        WorkCommand, codex_app_executable, default_native_executable, execute_from,
-        select_candidate, slugify,
+        WorkCommand, WorkIntegrationCommand, codex_app_executable, default_native_executable,
+        execute_from, select_candidate, slugify,
     };
 
     #[test]
@@ -3904,6 +4025,36 @@ mod tests {
                 command: WorkBatchCommand::Resume { .. }
             }
         ));
+    }
+
+    #[test]
+    fn feature_integration_requires_preview_confirmation_and_supports_resume() {
+        for (arguments, expected) in [
+            (
+                vec!["preview", "feature-key", "--repository", "code"],
+                "preview",
+            ),
+            (vec!["start", "run-id", "--confirm", "token"], "start"),
+            (vec!["resume", "run-id"], "resume"),
+            (vec!["status", "run-id"], "status"),
+        ] {
+            let mut command = vec!["workboard", "work", "integrate"];
+            command.extend(arguments);
+            let cli = Cli::try_parse_from(command).expect("integration command");
+            let Some(CliCommand::Work(work)) = cli.command else {
+                panic!("expected Work command");
+            };
+            let WorkCommand::Integrate { command } = work.command else {
+                panic!("expected integration command");
+            };
+            assert!(matches!(
+                (expected, command),
+                ("preview", WorkIntegrationCommand::Preview { .. })
+                    | ("start", WorkIntegrationCommand::Start { .. })
+                    | ("resume", WorkIntegrationCommand::Resume { .. })
+                    | ("status", WorkIntegrationCommand::Status { .. })
+            ));
+        }
     }
 
     #[test]

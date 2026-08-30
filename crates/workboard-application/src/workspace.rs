@@ -17,6 +17,7 @@ use workboard_core::{
 use crate::AppError;
 use crate::batch_launch::BatchLaunchService;
 use crate::checkout::CheckoutService;
+use crate::feature_integration::FeatureIntegrationService;
 use crate::follow_up::FollowUpService;
 use crate::git::{GitCli, GitRepositoryDiscovery, GitWorktreeResolver};
 use crate::integration_service::IntegrationService;
@@ -96,6 +97,10 @@ impl WorkboardApplication {
 
     pub fn batch_launches(&mut self) -> BatchLaunchService<'_> {
         BatchLaunchService::new(&mut self.store)
+    }
+
+    pub fn feature_integrations(&mut self) -> FeatureIntegrationService<'_> {
+        FeatureIntegrationService::new(&mut self.store)
     }
 
     pub fn work_item_projection(

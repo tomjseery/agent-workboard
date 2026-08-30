@@ -794,6 +794,44 @@ impl<'a> WorkflowOperationService<'a> {
                 "UPDATE work_items SET status = ?2 WHERE id = ?1",
                 params![request.work_item_id.to_string(), status_name],
             )?;
+            if status == WorkItemStatus::Review {
+                transaction.execute(
+                    "INSERT INTO work_item_integrations (
+                         work_item_id, repository_id, source_checkout_id, source_head,
+                         status, updated_at
+                     )
+                     SELECT ?1, checkout.repository_id, checkout.id, checkout.head,
+                            'pending', ?2
+                     FROM checkouts checkout
+                     WHERE checkout.id = ?3 AND checkout.head IS NOT NULL
+                     ON CONFLICT(work_item_id, repository_id) DO UPDATE SET
+                         source_checkout_id = excluded.source_checkout_id,
+                         source_head = excluded.source_head,
+                         status = CASE
+                             WHEN work_item_integrations.source_head = excluded.source_head
+                              AND work_item_integrations.status = 'integrated'
+                             THEN 'integrated' ELSE 'pending' END,
+                         integration_run_id = CASE
+                             WHEN work_item_integrations.source_head = excluded.source_head
+                              AND work_item_integrations.status = 'integrated'
+                             THEN work_item_integrations.integration_run_id ELSE NULL END,
+                         expected_target_head = CASE
+                             WHEN work_item_integrations.source_head = excluded.source_head
+                              AND work_item_integrations.status = 'integrated'
+                             THEN work_item_integrations.expected_target_head ELSE NULL END,
+                         result_head = CASE
+                             WHEN work_item_integrations.source_head = excluded.source_head
+                              AND work_item_integrations.status = 'integrated'
+                             THEN work_item_integrations.result_head ELSE NULL END,
+                         conflict = NULL,
+                         updated_at = excluded.updated_at",
+                    params![
+                        request.work_item_id.to_string(),
+                        timestamp(request.recorded_at),
+                        principal.checkout_id.to_string(),
+                    ],
+                )?;
+            }
             Ok(WorkItemCheckpointOutcome {
                 checkpoint_id,
                 work_item_id: request.work_item_id,
@@ -1771,6 +1809,32 @@ mod tests {
             .expect("repeat checkpoint");
         assert_eq!(first, repeated);
         assert_eq!(first.status, WorkItemStatus::Review);
+        let integration = fixture
+            .store
+            .read(|connection| {
+                connection
+                    .query_row(
+                        "SELECT source_checkout_id, source_head, status
+                         FROM work_item_integrations
+                         WHERE work_item_id = ?1 AND repository_id = ?2",
+                        params![
+                            fixture.work_item_id.to_string(),
+                            fixture.repository_id.to_string(),
+                        ],
+                        |row| {
+                            Ok((
+                                row.get::<_, String>(0)?,
+                                row.get::<_, String>(1)?,
+                                row.get::<_, String>(2)?,
+                            ))
+                        },
+                    )
+                    .map_err(Into::into)
+            })
+            .expect("queued integration");
+        assert!(!integration.0.is_empty());
+        assert_eq!(integration.1, "fixture-head");
+        assert_eq!(integration.2, "pending");
 
         let request = RequestManagedSession {
             work_item_id: fixture.work_item_id,
