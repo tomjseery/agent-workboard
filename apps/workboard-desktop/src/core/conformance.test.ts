@@ -68,7 +68,7 @@ describe("generated protocol conformance", () => {
     );
     expect(previous.responses[1].futureOptionalReadField).toBe("ignored");
     expect(
-      previous.responses[1].result.value.futureOptionalProjectionField,
+      (previous.responses[1].result.value as { futureOptionalProjectionField?: boolean }).futureOptionalProjectionField,
     ).toBe(true);
   });
 
@@ -94,12 +94,18 @@ describe("generated protocol conformance", () => {
     const readQueries = [
       "workspace_summary",
       "hierarchy_children",
+      "workspace_hierarchy",
+      "board_views",
+      "board_view",
       "board_snapshot",
     ] satisfies Array<ReadQuery["type"]>;
     const responseResults = [
       "handshake",
       "workspace_summary",
       "hierarchy_children",
+      "workspace_hierarchy",
+      "board_views",
+      "board_view",
       "board_snapshot",
       "subscription_accepted",
       "command_accepted",
@@ -112,11 +118,13 @@ describe("generated protocol conformance", () => {
     ] satisfies Array<ServerMessage["type"]>;
     const eventKinds = [
       "projection_changed",
+      "board_view_saved",
       "native_sessions_refreshed",
       "partial_outcome_recorded",
     ] satisfies EventKind[];
     const eventPayloads = [
       "projection_changed",
+      "board_view_saved",
       "native_sessions_refreshed",
       "partial_outcome",
     ] satisfies Array<EventPayload["type"]>;
@@ -136,6 +144,9 @@ describe("generated protocol conformance", () => {
     const readQueryCodes = [
       "workspace_summary",
       "hierarchy_children",
+      "workspace_hierarchy",
+      "board_views",
+      "board_view",
       "board_snapshot",
     ] satisfies ReadQueryCode[];
     const providers = ["claude", "codex"] satisfies Provider[];
@@ -226,7 +237,7 @@ describe("generated protocol conformance", () => {
       succeeded: false,
       reconciliationRequired: true,
     });
-    expect(previous.protocolVersion).toBe(1);
-    expect(current.protocolVersion).toBe(2);
+    expect(previous.protocolVersion).toBe(2);
+    expect(current.protocolVersion).toBe(3);
   });
 });

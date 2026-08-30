@@ -14,8 +14,9 @@ use workboard_core::{ConversationId, LaunchLeaseId, WorkspaceId};
 
 use crate::AppError;
 
-const CURRENT_SCHEMA_VERSION: i64 = 32;
+const CURRENT_SCHEMA_VERSION: i64 = 33;
 const CLIENT_EVENT_JOURNAL_SCHEMA_CHECKSUM: &str = "agent-workboard-client-event-journal-v1";
+const BOARD_VIEW_DEFINITION_SCHEMA_CHECKSUM: &str = "agent-workboard-board-view-definition-v1";
 const FOUNDATION_SCHEMA_CHECKSUM: &str = "agent-workboard-foundation-v1";
 const LAUNCH_LEASE_SCHEMA_CHECKSUM: &str = "agent-workboard-launch-leases-v1";
 const WORKBOARD_DOMAIN_SCHEMA_CHECKSUM: &str = "agent-workboard-domain-v1";
@@ -2392,6 +2393,22 @@ fn migrate(connection: &Connection) -> Result<(), AppError> {
                  REFERENCES client_events(workspace_id, sequence) ON DELETE RESTRICT
          );",
     )?;
+    apply_migration(
+        connection,
+        33,
+        BOARD_VIEW_DEFINITION_SCHEMA_CHECKSUM,
+        "CREATE TABLE IF NOT EXISTS board_view_definitions (
+             id TEXT PRIMARY KEY CHECK (id <> ''),
+             workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE RESTRICT,
+             title TEXT NOT NULL CHECK (title <> ''),
+             filters_json TEXT NOT NULL CHECK (filters_json <> ''),
+             grouping_json TEXT NOT NULL CHECK (grouping_json <> ''),
+             sort_json TEXT NOT NULL CHECK (sort_json <> ''),
+             density_json TEXT NOT NULL CHECK (density_json <> ''),
+             revision INTEGER NOT NULL CHECK (revision > 0),
+             UNIQUE (workspace_id, title)
+         );",
+    )?;
     Ok(())
 }
 
@@ -4100,7 +4117,7 @@ mod tests {
         assert_eq!(preserved_attestation, valid_attestation);
         assert_eq!(legacy_authority, "immutable_evidence");
         let health = store.health().expect("storage health");
-        assert_eq!(health.schema_version, 32);
+        assert_eq!(health.schema_version, 33);
         assert!(health.is_healthy());
         let audited_attestations: Vec<(String, String, String, String)> = store
             .read(|connection| {
@@ -4145,7 +4162,7 @@ mod tests {
             .expect("read upgraded schema 20 attestations");
         assert_eq!(upgraded_attestations, audited_attestations);
         let health = store.health().expect("upgraded storage health");
-        assert_eq!(health.schema_version, 32);
+        assert_eq!(health.schema_version, 33);
         assert!(health.is_healthy());
         drop(store);
 

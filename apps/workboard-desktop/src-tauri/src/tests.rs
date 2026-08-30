@@ -8,7 +8,7 @@ use tauri::ipc::{CallbackFn, Channel, InvokeBody};
 use tauri::test::{INVOKE_KEY, get_ipc_response, mock_builder, mock_context, noop_assets};
 use tauri::webview::InvokeRequest;
 use tauri::{Runtime, WebviewWindow, WebviewWindowBuilder};
-use workboard_client_protocol::CommandOperation;
+use workboard_client_protocol::{CommandOperation, FeatureId};
 
 use crate::configure;
 use crate::connection::{ConnectionManager, DaemonStarter};
@@ -140,7 +140,9 @@ fn invalid_oversized_and_unknown_requests_fail_before_daemon_forwarding() {
                 workspace_id: daemon.workspace_id,
                 expected_revision: 0,
                 idempotency_key: "x".repeat(70_000),
-                command: CommandOperation::SaveBoardView,
+                command: CommandOperation::ApproveFeature {
+                    feature_id: FeatureId::generate(),
+                },
             })
             .is_err()
     );

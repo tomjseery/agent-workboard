@@ -52,6 +52,7 @@
     ],
     "eventKinds": [
       "projection_changed",
+      "board_view_saved",
       "native_sessions_refreshed",
       "partial_outcome_recorded"
     ],
@@ -62,6 +63,41 @@
           "entity": {
             "id": "50000000-0000-0000-0000-000000000001",
             "kind": "feature"
+          }
+        }
+      },
+      {
+        "type": "board_view_saved",
+        "value": {
+          "view": {
+            "density": "comfortable",
+            "filters": {
+              "query": "fixture",
+              "repositoryIds": [
+                "30000000-0000-0000-0000-000000000001"
+              ],
+              "statuses": [
+                "ready",
+                "in_progress"
+              ]
+            },
+            "grouping": {
+              "kind": "repository",
+              "lanes": [
+                {
+                  "key": "fixture",
+                  "title": "Fixture"
+                }
+              ]
+            },
+            "id": "a0000000-0000-0000-0000-000000000001",
+            "revision": 1,
+            "sort": {
+              "direction": "ascending",
+              "field": "title"
+            },
+            "title": "Fixture service view",
+            "workspaceId": "20000000-0000-0000-0000-000000000001"
           }
         }
       },
@@ -189,17 +225,26 @@
     "readQueries": [
       "workspace_summary",
       "hierarchy_children",
+      "workspace_hierarchy",
+      "board_views",
+      "board_view",
       "board_snapshot"
     ],
     "readQueryCodes": [
       "workspace_summary",
       "hierarchy_children",
+      "workspace_hierarchy",
+      "board_views",
+      "board_view",
       "board_snapshot"
     ],
     "responseResults": [
       "handshake",
       "workspace_summary",
       "hierarchy_children",
+      "workspace_hierarchy",
+      "board_views",
+      "board_view",
       "board_snapshot",
       "subscription_accepted",
       "command_accepted"
@@ -293,10 +338,42 @@
       "operation": {
         "type": "command",
         "value": {
-          "type": "save_board_view"
+          "type": "save_board_view",
+          "value": {
+            "definition": {
+              "density": "comfortable",
+              "filters": {
+                "query": "fixture",
+                "repositoryIds": [
+                  "30000000-0000-0000-0000-000000000001"
+                ],
+                "statuses": [
+                  "ready",
+                  "in_progress"
+                ]
+              },
+              "grouping": {
+                "kind": "repository",
+                "lanes": [
+                  {
+                    "key": "fixture",
+                    "title": "Fixture"
+                  }
+                ]
+              },
+              "id": "a0000000-0000-0000-0000-000000000001",
+              "revision": 1,
+              "sort": {
+                "direction": "ascending",
+                "field": "title"
+              },
+              "title": "Fixture service view",
+              "workspaceId": "20000000-0000-0000-0000-000000000001"
+            }
+          }
         }
       },
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -312,7 +389,7 @@
           }
         }
       },
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -328,7 +405,7 @@
           }
         }
       },
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -344,7 +421,7 @@
           }
         }
       },
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -360,7 +437,7 @@
           }
         }
       },
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -376,7 +453,7 @@
           }
         }
       },
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -392,7 +469,7 @@
           }
         }
       },
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -408,7 +485,7 @@
           }
         }
       },
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -424,7 +501,7 @@
           }
         }
       },
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -440,7 +517,7 @@
           }
         }
       },
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     }
@@ -466,7 +543,7 @@
     "reconciliationRequired": true,
     "succeeded": false
   },
-  "protocolVersion": 1,
+  "protocolVersion": 2,
   "readRequests": [
     {
       "expectedRevision": null,
@@ -475,15 +552,15 @@
         "type": "handshake",
         "value": {
           "supportedCommandVersions": [
-            2
+            3
           ],
           "supportedReadVersions": [
-            2,
-            1
+            3,
+            2
           ]
         }
       },
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": null
     },
@@ -496,7 +573,7 @@
           "type": "workspace_summary"
         }
       },
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -515,7 +592,49 @@
           }
         }
       },
-      "protocolVersion": 1,
+      "protocolVersion": 2,
+      "requestId": "10000000-0000-0000-0000-000000000001",
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    },
+    {
+      "expectedRevision": null,
+      "idempotencyKey": null,
+      "operation": {
+        "type": "query",
+        "value": {
+          "type": "workspace_hierarchy"
+        }
+      },
+      "protocolVersion": 2,
+      "requestId": "10000000-0000-0000-0000-000000000001",
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    },
+    {
+      "expectedRevision": null,
+      "idempotencyKey": null,
+      "operation": {
+        "type": "query",
+        "value": {
+          "type": "board_views"
+        }
+      },
+      "protocolVersion": 2,
+      "requestId": "10000000-0000-0000-0000-000000000001",
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    },
+    {
+      "expectedRevision": null,
+      "idempotencyKey": null,
+      "operation": {
+        "type": "query",
+        "value": {
+          "type": "board_view",
+          "value": {
+            "viewId": "a0000000-0000-0000-0000-000000000001"
+          }
+        }
+      },
+      "protocolVersion": 2,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -528,7 +647,7 @@
           "type": "board_snapshot"
         }
       },
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -544,7 +663,7 @@
           }
         }
       },
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     }
@@ -568,7 +687,7 @@
       "error": null,
       "futureOptionalReadField": "ignored",
       "partialOutcomes": [],
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "handshake",
@@ -578,7 +697,7 @@
               "available": false,
               "code": "save_board_view",
               "compatibleVersions": [
-                2
+                3
               ],
               "unavailableReason": {
                 "code": "not_accepted",
@@ -587,14 +706,14 @@
             }
           ],
           "compatibleCommandVersions": [
-            2
+            3
           ],
           "daemonInstanceId": "80000000-0000-0000-0000-000000000001",
           "eventVersion": 1,
           "futureOptionalProjectionField": true,
           "heartbeatIntervalMs": 1000,
           "maxFrameBytes": 8388608,
-          "negotiatedReadVersion": 1,
+          "negotiatedReadVersion": 2,
           "workspaces": [
             {
               "id": "20000000-0000-0000-0000-000000000001",
@@ -625,7 +744,7 @@
       "error": null,
       "futureOptionalReadField": "ignored",
       "partialOutcomes": [],
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "workspace_summary",
@@ -664,7 +783,7 @@
       "error": null,
       "futureOptionalReadField": "ignored",
       "partialOutcomes": [],
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "hierarchy_children",
@@ -708,7 +827,215 @@
       "error": null,
       "futureOptionalReadField": "ignored",
       "partialOutcomes": [],
-      "protocolVersion": 1,
+      "protocolVersion": 2,
+      "requestId": "10000000-0000-0000-0000-000000000001",
+      "result": {
+        "type": "workspace_hierarchy",
+        "value": {
+          "epics": [
+            {
+              "epic": {
+                "id": "40000000-0000-0000-0000-000000000001",
+                "slug": "fixture-epic",
+                "title": "Fixture Epic",
+                "workspaceId": "20000000-0000-0000-0000-000000000001"
+              },
+              "repositoryIds": [
+                "30000000-0000-0000-0000-000000000001"
+              ]
+            }
+          ],
+          "features": [
+            {
+              "feature": {
+                "epicId": "40000000-0000-0000-0000-000000000001",
+                "id": "50000000-0000-0000-0000-000000000001",
+                "slug": "fixture-feature",
+                "title": "Fixture Feature"
+              },
+              "repositoryIds": [
+                "30000000-0000-0000-0000-000000000001"
+              ]
+            }
+          ],
+          "focusedEntity": {
+            "id": "60000000-0000-0000-0000-000000000001",
+            "kind": "work_item"
+          },
+          "futureOptionalProjectionField": true,
+          "recentEntities": [
+            {
+              "id": "60000000-0000-0000-0000-000000000001",
+              "kind": "work_item"
+            }
+          ],
+          "repositories": [
+            {
+              "id": "30000000-0000-0000-0000-000000000001",
+              "slug": "fixture-repository",
+              "title": "Fixture Repository",
+              "workspaceId": "20000000-0000-0000-0000-000000000001"
+            }
+          ],
+          "workItems": [
+            {
+              "repositoryIds": [
+                "30000000-0000-0000-0000-000000000001"
+              ],
+              "status": "in_progress",
+              "workItem": {
+                "featureId": "50000000-0000-0000-0000-000000000001",
+                "id": "60000000-0000-0000-0000-000000000001",
+                "key": "WI-1",
+                "slug": "fixture-work-item",
+                "title": "Fixture Work item"
+              }
+            }
+          ],
+          "workspace": {
+            "id": "20000000-0000-0000-0000-000000000001",
+            "slug": "fixture-workspace",
+            "title": "Fixture Workspace"
+          }
+        }
+      },
+      "serverTimestamp": "2026-08-30T12:00:00Z",
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    },
+    {
+      "authoritativeRevision": 41,
+      "availableActions": [
+        {
+          "available": false,
+          "code": "approve_feature",
+          "expectedRevision": 41,
+          "unavailableReason": {
+            "code": "not_accepted",
+            "message": "The capability is not accepted."
+          }
+        }
+      ],
+      "correlationId": "10000000-0000-0000-0000-000000000002",
+      "diagnostics": [],
+      "error": null,
+      "futureOptionalReadField": "ignored",
+      "partialOutcomes": [],
+      "protocolVersion": 2,
+      "requestId": "10000000-0000-0000-0000-000000000001",
+      "result": {
+        "type": "board_views",
+        "value": [
+          {
+            "density": "comfortable",
+            "filters": {
+              "query": "fixture",
+              "repositoryIds": [
+                "30000000-0000-0000-0000-000000000001"
+              ],
+              "statuses": [
+                "ready",
+                "in_progress"
+              ]
+            },
+            "grouping": {
+              "kind": "repository",
+              "lanes": [
+                {
+                  "key": "fixture",
+                  "title": "Fixture"
+                }
+              ]
+            },
+            "id": "a0000000-0000-0000-0000-000000000001",
+            "revision": 1,
+            "sort": {
+              "direction": "ascending",
+              "field": "title"
+            },
+            "title": "Fixture service view",
+            "workspaceId": "20000000-0000-0000-0000-000000000001"
+          }
+        ]
+      },
+      "serverTimestamp": "2026-08-30T12:00:00Z",
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    },
+    {
+      "authoritativeRevision": 41,
+      "availableActions": [
+        {
+          "available": false,
+          "code": "approve_feature",
+          "expectedRevision": 41,
+          "unavailableReason": {
+            "code": "not_accepted",
+            "message": "The capability is not accepted."
+          }
+        }
+      ],
+      "correlationId": "10000000-0000-0000-0000-000000000002",
+      "diagnostics": [],
+      "error": null,
+      "futureOptionalReadField": "ignored",
+      "partialOutcomes": [],
+      "protocolVersion": 2,
+      "requestId": "10000000-0000-0000-0000-000000000001",
+      "result": {
+        "type": "board_view",
+        "value": {
+          "density": "comfortable",
+          "filters": {
+            "query": "fixture",
+            "repositoryIds": [
+              "30000000-0000-0000-0000-000000000001"
+            ],
+            "statuses": [
+              "ready",
+              "in_progress"
+            ]
+          },
+          "futureOptionalProjectionField": true,
+          "grouping": {
+            "kind": "repository",
+            "lanes": [
+              {
+                "key": "fixture",
+                "title": "Fixture"
+              }
+            ]
+          },
+          "id": "a0000000-0000-0000-0000-000000000001",
+          "revision": 1,
+          "sort": {
+            "direction": "ascending",
+            "field": "title"
+          },
+          "title": "Fixture service view",
+          "workspaceId": "20000000-0000-0000-0000-000000000001"
+        }
+      },
+      "serverTimestamp": "2026-08-30T12:00:00Z",
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    },
+    {
+      "authoritativeRevision": 41,
+      "availableActions": [
+        {
+          "available": false,
+          "code": "approve_feature",
+          "expectedRevision": 41,
+          "unavailableReason": {
+            "code": "not_accepted",
+            "message": "The capability is not accepted."
+          }
+        }
+      ],
+      "correlationId": "10000000-0000-0000-0000-000000000002",
+      "diagnostics": [],
+      "error": null,
+      "futureOptionalReadField": "ignored",
+      "partialOutcomes": [],
+      "protocolVersion": 2,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "board_snapshot",
@@ -752,7 +1079,7 @@
       "error": null,
       "futureOptionalReadField": "ignored",
       "partialOutcomes": [],
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "subscription_accepted",
@@ -785,7 +1112,7 @@
       "error": null,
       "futureOptionalReadField": "ignored",
       "partialOutcomes": [],
-      "protocolVersion": 2,
+      "protocolVersion": 3,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "command_accepted",
@@ -818,7 +1145,7 @@
         "diagnostics": [],
         "error": null,
         "partialOutcomes": [],
-        "protocolVersion": 1,
+        "protocolVersion": 2,
         "requestId": "10000000-0000-0000-0000-000000000001",
         "result": {
           "type": "workspace_summary",
@@ -914,7 +1241,7 @@
             }
           }
         },
-        "protocolVersion": 1,
+        "protocolVersion": 2,
         "sequence": 42,
         "workspaceId": "20000000-0000-0000-0000-000000000001"
       }

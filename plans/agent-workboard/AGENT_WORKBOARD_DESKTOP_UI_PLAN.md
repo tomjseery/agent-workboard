@@ -291,7 +291,7 @@ Generated output is reproducible from retained Rust sources. Removing Desktop do
 
 ### 4. Deliver Workspace hierarchy navigation and saved service views
 
-- Status: [ ]
+- Status: [x]
 - Slug: `deliver-workspace-hierarchy-and-saved-service-views`
 - Dependencies: item 3
 - Delivery type: first usable read-only UI

@@ -2,6 +2,26 @@ export type AssociationId = string;
 
 export type AvailableAction = { code: CommandCode, available: boolean, unavailableReason: UnavailableReason | null, expectedRevision: number | null, };
 
+export type BoardViewDefinition = { id: BoardViewId, workspaceId: WorkspaceId, title: string, filters: BoardViewFilters, grouping: BoardViewGrouping, sort: BoardViewSort, density: BoardViewDensity, revision: number, };
+
+export type BoardViewDensity = "comfortable" | "compact";
+
+export type BoardViewFilters = { query: string | null, repositoryIds: Array<RepositoryId>, statuses: Array<WorkItemStatus>, };
+
+export type BoardViewGrouping = { kind: BoardViewGroupingKind, lanes: Array<BoardViewLaneDefinition>, };
+
+export type BoardViewGroupingKind = "hierarchy" | "repository" | "status";
+
+export type BoardViewId = string;
+
+export type BoardViewLaneDefinition = { key: string, title: string, };
+
+export type BoardViewSort = { field: BoardViewSortField, direction: BoardViewSortDirection, };
+
+export type BoardViewSortDirection = "ascending" | "descending";
+
+export type BoardViewSortField = "title" | "key";
+
 export type CheckoutAvailability = "available" | "missing" | "deleted" | "replaced";
 
 export type CheckoutId = string;
@@ -12,7 +32,7 @@ export type CommandCapability = { code: CommandCode, available: boolean, compati
 
 export type CommandCode = "save_board_view" | "approve_feature" | "request_feature_revision" | "reject_feature" | "checkpoint_work_item" | "start_session" | "resume_session" | "focus_session" | "follow_up_session" | "recover_session";
 
-export type CommandOperation = { "type": "save_board_view" } | { "type": "approve_feature", "value": { featureId: FeatureId, } } | { "type": "request_feature_revision", "value": { featureId: FeatureId, } } | { "type": "reject_feature", "value": { featureId: FeatureId, } } | { "type": "checkpoint_work_item", "value": { workItemId: WorkItemId, } } | { "type": "start_session", "value": { workItemId: WorkItemId, } } | { "type": "resume_session", "value": { sessionId: SessionId, } } | { "type": "focus_session", "value": { sessionId: SessionId, } } | { "type": "follow_up_session", "value": { sessionId: SessionId, } } | { "type": "recover_session", "value": { sessionId: SessionId, } };
+export type CommandOperation = { "type": "save_board_view", "value": { definition: BoardViewDefinition, } } | { "type": "approve_feature", "value": { featureId: FeatureId, } } | { "type": "request_feature_revision", "value": { featureId: FeatureId, } } | { "type": "reject_feature", "value": { featureId: FeatureId, } } | { "type": "checkpoint_work_item", "value": { workItemId: WorkItemId, } } | { "type": "start_session", "value": { workItemId: WorkItemId, } } | { "type": "resume_session", "value": { sessionId: SessionId, } } | { "type": "focus_session", "value": { sessionId: SessionId, } } | { "type": "follow_up_session", "value": { sessionId: SessionId, } } | { "type": "recover_session", "value": { sessionId: SessionId, } };
 
 export type DaemonInstanceId = string;
 
@@ -36,9 +56,9 @@ export type EventEnvelope = { protocolVersion: number, eventVersion: number, wor
 
 export type EventId = string;
 
-export type EventKind = "projection_changed" | "native_sessions_refreshed" | "partial_outcome_recorded";
+export type EventKind = "projection_changed" | "board_view_saved" | "native_sessions_refreshed" | "partial_outcome_recorded";
 
-export type EventPayload = { "type": "projection_changed", "value": { entity: EntityRef, } } | { "type": "native_sessions_refreshed", "value": { sessionCount: number, } } | { "type": "partial_outcome", "value": { outcome: PartialOutcome, } };
+export type EventPayload = { "type": "projection_changed", "value": { entity: EntityRef, } } | { "type": "board_view_saved", "value": { view: BoardViewDefinition, } } | { "type": "native_sessions_refreshed", "value": { sessionCount: number, } } | { "type": "partial_outcome", "value": { outcome: PartialOutcome, } };
 
 export type FeatureId = string;
 
@@ -52,9 +72,15 @@ export type Heartbeat = { daemonInstanceId: DaemonInstanceId, workspaceId: Works
 
 export type HierarchyChildren = { parent: HierarchyRef, children: Array<HierarchyNode>, };
 
+export type HierarchyEpic = { epic: EpicReference, repositoryIds: Array<RepositoryId>, };
+
+export type HierarchyFeature = { feature: FeatureReference, repositoryIds: Array<RepositoryId>, };
+
 export type HierarchyNode = { "kind": "repository", "value": RepositoryReference } | { "kind": "epic", "value": EpicReference } | { "kind": "feature", "value": FeatureReference } | { "kind": "work_item", "value": WorkItemReference };
 
 export type HierarchyRef = { "kind": "workspace", "id": WorkspaceId } | { "kind": "epic", "id": EpicId } | { "kind": "feature", "id": FeatureId } | { "kind": "work_item", "id": WorkItemId };
+
+export type HierarchyWorkItem = { workItem: WorkItemReference, repositoryIds: Array<RepositoryId>, status: WorkItemStatus, };
 
 export type InvalidationScope = { queries: Array<ReadQueryCode>, owners: Array<EntityRef>, };
 
@@ -70,9 +96,9 @@ export type ProtocolError = { code: string, message: string, severity: ErrorSeve
 
 export type Provider = "claude" | "codex";
 
-export type ReadQuery = { "type": "workspace_summary" } | { "type": "hierarchy_children", "value": { parent: HierarchyRef, } } | { "type": "board_snapshot" };
+export type ReadQuery = { "type": "workspace_summary" } | { "type": "hierarchy_children", "value": { parent: HierarchyRef, } } | { "type": "workspace_hierarchy" } | { "type": "board_views" } | { "type": "board_view", "value": { viewId: BoardViewId, } } | { "type": "board_snapshot" };
 
-export type ReadQueryCode = "workspace_summary" | "hierarchy_children" | "board_snapshot";
+export type ReadQueryCode = "workspace_summary" | "hierarchy_children" | "workspace_hierarchy" | "board_views" | "board_view" | "board_snapshot";
 
 export type RepositoryId = string;
 
@@ -86,7 +112,7 @@ export type RequestId = string;
 
 export type ResponseEnvelope = { protocolVersion: number, requestId: RequestId, correlationId: RequestId, workspaceId: WorkspaceId | null, authoritativeRevision: number | null, serverTimestamp: string, result: ResponseResult | null, error: ProtocolError | null, diagnostics: Array<Diagnostic>, availableActions: Array<AvailableAction>, partialOutcomes: Array<PartialOutcome>, };
 
-export type ResponseResult = { "type": "handshake", "value": HandshakeResponse } | { "type": "workspace_summary", "value": WorkspaceSummary } | { "type": "hierarchy_children", "value": HierarchyChildren } | { "type": "board_snapshot", "value": unknown } | { "type": "subscription_accepted", "value": { cursor: EventCursor, } } | { "type": "command_accepted", "value": { code: CommandCode, } };
+export type ResponseResult = { "type": "handshake", "value": HandshakeResponse } | { "type": "workspace_summary", "value": WorkspaceSummary } | { "type": "hierarchy_children", "value": HierarchyChildren } | { "type": "workspace_hierarchy", "value": WorkspaceHierarchy } | { "type": "board_views", "value": Array<BoardViewDefinition> } | { "type": "board_view", "value": BoardViewDefinition } | { "type": "board_snapshot", "value": unknown } | { "type": "subscription_accepted", "value": { cursor: EventCursor, } } | { "type": "command_accepted", "value": { code: CommandCode, } };
 
 export type ResyncReason = "gap" | "cursor_expired" | "daemon_restarted" | "incompatible_event" | "heartbeat_lost";
 
@@ -109,6 +135,8 @@ export type WorkItemReference = { id: WorkItemId, featureId: FeatureId, key: str
 export type WorkItemStatus = "backlog" | "ready" | "in_progress" | "blocked" | "review" | "done" | "cancelled";
 
 export type WorkflowState = "draft" | "worktree_pending" | "planning_launch_pending" | "planning_active" | "proposal_ready" | "awaiting_approval" | "publishing" | "planned" | "work_item_launch_pending" | "work_item_active" | "reconciliation_required" | "blocked" | "paused" | "completed" | "cancelled";
+
+export type WorkspaceHierarchy = { workspace: WorkspaceReference, repositories: Array<RepositoryReference>, epics: Array<HierarchyEpic>, features: Array<HierarchyFeature>, workItems: Array<HierarchyWorkItem>, recentEntities: Array<EntityRef>, focusedEntity: EntityRef | null, };
 
 export type WorkspaceId = string;
 

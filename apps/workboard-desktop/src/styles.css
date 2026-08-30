@@ -10,6 +10,8 @@
   --text: #f3f5f8;
   --muted-text: #aab2c0;
   --accent: #85a9ff;
+  --accent-contrast: #091127;
+  --accent-surface: #1b2742;
   --accent-muted: #405582;
   --warning: #ffbd70;
   --warning-muted: #76532d;
@@ -36,10 +38,46 @@ body {
     --text: #171b23;
     --muted-text: #5b6472;
     --accent: #315fbd;
+    --accent-contrast: #ffffff;
+    --accent-surface: #e5edff;
     --accent-muted: #a9bee8;
     --warning: #89510d;
     --warning-muted: #e2c397;
     --success: #1f7144;
     --success-muted: #9dcdb1;
+  }
+}
+
+button,
+a,
+input,
+select {
+  outline-offset: 3px;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+}
+
+select {
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--canvas);
+  padding: 0.5rem 0.75rem;
+  color: var(--text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (forced-colors: active) {
+  :focus-visible {
+    outline: 2px solid Highlight;
   }
 }

@@ -2,17 +2,20 @@ use serde_json::{Value, json};
 use ts_rs::{Config, TS};
 
 use crate::{
-    AssociationId, AvailableAction, CURRENT_PROTOCOL_VERSION, CheckoutAvailability, CheckoutId,
-    CheckoutPathId, CommandCapability, CommandCode, CommandOperation, DaemonInstanceId, Diagnostic,
-    DocumentId, EffectiveCheckoutProjection, EntityRef, EpicId, EpicReference, ErrorSeverity,
-    EventCursor, EventEnvelope, EventId, EventKind, EventPayload, FeatureId, FeatureReference,
-    HandshakeRequest, HandshakeResponse, Heartbeat, HierarchyChildren, HierarchyNode, HierarchyRef,
+    AssociationId, AvailableAction, BoardViewDefinition, BoardViewDensity, BoardViewFilters,
+    BoardViewGrouping, BoardViewGroupingKind, BoardViewId, BoardViewLaneDefinition, BoardViewSort,
+    BoardViewSortDirection, BoardViewSortField, CURRENT_PROTOCOL_VERSION, CheckoutAvailability,
+    CheckoutId, CheckoutPathId, CommandCapability, CommandCode, CommandOperation, DaemonInstanceId,
+    Diagnostic, DocumentId, EffectiveCheckoutProjection, EntityRef, EpicId, EpicReference,
+    ErrorSeverity, EventCursor, EventEnvelope, EventId, EventKind, EventPayload, FeatureId,
+    FeatureReference, HandshakeRequest, HandshakeResponse, Heartbeat, HierarchyChildren,
+    HierarchyEpic, HierarchyFeature, HierarchyNode, HierarchyRef, HierarchyWorkItem,
     InvalidationScope, ManagedSessionRole, Operation, OwnerProjection, PREVIOUS_PROTOCOL_VERSION,
     PartialOutcome, ProtocolError, Provider, ReadQuery, ReadQueryCode, RepositoryId,
     RepositoryPathId, RepositoryReference, RequestEnvelope, RequestId, ResponseEnvelope,
     ResponseResult, ResyncReason, ResyncRequirement, ServerMessage, SessionId, SubscriptionRequest,
     UnavailableReason, ValidationField, WorkItemId, WorkItemReference, WorkItemStatus,
-    WorkflowState, WorkspaceId, WorkspaceReference, WorkspaceSummary,
+    WorkflowState, WorkspaceHierarchy, WorkspaceId, WorkspaceReference, WorkspaceSummary,
 };
 
 const REQUEST_ID: &str = "10000000-0000-0000-0000-000000000001";
@@ -25,6 +28,27 @@ const WORK_ITEM_ID: &str = "60000000-0000-0000-0000-000000000001";
 const SESSION_ID: &str = "70000000-0000-0000-0000-000000000001";
 const DAEMON_ID: &str = "80000000-0000-0000-0000-000000000001";
 const EVENT_ID: &str = "90000000-0000-0000-0000-000000000001";
+const BOARD_VIEW_ID: &str = "a0000000-0000-0000-0000-000000000001";
+
+fn board_view(revision: u64) -> Value {
+    json!({
+        "id": BOARD_VIEW_ID,
+        "workspaceId": WORKSPACE_ID,
+        "title": "Fixture service view",
+        "filters": {
+            "query": "fixture",
+            "repositoryIds": [REPOSITORY_ID],
+            "statuses": ["ready", "in_progress"]
+        },
+        "grouping": {
+            "kind": "repository",
+            "lanes": [{ "key": "fixture", "title": "Fixture" }]
+        },
+        "sort": { "field": "title", "direction": "ascending" },
+        "density": "comfortable",
+        "revision": revision
+    })
+}
 
 pub fn typescript_declarations() -> String {
     let config = Config::default();
@@ -52,6 +76,7 @@ pub fn typescript_declarations() -> String {
     declaration!(CheckoutPathId);
     declaration!(DocumentId);
     declaration!(AssociationId);
+    declaration!(BoardViewId);
     declaration!(HierarchyRef);
     declaration!(EntityRef);
     declaration!(WorkspaceReference);
@@ -59,6 +84,19 @@ pub fn typescript_declarations() -> String {
     declaration!(EpicReference);
     declaration!(FeatureReference);
     declaration!(WorkItemReference);
+    declaration!(WorkspaceHierarchy);
+    declaration!(HierarchyEpic);
+    declaration!(HierarchyFeature);
+    declaration!(HierarchyWorkItem);
+    declaration!(BoardViewDefinition);
+    declaration!(BoardViewFilters);
+    declaration!(BoardViewGrouping);
+    declaration!(BoardViewLaneDefinition);
+    declaration!(BoardViewGroupingKind);
+    declaration!(BoardViewSort);
+    declaration!(BoardViewSortField);
+    declaration!(BoardViewSortDirection);
+    declaration!(BoardViewDensity);
     declaration!(WorkspaceSummary);
     declaration!(HierarchyChildren);
     declaration!(HierarchyNode);
@@ -203,6 +241,21 @@ fn read_requests(protocol_version: u32) -> Vec<Value> {
             Some(WORKSPACE_ID),
         ),
         request(
+            json!({ "type": "query", "value": { "type": "workspace_hierarchy" } }),
+            protocol_version,
+            Some(WORKSPACE_ID),
+        ),
+        request(
+            json!({ "type": "query", "value": { "type": "board_views" } }),
+            protocol_version,
+            Some(WORKSPACE_ID),
+        ),
+        request(
+            json!({ "type": "query", "value": { "type": "board_view", "value": { "viewId": BOARD_VIEW_ID } } }),
+            protocol_version,
+            Some(WORKSPACE_ID),
+        ),
+        request(
             json!({ "type": "query", "value": { "type": "board_snapshot" } }),
             protocol_version,
             Some(WORKSPACE_ID),
@@ -238,7 +291,7 @@ fn execute_request() -> Value {
 
 fn incompatible_commands() -> Vec<Value> {
     let commands = [
-        json!({ "type": "save_board_view" }),
+        json!({ "type": "save_board_view", "value": { "definition": board_view(1) } }),
         json!({ "type": "approve_feature", "value": { "featureId": FEATURE_ID } }),
         json!({ "type": "request_feature_revision", "value": { "featureId": FEATURE_ID } }),
         json!({ "type": "reject_feature", "value": { "featureId": FEATURE_ID } }),
@@ -353,6 +406,39 @@ fn response_results(protocol_version: u32) -> Vec<Value> {
                     }]
                 }
             }),
+        ),
+        response_envelope(
+            protocol_version,
+            json!({
+                "type": "workspace_hierarchy",
+                "value": {
+                    "workspace": { "id": WORKSPACE_ID, "slug": "fixture-workspace", "title": "Fixture Workspace" },
+                    "repositories": [{ "id": REPOSITORY_ID, "workspaceId": WORKSPACE_ID, "slug": "fixture-repository", "title": "Fixture Repository" }],
+                    "epics": [{
+                        "epic": { "id": EPIC_ID, "workspaceId": WORKSPACE_ID, "slug": "fixture-epic", "title": "Fixture Epic" },
+                        "repositoryIds": [REPOSITORY_ID]
+                    }],
+                    "features": [{
+                        "feature": { "id": FEATURE_ID, "epicId": EPIC_ID, "slug": "fixture-feature", "title": "Fixture Feature" },
+                        "repositoryIds": [REPOSITORY_ID]
+                    }],
+                    "workItems": [{
+                        "workItem": { "id": WORK_ITEM_ID, "featureId": FEATURE_ID, "key": "WI-1", "slug": "fixture-work-item", "title": "Fixture Work item" },
+                        "repositoryIds": [REPOSITORY_ID],
+                        "status": "in_progress"
+                    }],
+                    "recentEntities": [{ "kind": "work_item", "id": WORK_ITEM_ID }],
+                    "focusedEntity": { "kind": "work_item", "id": WORK_ITEM_ID }
+                }
+            }),
+        ),
+        response_envelope(
+            protocol_version,
+            json!({ "type": "board_views", "value": [board_view(1)] }),
+        ),
+        response_envelope(
+            protocol_version,
+            json!({ "type": "board_view", "value": board_view(1) }),
         ),
         response_envelope(
             protocol_version,
@@ -511,11 +597,14 @@ fn server_messages(protocol_version: u32) -> Vec<Value> {
 fn discriminants() -> Value {
     json!({
         "operations": ["handshake", "query", "command", "subscribe"],
-        "readQueries": ["workspace_summary", "hierarchy_children", "board_snapshot"],
+        "readQueries": ["workspace_summary", "hierarchy_children", "workspace_hierarchy", "board_views", "board_view", "board_snapshot"],
         "responseResults": [
             "handshake",
             "workspace_summary",
             "hierarchy_children",
+            "workspace_hierarchy",
+            "board_views",
+            "board_view",
             "board_snapshot",
             "subscription_accepted",
             "command_accepted"
@@ -535,6 +624,7 @@ fn discriminants() -> Value {
         "serverMessages": ["response", "event", "heartbeat", "resync_required"],
         "eventKinds": [
             "projection_changed",
+            "board_view_saved",
             "native_sessions_refreshed",
             "partial_outcome_recorded"
         ],
@@ -542,6 +632,7 @@ fn discriminants() -> Value {
             { "type": "projection_changed", "value": {
                 "entity": { "kind": "feature", "id": FEATURE_ID }
             }},
+            { "type": "board_view_saved", "value": { "view": board_view(1) }},
             { "type": "native_sessions_refreshed", "value": { "sessionCount": 1 }},
             { "type": "partial_outcome", "value": { "outcome": partial_outcome() }}
         ],
@@ -553,7 +644,7 @@ fn discriminants() -> Value {
             "heartbeat_lost"
         ],
         "errorSeverities": ["info", "warning", "error", "fatal"],
-        "readQueryCodes": ["workspace_summary", "hierarchy_children", "board_snapshot"],
+        "readQueryCodes": ["workspace_summary", "hierarchy_children", "workspace_hierarchy", "board_views", "board_view", "board_snapshot"],
         "hierarchyRefs": [
             { "kind": "workspace", "id": WORKSPACE_ID },
             { "kind": "epic", "id": EPIC_ID },

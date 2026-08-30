@@ -4,6 +4,7 @@ import type {
   BootstrapHandshake,
   EventCursor,
   ExecuteRequest,
+  BoardViewId,
   HierarchyRef,
   ResponseEnvelope,
   ResponseResult,
@@ -42,6 +43,9 @@ type QueryResponse<TType extends ResponseResult["type"]> = Omit<
 export interface DaemonFacade {
   handshake(): Promise<BootstrapHandshake>;
   workspaceSummary(workspaceId: WorkspaceId): Promise<QueryResponse<"workspace_summary">>;
+  workspaceHierarchy(workspaceId: WorkspaceId): Promise<QueryResponse<"workspace_hierarchy">>;
+  boardViews(workspaceId: WorkspaceId): Promise<QueryResponse<"board_views">>;
+  boardView(workspaceId: WorkspaceId, viewId: BoardViewId): Promise<QueryResponse<"board_view">>;
   hierarchyChildren(
     workspaceId: WorkspaceId,
     parent: HierarchyRef,
@@ -72,6 +76,11 @@ export function createDaemonFacade(transport: DaemonTransport): DaemonFacade {
     handshake: () => transport.invoke<BootstrapHandshake>(commands.handshake),
     workspaceSummary: (workspaceId) =>
       query(workspaceId, { type: "workspace_summary" }),
+    workspaceHierarchy: (workspaceId) =>
+      query(workspaceId, { type: "workspace_hierarchy" }),
+    boardViews: (workspaceId) => query(workspaceId, { type: "board_views" }),
+    boardView: (workspaceId, viewId) =>
+      query(workspaceId, { type: "board_view", value: { viewId } }),
     hierarchyChildren: (workspaceId, parent) =>
       query(workspaceId, { type: "hierarchy_children", value: { parent } }),
     execute: (request) =>

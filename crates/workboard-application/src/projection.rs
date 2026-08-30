@@ -1,4 +1,7 @@
-use rusqlite::OptionalExtension;
+use std::collections::{BTreeSet, HashMap, HashSet};
+
+use rusqlite::{OptionalExtension, params};
+use time::OffsetDateTime;
 use workboard_client_protocol as protocol;
 use workboard_core as core;
 
@@ -166,6 +169,218 @@ impl WorkboardApplication {
         Ok(map_snapshot(snapshot))
     }
 
+    pub fn client_workspace_hierarchy(
+        &self,
+        workspace_id: core::WorkspaceId,
+    ) -> Result<protocol::WorkspaceHierarchy, AppError> {
+        let snapshot = self.snapshot(workspace_id)?;
+        let mut feature_repositories =
+            HashMap::<core::FeatureId, HashSet<core::RepositoryId>>::new();
+        for item in &snapshot.work_items {
+            feature_repositories
+                .entry(item.feature_id)
+                .or_default()
+                .extend(item.repository_ids.iter().copied());
+        }
+        let feature_epics = snapshot
+            .features
+            .iter()
+            .map(|feature| (feature.id, feature.epic_id))
+            .collect::<HashMap<_, _>>();
+        let mut epic_repositories = HashMap::<core::EpicId, HashSet<core::RepositoryId>>::new();
+        for (feature_id, repositories) in &feature_repositories {
+            if let Some(epic_id) = feature_epics.get(feature_id) {
+                epic_repositories
+                    .entry(*epic_id)
+                    .or_default()
+                    .extend(repositories);
+            }
+        }
+        let focused_entity = snapshot
+            .work_items
+            .iter()
+            .find(|item| item.status == core::WorkItemStatus::InProgress)
+            .map(|item| protocol::EntityRef::WorkItem(work_item_id(item.id)))
+            .or_else(|| {
+                snapshot
+                    .features
+                    .iter()
+                    .find(|feature| feature.state == core::WorkflowState::PlanningActive)
+                    .map(|feature| protocol::EntityRef::Feature(feature_id(feature.id)))
+            });
+        let recent_entities = snapshot
+            .work_items
+            .iter()
+            .rev()
+            .take(8)
+            .map(|item| protocol::EntityRef::WorkItem(work_item_id(item.id)))
+            .collect();
+        Ok(protocol::WorkspaceHierarchy {
+            workspace: protocol::WorkspaceReference {
+                id: wire_workspace_id(snapshot.workspace.id),
+                slug: snapshot.workspace.slug.to_string(),
+                title: snapshot.workspace.title,
+            },
+            repositories: snapshot
+                .repositories
+                .into_iter()
+                .map(|repository| protocol::RepositoryReference {
+                    id: repository_id(repository.id),
+                    workspace_id: wire_workspace_id(repository.workspace_id),
+                    slug: repository.slug.to_string(),
+                    title: repository.title,
+                })
+                .collect(),
+            epics: snapshot
+                .epics
+                .into_iter()
+                .map(|epic| protocol::HierarchyEpic {
+                    repository_ids: sorted_repository_ids(
+                        epic_repositories.remove(&epic.id).unwrap_or_default(),
+                    ),
+                    epic: protocol::EpicReference {
+                        id: epic_id(epic.id),
+                        workspace_id: wire_workspace_id(epic.workspace_id),
+                        slug: epic.slug.to_string(),
+                        title: epic.title,
+                    },
+                })
+                .collect(),
+            features: map_hierarchy_features(snapshot.features, &mut feature_repositories),
+            work_items: snapshot
+                .work_items
+                .into_iter()
+                .map(|item| protocol::HierarchyWorkItem {
+                    repository_ids: item.repository_ids.into_iter().map(repository_id).collect(),
+                    status: work_item_status(item.status),
+                    work_item: protocol::WorkItemReference {
+                        id: work_item_id(item.id),
+                        feature_id: feature_id(item.feature_id),
+                        key: item.key.to_string(),
+                        slug: item.slug.to_string(),
+                        title: item.title,
+                    },
+                })
+                .collect(),
+            recent_entities,
+            focused_entity,
+        })
+    }
+
+    pub fn client_board_views(
+        &self,
+        workspace_id: core::WorkspaceId,
+    ) -> Result<Vec<protocol::BoardViewDefinition>, AppError> {
+        self.store.read(|connection| {
+            let mut statement = connection.prepare("SELECT id, workspace_id, title, filters_json, grouping_json, sort_json, density_json, revision FROM board_view_definitions WHERE workspace_id = ?1 ORDER BY title, id")?;
+            let rows = statement
+                .query_map([workspace_id.to_string()], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?))
+                })?
+                .collect::<Result<Vec<BoardViewRow>, _>>()?;
+            rows.into_iter().map(board_view_from_row).collect()
+        })
+    }
+
+    pub fn client_board_view(
+        &self,
+        workspace_id: core::WorkspaceId,
+        view_id: protocol::BoardViewId,
+    ) -> Result<protocol::BoardViewDefinition, AppError> {
+        self.store.read(|connection| {
+            let row = connection
+                .query_row(
+                    "SELECT id, workspace_id, title, filters_json, grouping_json, sort_json, density_json, revision FROM board_view_definitions WHERE workspace_id = ?1 AND id = ?2",
+                    params![workspace_id.to_string(), view_id.to_string()],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?)),
+                )
+                .optional()?
+                .ok_or_else(|| AppError::Domain("Saved view does not exist".to_owned()))?;
+            board_view_from_row(row)
+        })
+    }
+
+    pub fn save_client_board_view(
+        &mut self,
+        workspace_id: core::WorkspaceId,
+        expected_revision: u64,
+        idempotency_key: &str,
+        request_id: protocol::RequestId,
+        definition: protocol::BoardViewDefinition,
+    ) -> Result<protocol::BoardViewDefinition, AppError> {
+        validate_board_view(workspace_id, &definition)?;
+        let projected = self.store.write_projected(
+            workspace_id,
+            expected_revision,
+            idempotency_key,
+            "save_board_view",
+            |transaction| {
+                for repository_id in &definition.filters.repository_ids {
+                    let belongs = transaction.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM repositories WHERE id = ?1 AND workspace_id = ?2)",
+                        params![repository_id.to_string(), workspace_id.to_string()],
+                        |row| row.get::<_, bool>(0),
+                    )?;
+                    if !belongs {
+                        return Err(AppError::Domain("saved view repository filter is outside the Workspace".to_owned()));
+                    }
+                }
+                let current = transaction
+                    .query_row(
+                        "SELECT revision FROM board_view_definitions WHERE id = ?1 AND workspace_id = ?2",
+                        params![definition.id.to_string(), workspace_id.to_string()],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .optional()?;
+                match current {
+                    None if definition.revision == 0 => {}
+                    Some(current) if current as u64 == definition.revision => {}
+                    _ => {
+                        return Err(AppError::External {
+                            code: "stale_board_view_revision".to_owned(),
+                            message: "the saved view revision is stale".to_owned(),
+                        });
+                    }
+                }
+                let mut saved = definition.clone();
+                saved.revision += 1;
+                transaction.execute(
+                    "INSERT INTO board_view_definitions (id, workspace_id, title, filters_json, grouping_json, sort_json, density_json, revision) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) ON CONFLICT(id) DO UPDATE SET title = excluded.title, filters_json = excluded.filters_json, grouping_json = excluded.grouping_json, sort_json = excluded.sort_json, density_json = excluded.density_json, revision = excluded.revision",
+                    params![
+                        saved.id.to_string(),
+                        workspace_id.to_string(),
+                        saved.title,
+                        serde_json::to_string(&saved.filters)?,
+                        serde_json::to_string(&saved.grouping)?,
+                        serde_json::to_string(&saved.sort)?,
+                        serde_json::to_string(&saved.density)?,
+                        saved.revision as i64,
+                    ],
+                )?;
+                Ok(saved)
+            },
+            |revision, saved| protocol::EventEnvelope {
+                protocol_version: protocol::CURRENT_PROTOCOL_VERSION,
+                event_version: 1,
+                workspace_id: wire_workspace_id(workspace_id),
+                sequence: revision,
+                event_id: protocol::EventId::generate(),
+                occurred_at: OffsetDateTime::now_utc(),
+                owner: protocol::EntityRef::Workspace(wire_workspace_id(workspace_id)),
+                entity_revision: saved.revision,
+                kind: protocol::EventKind::BoardViewSaved,
+                payload: Some(protocol::EventPayload::BoardViewSaved { view: saved.clone() }),
+                invalidation_scope: Some(protocol::InvalidationScope {
+                    queries: vec![protocol::ReadQueryCode::BoardViews, protocol::ReadQueryCode::BoardView],
+                    owners: vec![protocol::EntityRef::Workspace(wire_workspace_id(workspace_id))],
+                }),
+                operation_correlation_id: request_id,
+                partial_outcomes: Vec::new(),
+            },
+        )?;
+        Ok(projected.value)
+    }
+
     pub fn replay_client_events(
         &self,
         workspace_id: core::WorkspaceId,
@@ -184,6 +399,9 @@ impl WorkboardApplication {
             required_queries: vec![
                 protocol::ReadQueryCode::WorkspaceSummary,
                 protocol::ReadQueryCode::HierarchyChildren,
+                protocol::ReadQueryCode::WorkspaceHierarchy,
+                protocol::ReadQueryCode::BoardViews,
+                protocol::ReadQueryCode::BoardView,
                 protocol::ReadQueryCode::BoardSnapshot,
             ],
         };
@@ -228,8 +446,112 @@ impl WorkboardApplication {
     }
 }
 
+type BoardViewRow = (String, String, String, String, String, String, String, i64);
+
+fn board_view_from_row(row: BoardViewRow) -> Result<protocol::BoardViewDefinition, AppError> {
+    Ok(protocol::BoardViewDefinition {
+        id: row
+            .0
+            .parse()
+            .map_err(|error: uuid::Error| AppError::Domain(error.to_string()))?,
+        workspace_id: row
+            .1
+            .parse()
+            .map_err(|error: uuid::Error| AppError::Domain(error.to_string()))?,
+        title: row.2,
+        filters: serde_json::from_str(&row.3)?,
+        grouping: serde_json::from_str(&row.4)?,
+        sort: serde_json::from_str(&row.5)?,
+        density: serde_json::from_str(&row.6)?,
+        revision: row.7 as u64,
+    })
+}
+
+fn validate_board_view(
+    workspace_id: core::WorkspaceId,
+    definition: &protocol::BoardViewDefinition,
+) -> Result<(), AppError> {
+    if definition.workspace_id != wire_workspace_id(workspace_id) {
+        return Err(AppError::Domain(
+            "saved view belongs to a different Workspace".to_owned(),
+        ));
+    }
+    let title = definition.title.trim();
+    if title.is_empty() || title.len() > 200 || title.chars().any(char::is_control) {
+        return Err(AppError::Domain("saved view title is invalid".to_owned()));
+    }
+    if definition
+        .filters
+        .query
+        .as_ref()
+        .is_some_and(|query| query.len() > 200 || query.chars().any(char::is_control))
+    {
+        return Err(AppError::Domain("saved view query is invalid".to_owned()));
+    }
+    if definition.filters.repository_ids.len() > 100
+        || definition.filters.statuses.len() > 7
+        || definition.grouping.lanes.len() > 32
+    {
+        return Err(AppError::Domain(
+            "saved view collection is too large".to_owned(),
+        ));
+    }
+    let repository_ids = definition
+        .filters
+        .repository_ids
+        .iter()
+        .collect::<HashSet<_>>();
+    if repository_ids.len() != definition.filters.repository_ids.len() {
+        return Err(AppError::Domain(
+            "saved view repository filters contain duplicates".to_owned(),
+        ));
+    }
+    let lane_keys = definition
+        .grouping
+        .lanes
+        .iter()
+        .map(|lane| lane.key.as_str())
+        .collect::<BTreeSet<_>>();
+    if lane_keys.len() != definition.grouping.lanes.len()
+        || definition
+            .grouping
+            .lanes
+            .iter()
+            .any(|lane| lane.key.trim().is_empty() || lane.title.trim().is_empty())
+    {
+        return Err(AppError::Domain("saved view lanes are invalid".to_owned()));
+    }
+    Ok(())
+}
+
+fn map_hierarchy_features(
+    features: Vec<core::Feature>,
+    feature_repositories: &mut HashMap<core::FeatureId, HashSet<core::RepositoryId>>,
+) -> Vec<protocol::HierarchyFeature> {
+    features
+        .into_iter()
+        .map(|feature| protocol::HierarchyFeature {
+            repository_ids: sorted_repository_ids(
+                feature_repositories.remove(&feature.id).unwrap_or_default(),
+            ),
+            feature: protocol::FeatureReference {
+                id: feature_id(feature.id),
+                epic_id: epic_id(feature.epic_id),
+                slug: feature.slug.to_string(),
+                title: feature.title,
+            },
+        })
+        .collect()
+}
+
 pub fn core_workspace_id(id: protocol::WorkspaceId) -> core::WorkspaceId {
     core::WorkspaceId::from_uuid(*id.as_uuid())
+}
+
+fn sorted_repository_ids(ids: HashSet<core::RepositoryId>) -> Vec<protocol::RepositoryId> {
+    let mut ids = ids.into_iter().map(repository_id).collect::<Vec<_>>();
+    ids.sort_by_key(ToString::to_string);
+    ids
 }
 
 fn map_snapshot(snapshot: core::WorkspaceSnapshot) -> protocol::BoardSnapshot {
@@ -693,5 +1015,262 @@ mod tests {
         assert_eq!(write.event.partial_outcomes, vec![partial]);
         assert!(!write.event.partial_outcomes[0].succeeded);
         assert!(write.event.partial_outcomes[0].reconciliation_required);
+    }
+
+    #[test]
+    fn hierarchy_keeps_one_workspace_and_stable_cross_repository_identity_at_scale() {
+        let directory = TempDir::new().expect("temporary directory");
+        let path = directory.path().join("workboard.sqlite");
+        let mut store = SqliteStore::open(&path).expect("open store");
+        let workspace_id = seed_workspace(&mut store);
+        let epic_id = core::EpicId::generate();
+        let feature_id = core::FeatureId::generate();
+        let work_item_id = core::WorkItemId::generate();
+        let repository_ids = (1..100)
+            .map(|_| core::RepositoryId::generate())
+            .collect::<Vec<_>>();
+        store
+            .write(|transaction| {
+                for (index, repository_id) in repository_ids.iter().enumerate() {
+                    transaction.execute(
+                        "INSERT INTO repositories (
+                             id, workspace_id, slug, title, git_common_directory, default_branch,
+                             is_planning_store, created_at
+                         ) VALUES (?1, ?2, ?3, ?4, ?5, 'main', 0, '2026-08-30T00:00:00Z')",
+                        params![
+                            repository_id.to_string(),
+                            workspace_id.to_string(),
+                            format!("service-{index:03}"),
+                            format!("Service {index:03}"),
+                            format!("C:/services/{index:03}/.git"),
+                        ],
+                    )?;
+                }
+                transaction.execute(
+                    "INSERT INTO epics (id, workspace_id, slug, title, created_at)
+                     VALUES (?1, ?2, 'platform', 'Platform', '2026-08-30T00:00:00Z')",
+                    params![epic_id.to_string(), workspace_id.to_string()],
+                )?;
+                transaction.execute(
+                    "INSERT INTO features (id, epic_id, slug, title, workflow_state, created_at)
+                     VALUES (?1, ?2, 'delivery', 'Delivery', 'planning_active', '2026-08-30T00:00:00Z')",
+                    params![feature_id.to_string(), epic_id.to_string()],
+                )?;
+                transaction.execute(
+                    "INSERT INTO work_items (id, feature_id, key, slug, title, status, created_at)
+                     VALUES (?1, ?2, 'platform/delivery/desktop-ui', 'desktop-ui', 'Desktop UI', 'in_progress', '2026-08-30T00:00:00Z')",
+                    params![work_item_id.to_string(), feature_id.to_string()],
+                )?;
+                for repository_id in &repository_ids {
+                    transaction.execute(
+                        "INSERT INTO work_item_repositories (work_item_id, repository_id)
+                         VALUES (?1, ?2)",
+                        params![work_item_id.to_string(), repository_id.to_string()],
+                    )?;
+                }
+                transaction.execute(
+                    "INSERT INTO documents (
+                         id, repository_id, epic_id, feature_id, work_item_id, kind,
+                         relative_path, content_hash, observed_commit, observed_at
+                     ) VALUES (
+                         ?1, (SELECT planning_store_repository_id FROM workspaces WHERE id = ?2),
+                         ?3, NULL, NULL, 'epic', 'plans/platform/EPIC.md',
+                         '0000000000000000000000000000000000000000000000000000000000000000',
+                         NULL, '2026-08-30T00:00:00Z'
+                     )",
+                    params![
+                        core::DocumentId::generate().to_string(),
+                        workspace_id.to_string(),
+                        epic_id.to_string(),
+                    ],
+                )?;
+                transaction.execute(
+                    "INSERT INTO documents (
+                         id, repository_id, epic_id, feature_id, work_item_id, kind,
+                         relative_path, content_hash, observed_commit, observed_at
+                     ) VALUES (
+                         ?1, (SELECT planning_store_repository_id FROM workspaces WHERE id = ?2),
+                         NULL, ?3, NULL, 'feature', 'plans/platform/delivery/FEATURE.md',
+                         '0000000000000000000000000000000000000000000000000000000000000000',
+                         NULL, '2026-08-30T00:00:00Z'
+                     )",
+                    params![
+                        core::DocumentId::generate().to_string(),
+                        workspace_id.to_string(),
+                        feature_id.to_string(),
+                    ],
+                )?;
+                transaction.execute(
+                    "INSERT INTO documents (
+                         id, repository_id, epic_id, feature_id, work_item_id, kind,
+                         relative_path, content_hash, observed_commit, observed_at
+                     ) VALUES (
+                         ?1, (SELECT planning_store_repository_id FROM workspaces WHERE id = ?2),
+                         NULL, NULL, ?3, 'work_item',
+                         'plans/platform/delivery/WI-4.md',
+                         '0000000000000000000000000000000000000000000000000000000000000000',
+                         NULL, '2026-08-30T00:00:00Z'
+                     )",
+                    params![
+                        core::DocumentId::generate().to_string(),
+                        workspace_id.to_string(),
+                        work_item_id.to_string(),
+                    ],
+                )?;
+                Ok(())
+            })
+            .expect("seed hierarchy");
+        drop(store);
+
+        let application = WorkboardApplication::open(&path).expect("open application");
+        let hierarchy = application
+            .client_workspace_hierarchy(workspace_id)
+            .expect("Workspace hierarchy");
+        assert_eq!(hierarchy.repositories.len(), 100);
+        assert_eq!(hierarchy.epics.len(), 1);
+        assert_eq!(hierarchy.features.len(), 1);
+        assert_eq!(hierarchy.work_items.len(), 1);
+        assert_eq!(hierarchy.features[0].repository_ids.len(), 99);
+        assert_eq!(hierarchy.epics[0].repository_ids.len(), 99);
+        assert_eq!(
+            hierarchy.focused_entity,
+            Some(protocol::EntityRef::WorkItem(
+                protocol::WorkItemId::from_uuid(*work_item_id.as_uuid())
+            ))
+        );
+        let workspace_count = application
+            .store
+            .read(|connection| {
+                connection
+                    .query_row("SELECT COUNT(*) FROM workspaces", [], |row| {
+                        row.get::<_, i64>(0)
+                    })
+                    .map_err(Into::into)
+            })
+            .expect("Workspace count");
+        assert_eq!(workspace_count, 1);
+    }
+
+    #[test]
+    fn saved_views_are_workspace_owned_revisioned_and_idempotent() {
+        let directory = TempDir::new().expect("temporary directory");
+        let path = directory.path().join("workboard.sqlite");
+        let mut store = SqliteStore::open(&path).expect("open store");
+        let workspace_id = seed_workspace(&mut store);
+        let core_repository_id = store
+            .read(|connection| {
+                connection
+                    .query_row(
+                        "SELECT id FROM repositories WHERE workspace_id = ?1",
+                        [workspace_id.to_string()],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .map(|id| id.parse::<core::RepositoryId>().expect("repository ID"))
+                    .map_err(Into::into)
+            })
+            .expect("repository");
+        drop(store);
+        let mut application = WorkboardApplication::open(&path).expect("open application");
+        let view_id = protocol::BoardViewId::generate();
+        let definition = protocol::BoardViewDefinition {
+            id: view_id,
+            workspace_id: wire_workspace_id(workspace_id),
+            title: "Focused delivery".to_owned(),
+            filters: protocol::BoardViewFilters {
+                query: Some("desktop".to_owned()),
+                repository_ids: vec![repository_id(core_repository_id)],
+                statuses: vec![protocol::WorkItemStatus::InProgress],
+            },
+            grouping: protocol::BoardViewGrouping {
+                kind: protocol::BoardViewGroupingKind::Repository,
+                lanes: vec![protocol::BoardViewLaneDefinition {
+                    key: "active".to_owned(),
+                    title: "Active".to_owned(),
+                }],
+            },
+            sort: protocol::BoardViewSort {
+                field: protocol::BoardViewSortField::Key,
+                direction: protocol::BoardViewSortDirection::Ascending,
+            },
+            density: protocol::BoardViewDensity::Compact,
+            revision: 0,
+        };
+        let request_id = protocol::RequestId::generate();
+        let saved = application
+            .save_client_board_view(
+                workspace_id,
+                0,
+                "save-view-1",
+                request_id,
+                definition.clone(),
+            )
+            .expect("save view");
+        assert_eq!(saved.revision, 1);
+        let replayed = application
+            .save_client_board_view(workspace_id, 0, "save-view-1", request_id, definition)
+            .expect("replay save");
+        assert_eq!(replayed, saved);
+        assert_eq!(
+            application
+                .client_board_view(workspace_id, view_id)
+                .expect("saved view"),
+            saved
+        );
+        assert_eq!(
+            application
+                .client_board_views(workspace_id)
+                .expect("saved views"),
+            vec![saved.clone()]
+        );
+        let event = application
+            .replay_client_events(
+                workspace_id,
+                protocol::DaemonInstanceId::generate(),
+                protocol::EventCursor {
+                    daemon_instance_id: protocol::DaemonInstanceId::generate(),
+                    sequence: 0,
+                },
+                protocol::CURRENT_PROTOCOL_VERSION,
+                10,
+            )
+            .expect("event replay");
+        let ReplayResult::Resync(_) = event else {
+            panic!("a foreign daemon cursor must require resync");
+        };
+        let stored_event = application
+            .store
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT event_json FROM client_events WHERE workspace_id = ?1 AND sequence = 1",
+                    [workspace_id.to_string()],
+                    |row| row.get::<_, String>(0),
+                )
+                .map_err(Into::into)
+            })
+            .expect("stored event");
+        let stored_event =
+            serde_json::from_str::<protocol::EventEnvelope>(&stored_event).expect("event JSON");
+        assert_eq!(stored_event.kind, protocol::EventKind::BoardViewSaved);
+        assert_eq!(
+            stored_event
+                .invalidation_scope
+                .expect("invalidation")
+                .queries,
+            vec![
+                protocol::ReadQueryCode::BoardViews,
+                protocol::ReadQueryCode::BoardView
+            ]
+        );
+        let workspace_count = application
+            .store
+            .read(|connection| {
+                connection
+                    .query_row("SELECT COUNT(*) FROM workspaces", [], |row| {
+                        row.get::<_, i64>(0)
+                    })
+                    .map_err(Into::into)
+            })
+            .expect("Workspace count");
+        assert_eq!(workspace_count, 1);
     }
 }
