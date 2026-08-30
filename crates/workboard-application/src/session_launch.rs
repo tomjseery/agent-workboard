@@ -101,6 +101,7 @@ pub struct ConfirmedSessionBinding {
     pub native_id: String,
     pub session_id: ConversationId,
     pub checkout_id: CheckoutId,
+    pub binding_generation: u32,
     pub restore_membership_id: Option<RestoreMembershipId>,
 }
 
@@ -363,7 +364,7 @@ impl<'a> SessionLaunchService<'a> {
                     "SELECT intent.workspace_id, intent.epic_id, intent.feature_id,
                             intent.work_item_id, managed.role, intent.provider,
                             session.native_id, session.id, managed.checkout_id,
-                            membership.id
+                            managed.binding_generation, membership.id
                      FROM launch_intents intent
                      JOIN managed_sessions managed ON managed.launch_intent_id = intent.id
                      JOIN native_sessions session ON session.id = managed.session_id
@@ -382,7 +383,8 @@ impl<'a> SessionLaunchService<'a> {
                             row.get::<_, String>(6)?,
                             row.get::<_, String>(7)?,
                             row.get::<_, String>(8)?,
-                            row.get::<_, Option<String>>(9)?,
+                            row.get::<_, u32>(9)?,
+                            row.get::<_, Option<String>>(10)?,
                         ))
                     },
                 )
@@ -398,6 +400,7 @@ impl<'a> SessionLaunchService<'a> {
                     native_id,
                     session_id,
                     checkout_id,
+                    binding_generation,
                     restore_membership_id,
                 )| {
                     Ok(ConfirmedSessionBinding {
@@ -408,6 +411,7 @@ impl<'a> SessionLaunchService<'a> {
                         native_id,
                         session_id: parse_id(&session_id)?,
                         checkout_id: parse_id(&checkout_id)?,
+                        binding_generation,
                         restore_membership_id: restore_membership_id
                             .as_deref()
                             .map(parse_id)
@@ -848,35 +852,58 @@ fn bind_transaction(
     } else {
         insert_association(transaction, session_id, owner, role, observed_at)?;
     }
-    let managed_session_id = transaction
+    let current_managed_session = transaction
         .query_row(
-            "SELECT id FROM managed_sessions
+            "SELECT id, binding_generation FROM managed_sessions
              WHERE session_id = ?1 AND managed_until IS NULL",
             [session_id.to_string()],
-            |row| row.get::<_, String>(0),
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, u32>(1)?)),
         )
-        .optional()?
-        .map(|id| parse_id::<ManagedSessionId>(&id))
-        .transpose()?
-        .unwrap_or_else(ManagedSessionId::generate);
-    transaction.execute(
-        "INSERT OR IGNORE INTO managed_sessions (
-             id, launch_intent_id, session_id, checkout_id, role, status, managed_from,
-             profile_id
-         ) VALUES (
-             ?1, ?2, ?3, ?4, ?5, ?6, ?7,
-             (SELECT profile_id FROM launch_intents WHERE id = ?2)
-         )",
-        params![
-            managed_session_id.to_string(),
-            intent_id.map(|id| id.to_string()),
-            session_id.to_string(),
-            checkout_id.to_string(),
-            role_name(role)?,
-            managed_status,
-            timestamp(observed_at),
-        ],
-    )?;
+        .optional()?;
+    let binding_generation = if let Some((managed_session_id, generation)) = current_managed_session
+    {
+        let next = generation.checked_add(1).ok_or_else(|| {
+            AppError::Domain("managed session binding generation overflowed".to_owned())
+        })?;
+        transaction.execute(
+            "UPDATE managed_sessions SET
+                 launch_intent_id = ?2, checkout_id = ?3, role = ?4, status = ?5,
+                 profile_id = COALESCE(
+                     (SELECT profile_id FROM launch_intents WHERE id = ?2), profile_id
+                 ), binding_generation = ?6
+             WHERE id = ?1 AND managed_until IS NULL",
+            params![
+                managed_session_id,
+                intent_id.map(|id| id.to_string()),
+                checkout_id.to_string(),
+                role_name(role)?,
+                managed_status,
+                next,
+            ],
+        )?;
+        next
+    } else {
+        let managed_session_id = ManagedSessionId::generate();
+        transaction.execute(
+            "INSERT INTO managed_sessions (
+                 id, launch_intent_id, session_id, checkout_id, role, status, managed_from,
+                 profile_id, binding_generation
+             ) VALUES (
+                 ?1, ?2, ?3, ?4, ?5, ?6, ?7,
+                 (SELECT profile_id FROM launch_intents WHERE id = ?2), 1
+             )",
+            params![
+                managed_session_id.to_string(),
+                intent_id.map(|id| id.to_string()),
+                session_id.to_string(),
+                checkout_id.to_string(),
+                role_name(role)?,
+                managed_status,
+                timestamp(observed_at),
+            ],
+        )?;
+        1
+    };
     let restore_membership_id =
         ensure_restore_membership(transaction, session_id, owner, observed_at)?;
     ensure_restore_entry(transaction, session_id, owner, observed_at)?;
@@ -908,6 +935,7 @@ fn bind_transaction(
         native_id: native_id.to_owned(),
         session_id,
         checkout_id,
+        binding_generation,
         restore_membership_id,
     })
 }
@@ -2068,6 +2096,7 @@ mod tests {
             HierarchyOwner::WorkItem(fixture.work_item_id)
         );
         assert_eq!(binding.checkout_id, fixture.checkout_id);
+        assert_eq!(binding.binding_generation, 1);
         assert!(binding.restore_membership_id.is_some());
         let public_binding = serde_json::to_string(&binding).expect("public binding");
         assert!(!public_binding.contains("thread-one"));
@@ -2321,6 +2350,63 @@ mod tests {
             SessionLaunchService::new(&mut fixture.store).bind_hook(&mutation),
             Err(AppError::CallerIdentityMismatch)
         ));
+    }
+
+    #[test]
+    fn exact_resume_advances_the_workboard_binding_generation() {
+        let mut fixture = fixture();
+        let first_request = request(&fixture, "generation-one");
+        let prepared = SessionLaunchService::new(&mut fixture.store)
+            .begin(first_request)
+            .expect("begin first launch");
+        let first = hook(
+            &fixture,
+            Tool::Codex,
+            "thread-generation",
+            &fixture.checkout_path,
+            Some(prepared.prepared.launch.launch_token().to_owned()),
+        );
+        let first_binding = SessionLaunchService::new(&mut fixture.store)
+            .bind_hook(&first)
+            .expect("bind first generation");
+        let idle = lifecycle_hook(
+            &fixture,
+            "thread-generation",
+            "Stop",
+            "2026-08-27T12:00:02Z",
+        );
+        SessionLaunchService::new(&mut fixture.store)
+            .ingest_hook(&idle)
+            .expect("record idle session");
+
+        let mut resume = request(&fixture, "generation-two");
+        resume.mode = ManagedLaunchMode::Resume("thread-generation".to_owned());
+        add_resume_source(&fixture, &mut resume, "thread-generation");
+        resume.created_at = fixture.observed_at + time::Duration::minutes(3);
+        resume.expires_at = resume.created_at + time::Duration::minutes(2);
+        let prepared = SessionLaunchService::new(&mut fixture.store)
+            .begin(resume)
+            .expect("begin exact resume");
+        let mut second = hook(
+            &fixture,
+            Tool::Codex,
+            "thread-generation",
+            &fixture.checkout_path,
+            Some(prepared.prepared.launch.launch_token().to_owned()),
+        );
+        second.observed_at = "2026-08-27T12:03:01Z".to_owned();
+        let second_binding = SessionLaunchService::new(&mut fixture.store)
+            .bind_hook(&second)
+            .expect("bind second generation");
+        assert_eq!(first_binding.session_id, second_binding.session_id);
+        assert_eq!(first_binding.binding_generation, 1);
+        assert_eq!(second_binding.binding_generation, 2);
+        assert_eq!(
+            SessionLaunchService::new(&mut fixture.store)
+                .binding_for_intent(prepared.intent_id)
+                .expect("read resumed binding"),
+            Some(second_binding)
+        );
     }
 
     #[test]
