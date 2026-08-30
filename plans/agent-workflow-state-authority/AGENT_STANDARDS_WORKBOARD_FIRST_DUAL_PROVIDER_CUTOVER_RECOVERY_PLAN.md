@@ -235,6 +235,38 @@ mirror parity.
 
 Workboard item: `cut-over-hooks-worktrees-generators-and-mirrors`.
 
+Status: complete on 2026-08-31 in Agent Standards commit `a398b81`
+(`feat(workflow): cut over authority-aware hooks and worktrees`).
+
+Stop and SessionStart now select Workflow v2 authority through one shared adapter backed by the authenticated
+`workboard workflow read-hierarchy` operation. SessionStart reports `repository`, `workboard`, or
+`reconciliation-required` before injecting the behavioral floor. Managed Stop requires the authenticated
+Feature, Work-item, checkout, and typed next-action continuation identity. Unmanaged Stop retains the existing
+plan-progress pointer, blocker, and graph contracts. Reconciliation reports its reason and observed Git
+worktree, branch, and HEAD without discovering a repository ledger or falling back to repository state.
+`plan_graph.py` remains independently executable and is reached from Stop only after repository selection.
+
+`scripts/worktrees.ps1 close` uses the exact checkout returned by the managed hierarchy, accepts no conflicting
+`-Worktree`, and performs no removal on reconciliation. The unmanaged route still requires the caller's
+worktree and preserves its dirty, detached, persistent, case-collision, PR ownership, PR state, HEAD,
+default-branch containment, and optional plan-ledger refusals. The vendoring generator now carries Workflow v2
+runtime and contracts with hooks and repository-invariant scripts, so the worktree command can authenticate
+managed state outside a hook process. A clean post-commit consumer generation and `-Check` round trip covered
+51 files.
+
+Claude and Codex now register the same authority-aware Stop and SessionStart mechanisms; Codex retains its
+separate marketplace refresh. The workflow plugin manifests advanced together to `0.1.5`, generated hook
+mirrors are identical, and README reachability documents the three routes. The Concertable-only
+`continue-roadmap` compatibility entry and all of its canonical and generated copies were unchanged.
+
+Focused managed, unmanaged, reconciliation, manifest, graph, reachability, adoption, generator, and worktree
+acceptance is green. Workflow verification still reports contract v2, two providers, two hosts, ten examples,
+and five schemas. Generated-copy verification reports 303 files current, including 73 skills and 29 docs. The
+complete Windows PowerShell hook suite reports 440 tests passing with the one expected POSIX-only skip. Its
+first sandboxed run could not create the existing Git-common-directory writer lock and also exposed one stale
+`0.1.4` manifest expectation; after updating that expectation, the authorized rerun passed in full. The Agent
+Standards implementation checkout is clean at `a398b81`.
+
 Make Stop and SessionStart hooks report and enforce the selected authority. Managed Stop requires the managed
 continuation identity, while unmanaged Stop retains the plan-progress pointer contract. Scope graph
 validation to the relevant repository-plan route and keep it usable standalone. Make worktree closing use
@@ -269,9 +301,10 @@ and generated Claude/Codex skills, hooks, workflows, and manifests match their s
 
 ## Current delivery state
 
-Phases 1 through 4 are complete and separately committed. The immutable recovery evidence is recorded above;
-Workflow v2 selects deterministic repository, Workboard, or reconciliation-required authority; and the eight
-in-scope planning and execution skills now follow that selection identically under Claude and Codex. The
+Phases 1 through 5 are complete and separately committed. The immutable recovery evidence is recorded above;
+Workflow v2 selects deterministic repository, Workboard, or reconciliation-required authority; the eight
+in-scope planning and execution skills follow that selection identically under Claude and Codex; and hooks,
+worktree close, generators, manifests, mirrors, and README reachability now enforce the same routes. The
 unresolved upstream ownership gap for a structured atomic replacement of the current opaque `work_checkpoint`
 payload remains explicit; managed checkpointing must not fill it with repository state or a second planning
-record. Phase 5 has not started and is the next delivery gate.
+record. Phase 6 has not started and is the next delivery gate.
