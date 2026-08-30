@@ -198,8 +198,15 @@ enum FeatureCommand {
     Approve {
         feature: Option<String>,
     },
+    Revise {
+        feature: Option<String>,
+        #[arg(long)]
+        feedback: String,
+    },
     Reject {
         feature: Option<String>,
+        #[arg(long)]
+        reason: String,
     },
     Publish {
         feature: Option<String>,
@@ -892,14 +899,33 @@ fn execute(cli: Cli) -> Result<String, AppError> {
             )
         }
         Some(Command::Feature(FeatureArgs {
-            command: FeatureCommand::Reject { feature },
+            command: FeatureCommand::Revise { feature, feedback },
         })) => {
             let workspace_id = resolve_workspace(&application, cli.workspace)?;
             let snapshot = application.snapshot(workspace_id)?;
             let feature = select_feature(&snapshot, feature.as_deref(), cli.json)?.clone();
-            let outcome = application
-                .planning_workflows()
-                .reject_proposal(feature.id, time::OffsetDateTime::now_utc())?;
+            let outcome = application.planning_workflows().request_proposal_revision(
+                feature.id,
+                &feedback,
+                time::OffsetDateTime::now_utc(),
+            )?;
+            output(
+                &outcome,
+                cli.json,
+                format!("Requested revision of {}", feature.title),
+            )
+        }
+        Some(Command::Feature(FeatureArgs {
+            command: FeatureCommand::Reject { feature, reason },
+        })) => {
+            let workspace_id = resolve_workspace(&application, cli.workspace)?;
+            let snapshot = application.snapshot(workspace_id)?;
+            let feature = select_feature(&snapshot, feature.as_deref(), cli.json)?.clone();
+            let outcome = application.planning_workflows().reject_proposal(
+                feature.id,
+                &reason,
+                time::OffsetDateTime::now_utc(),
+            )?;
             output(
                 &outcome,
                 cli.json,
@@ -3290,8 +3316,8 @@ mod tests {
     use crate::selector::SelectionCandidate;
 
     use super::{
-        Cli, Command as CliCommand, SessionCommand, WorkCommand, codex_app_executable,
-        execute_from, select_candidate, slugify,
+        Cli, Command as CliCommand, FeatureCommand, SessionCommand, WorkCommand,
+        codex_app_executable, execute_from, select_candidate, slugify,
     };
 
     #[test]
@@ -3365,6 +3391,37 @@ mod tests {
             panic!("expected Work command");
         };
         assert!(matches!(continued.command, WorkCommand::Continue { .. }));
+    }
+
+    #[test]
+    fn feature_revision_and_rejection_require_distinct_reasons() {
+        let revise = Cli::try_parse_from([
+            "workboard",
+            "feature",
+            "revise",
+            "abcd1234",
+            "--feedback",
+            "Clarify verification",
+        ])
+        .expect("revision command");
+        let Some(CliCommand::Feature(revise)) = revise.command else {
+            panic!("expected Feature command");
+        };
+        assert!(matches!(revise.command, FeatureCommand::Revise { .. }));
+
+        let reject = Cli::try_parse_from([
+            "workboard",
+            "feature",
+            "reject",
+            "abcd1234",
+            "--reason",
+            "No longer wanted",
+        ])
+        .expect("rejection command");
+        let Some(CliCommand::Feature(reject)) = reject.command else {
+            panic!("expected Feature command");
+        };
+        assert!(matches!(reject.command, FeatureCommand::Reject { .. }));
     }
 
     #[test]
