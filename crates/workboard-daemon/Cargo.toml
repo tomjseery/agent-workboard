@@ -8,19 +8,26 @@ license.workspace = true
 [lib]
 name = "workboard_daemon"
 
+[[bin]]
+name = "workboardd"
+path = "src/main.rs"
+
 [dependencies]
 clap.workspace = true
 notify.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+time.workspace = true
 uuid.workspace = true
 workboard-application = { path = "../workboard-application" }
+workboard-client-protocol = { path = "../workboard-client-protocol" }
 workboard-core = { path = "../workboard-core" }
 
 [dev-dependencies]
+rusqlite.workspace = true
 tempfile.workspace = true
+workboard-client = { path = "../workboard-client" }
 
 [lints]
 workspace = true
-

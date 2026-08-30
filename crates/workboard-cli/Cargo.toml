@@ -19,11 +19,14 @@ serde.workspace = true
 serde_json.workspace = true
 time.workspace = true
 workboard-application = { path = "../workboard-application" }
+workboard-client = { path = "../workboard-client" }
+workboard-client-protocol = { path = "../workboard-client-protocol" }
 workboard-core = { path = "../workboard-core" }
-workboard-daemon = { path = "../workboard-daemon" }
 
 [dev-dependencies]
+rusqlite.workspace = true
 tempfile.workspace = true
+workboard-daemon = { path = "../workboard-daemon" }
 
 [lints]
 workspace = true

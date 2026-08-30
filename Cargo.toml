@@ -5,6 +5,8 @@ members = [
     "crates/workboard-adapter-claude",
     "crates/workboard-adapter-codex",
     "crates/workboard-application",
+    "crates/workboard-client-protocol",
+    "crates/workboard-client",
     "crates/workboard-daemon",
     "crates/workboard-cli",
 ]

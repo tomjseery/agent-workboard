@@ -11,19 +11,30 @@ pub use client::DaemonClient;
 pub use endpoint::{EndpointDescriptor, EndpointRegistration, endpoint_path, read_descriptor};
 pub use error::DaemonError;
 pub use protocol::{PROTOCOL_VERSION, RemoteError, WriteCommand};
-pub use server::{CommandHandler, DaemonServer};
+pub use server::{ApplicationCommandHandler, CommandHandler, DaemonServer};
 pub use watcher::WatchConfig;
 
 #[cfg(test)]
 mod tests {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    use std::path::Path;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, mpsc};
     use std::thread;
     use std::time::Duration;
 
+    use rusqlite::params;
     use serde_json::json;
     use tempfile::TempDir;
+    use time::OffsetDateTime;
+    use workboard_application::workspace::WorkboardApplication;
+    use workboard_client::{EndpointDescriptor as ClientEndpoint, SubscriptionUpdate};
+    use workboard_client_protocol::{
+        CURRENT_PROTOCOL_VERSION, EntityRef, EventCursor, EventEnvelope, EventId, EventKind,
+        EventPayload, InvalidationScope, ReadQueryCode, RequestId, ResyncReason,
+        WorkspaceId as ClientWorkspaceId,
+    };
+    use workboard_core::{RepositoryId, WorkspaceId};
 
     use super::{
         DaemonClient, DaemonError, DaemonServer, EndpointDescriptor, EndpointRegistration,
@@ -32,6 +43,96 @@ mod tests {
 
     fn loopback() -> SocketAddr {
         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)
+    }
+
+    fn application_fixture(directory: &TempDir) -> (WorkboardApplication, WorkspaceId) {
+        let database = directory.path().join("workboard.sqlite");
+        let application = WorkboardApplication::open(&database).expect("open application");
+        let workspace_id = WorkspaceId::generate();
+        let repository_id = RepositoryId::generate();
+        let mut connection = rusqlite::Connection::open(&database).expect("open fixture database");
+        connection
+            .pragma_update(None, "foreign_keys", "ON")
+            .expect("enable foreign keys");
+        let transaction = connection.transaction().expect("fixture transaction");
+        transaction
+            .execute(
+                "INSERT INTO workspaces (id, slug, title, planning_store_repository_id, created_at)
+                 VALUES (?1, 'workspace', 'Workspace', ?2, '2026-08-30T00:00:00Z')",
+                params![workspace_id.to_string(), repository_id.to_string()],
+            )
+            .expect("insert Workspace");
+        transaction
+            .execute(
+                "INSERT INTO repositories (
+                     id, workspace_id, slug, title, git_common_directory, default_branch,
+                     is_planning_store, created_at
+                 ) VALUES (
+                     ?1, ?2, 'planning', 'Planning', 'C:/planning/.git', 'main', 1,
+                     '2026-08-30T00:00:00Z'
+                 )",
+                params![repository_id.to_string(), workspace_id.to_string()],
+            )
+            .expect("insert repository");
+        transaction.commit().expect("commit fixture");
+        (application, workspace_id)
+    }
+
+    fn typed_client(server: &DaemonServer, token: &str) -> workboard_client::WorkboardClient {
+        workboard_client::WorkboardClient::connect(ClientEndpoint {
+            protocol_version: CURRENT_PROTOCOL_VERSION,
+            address: server.address(),
+            token: token.to_owned(),
+        })
+        .expect("connect typed client")
+    }
+
+    fn append_event(database: &Path, workspace_id: WorkspaceId, sequence: u64) -> EventEnvelope {
+        let workspace = ClientWorkspaceId::from_uuid(*workspace_id.as_uuid());
+        let event = EventEnvelope {
+            protocol_version: CURRENT_PROTOCOL_VERSION,
+            event_version: 1,
+            workspace_id: workspace,
+            sequence,
+            event_id: EventId::generate(),
+            occurred_at: OffsetDateTime::now_utc(),
+            owner: EntityRef::Workspace(workspace),
+            entity_revision: sequence,
+            kind: EventKind::ProjectionChanged,
+            payload: Some(EventPayload::ProjectionChanged {
+                entity: EntityRef::Workspace(workspace),
+            }),
+            invalidation_scope: Some(InvalidationScope {
+                queries: vec![ReadQueryCode::BoardSnapshot],
+                owners: Vec::new(),
+            }),
+            operation_correlation_id: RequestId::generate(),
+            partial_outcomes: Vec::new(),
+        };
+        let mut connection = rusqlite::Connection::open(database).expect("open event database");
+        let transaction = connection.transaction().expect("event transaction");
+        transaction
+            .execute(
+                "UPDATE workspace_projection_revisions SET revision = ?2 WHERE workspace_id = ?1",
+                params![workspace_id.to_string(), sequence as i64],
+            )
+            .expect("update revision");
+        transaction
+            .execute(
+                "INSERT INTO client_events (
+                     workspace_id, sequence, event_id, occurred_at, event_json, idempotency_key
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, NULL)",
+                params![
+                    workspace_id.to_string(),
+                    sequence as i64,
+                    event.event_id.to_string(),
+                    "2026-08-30T00:00:00Z",
+                    serde_json::to_string(&event).expect("event JSON"),
+                ],
+            )
+            .expect("insert event");
+        transaction.commit().expect("commit event");
+        event
     }
 
     #[test]
@@ -85,6 +186,129 @@ mod tests {
 
         assert_eq!(handled.load(Ordering::SeqCst), 8);
         assert_eq!(maximum.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn typed_client_negotiates_reads_and_advertises_writes_as_unavailable() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (application, workspace_id) = application_fixture(&directory);
+        let server = DaemonServer::start_application(application, loopback(), "opaque-token")
+            .expect("start daemon");
+        let client = typed_client(&server, "opaque-token");
+        assert_eq!(
+            client.handshake().negotiated_read_version,
+            CURRENT_PROTOCOL_VERSION
+        );
+        assert_eq!(client.handshake().command_capabilities.len(), 10);
+        assert!(
+            client
+                .handshake()
+                .command_capabilities
+                .iter()
+                .all(|capability| !capability.available)
+        );
+        let snapshot = client
+            .board_snapshot(ClientWorkspaceId::from_uuid(*workspace_id.as_uuid()))
+            .expect("board snapshot");
+        assert_eq!(snapshot.workspace.title, "Workspace");
+        let serialised = serde_json::to_string(&snapshot).expect("snapshot JSON");
+        assert!(!serialised.contains("opaque-token"));
+        let rejected = workboard_client::WorkboardClient::connect(ClientEndpoint {
+            protocol_version: CURRENT_PROTOCOL_VERSION,
+            address: server.address(),
+            token: "wrong-token".to_owned(),
+        })
+        .expect_err("wrong token");
+        assert_eq!(rejected.code(), "authentication_failed");
+    }
+
+    #[test]
+    fn subscription_replays_ordered_events_and_resyncs_after_daemon_restart() {
+        let directory = TempDir::new().expect("temporary directory");
+        let database = directory.path().join("workboard.sqlite");
+        let (application, workspace_id) = application_fixture(&directory);
+        let server = DaemonServer::start_application(application, loopback(), "opaque-token")
+            .expect("start daemon");
+        let address = server.address();
+        let client = typed_client(&server, "opaque-token");
+        let client_workspace = ClientWorkspaceId::from_uuid(*workspace_id.as_uuid());
+        let cursor = EventCursor {
+            daemon_instance_id: client.handshake().daemon_instance_id,
+            sequence: 0,
+        };
+        let mut subscription = client
+            .subscribe(client_workspace, Some(cursor))
+            .expect("subscribe");
+        let first = append_event(&database, workspace_id, 1);
+        let second = append_event(&database, workspace_id, 2);
+        assert_eq!(
+            subscription.next_update().expect("first event"),
+            SubscriptionUpdate::Event(first)
+        );
+        assert_eq!(
+            subscription.next_update().expect("second event"),
+            SubscriptionUpdate::Event(second)
+        );
+        drop(server);
+        let restarted = DaemonServer::start_application(
+            WorkboardApplication::open(&database).expect("reopen application"),
+            address,
+            "opaque-token",
+        )
+        .expect("restart daemon");
+        let SubscriptionUpdate::Resynced {
+            requirement,
+            snapshot,
+        } = subscription.next_update().expect("restart resync")
+        else {
+            panic!("resync expected");
+        };
+        assert_eq!(requirement.reason, ResyncReason::DaemonRestarted);
+        assert_eq!(requirement.authoritative_revision, 2);
+        assert_eq!(snapshot.workspace.id, client_workspace);
+        drop(restarted);
+    }
+
+    #[test]
+    fn subscription_resyncs_expired_and_ahead_cursors_without_filling_gaps() {
+        let directory = TempDir::new().expect("temporary directory");
+        let database = directory.path().join("workboard.sqlite");
+        let (application, workspace_id) = application_fixture(&directory);
+        let server = DaemonServer::start_application(application, loopback(), "opaque-token")
+            .expect("start daemon");
+        let client = typed_client(&server, "opaque-token");
+        let client_workspace = ClientWorkspaceId::from_uuid(*workspace_id.as_uuid());
+        append_event(&database, workspace_id, 2);
+        let mut expired = client
+            .subscribe(
+                client_workspace,
+                Some(EventCursor {
+                    daemon_instance_id: client.handshake().daemon_instance_id,
+                    sequence: 0,
+                }),
+            )
+            .expect("expired subscription");
+        let SubscriptionUpdate::Resynced { requirement, .. } =
+            expired.next_update().expect("expired resync")
+        else {
+            panic!("expired resync expected");
+        };
+        assert_eq!(requirement.reason, ResyncReason::CursorExpired);
+        let mut ahead = client
+            .subscribe(
+                client_workspace,
+                Some(EventCursor {
+                    daemon_instance_id: client.handshake().daemon_instance_id,
+                    sequence: 3,
+                }),
+            )
+            .expect("ahead subscription");
+        let SubscriptionUpdate::Resynced { requirement, .. } =
+            ahead.next_update().expect("gap resync")
+        else {
+            panic!("gap resync expected");
+        };
+        assert_eq!(requirement.reason, ResyncReason::Gap);
     }
 
     #[test]

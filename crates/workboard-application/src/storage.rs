@@ -6,13 +6,16 @@ use std::time::Duration;
 use rusqlite::{
     Connection, ErrorCode, MAIN_DB, OptionalExtension, Transaction, TransactionBehavior, params,
 };
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-use workboard_core::{ConversationId, LaunchLeaseId};
+use workboard_client_protocol::EventEnvelope;
+use workboard_core::{ConversationId, LaunchLeaseId, WorkspaceId};
 
 use crate::AppError;
 
-const CURRENT_SCHEMA_VERSION: i64 = 31;
+const CURRENT_SCHEMA_VERSION: i64 = 32;
+const CLIENT_EVENT_JOURNAL_SCHEMA_CHECKSUM: &str = "agent-workboard-client-event-journal-v1";
 const FOUNDATION_SCHEMA_CHECKSUM: &str = "agent-workboard-foundation-v1";
 const LAUNCH_LEASE_SCHEMA_CHECKSUM: &str = "agent-workboard-launch-leases-v1";
 const WORKBOARD_DOMAIN_SCHEMA_CHECKSUM: &str = "agent-workboard-domain-v1";
@@ -1215,6 +1218,13 @@ pub struct SqliteStore {
     connection: Connection,
 }
 
+#[derive(Debug)]
+pub(crate) struct ProjectedWrite<T> {
+    pub value: T,
+    pub event: EventEnvelope,
+    pub replayed: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StorageHealth {
@@ -1281,6 +1291,101 @@ impl SqliteStore {
         let result = operation(&transaction)?;
         transaction.commit()?;
         Ok(result)
+    }
+
+    pub(crate) fn write_projected<T>(
+        &mut self,
+        workspace_id: WorkspaceId,
+        expected_revision: u64,
+        idempotency_key: &str,
+        operation_name: &str,
+        mutation: impl FnOnce(&Transaction<'_>) -> Result<T, AppError>,
+        event: impl FnOnce(u64, &T) -> EventEnvelope,
+    ) -> Result<ProjectedWrite<T>, AppError>
+    where
+        T: Serialize + DeserializeOwned,
+    {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some((stored_operation, outcome_json, event_json)) = transaction
+            .query_row(
+                "SELECT operation_name, outcome_json, event_json
+                 FROM client_operation_outcomes
+                 WHERE workspace_id = ?1 AND idempotency_key = ?2",
+                params![workspace_id.to_string(), idempotency_key],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .optional()?
+        {
+            if stored_operation != operation_name {
+                return Err(AppError::IdempotencyConflict);
+            }
+            return Ok(ProjectedWrite {
+                value: serde_json::from_str(&outcome_json)?,
+                event: serde_json::from_str(&event_json)?,
+                replayed: true,
+            });
+        }
+        let current = projection_revision(&transaction, workspace_id)?;
+        if current != expected_revision {
+            return Err(AppError::External {
+                code: "stale_revision".to_owned(),
+                message: format!(
+                    "Workspace revision {expected_revision} is stale; current revision is {current}"
+                ),
+            });
+        }
+        let value = mutation(&transaction)?;
+        let revision = current + 1;
+        let event = event(revision, &value);
+        let event_json = serde_json::to_string(&event)?;
+        transaction.execute(
+            "UPDATE workspace_projection_revisions SET revision = ?2 WHERE workspace_id = ?1",
+            params![workspace_id.to_string(), revision as i64],
+        )?;
+        transaction.execute(
+            "INSERT INTO client_events (
+                 workspace_id, sequence, event_id, occurred_at, event_json, idempotency_key
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                workspace_id.to_string(),
+                revision as i64,
+                event.event_id.to_string(),
+                event
+                    .occurred_at
+                    .format(&Rfc3339)
+                    .expect("RFC 3339 timestamp"),
+                event_json,
+                idempotency_key,
+            ],
+        )?;
+        transaction.execute(
+            "INSERT INTO client_operation_outcomes (
+                 workspace_id, idempotency_key, operation_name, sequence, outcome_json, event_json
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                workspace_id.to_string(),
+                idempotency_key,
+                operation_name,
+                revision as i64,
+                serde_json::to_string(&value)?,
+                serde_json::to_string(&event)?,
+            ],
+        )?;
+        prune_client_events(&transaction, workspace_id, revision)?;
+        transaction.commit()?;
+        Ok(ProjectedWrite {
+            value,
+            event,
+            replayed: false,
+        })
     }
 
     pub fn health(&self) -> Result<StorageHealth, AppError> {
@@ -2248,6 +2353,78 @@ fn migrate(connection: &Connection) -> Result<(), AppError> {
              ADD COLUMN readiness_generation INTEGER;
          ALTER TABLE managed_session_requests
              ADD COLUMN repository_id TEXT REFERENCES repositories(id) ON DELETE RESTRICT;",
+    )?;
+    apply_migration(
+        connection,
+        32,
+        CLIENT_EVENT_JOURNAL_SCHEMA_CHECKSUM,
+        "CREATE TABLE IF NOT EXISTS workspace_projection_revisions (
+             workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE RESTRICT,
+             revision INTEGER NOT NULL CHECK (revision >= 0)
+         );
+         INSERT OR IGNORE INTO workspace_projection_revisions (workspace_id, revision)
+         SELECT id, 0 FROM workspaces;
+         CREATE TRIGGER IF NOT EXISTS workspaces_create_projection_revision
+         AFTER INSERT ON workspaces
+         BEGIN
+             INSERT INTO workspace_projection_revisions (workspace_id, revision)
+             VALUES (NEW.id, 0);
+         END;
+         CREATE TABLE IF NOT EXISTS client_events (
+             workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE RESTRICT,
+             sequence INTEGER NOT NULL CHECK (sequence > 0),
+             event_id TEXT NOT NULL UNIQUE CHECK (event_id <> ''),
+             occurred_at TEXT NOT NULL CHECK (occurred_at <> ''),
+             event_json TEXT NOT NULL CHECK (event_json <> ''),
+             idempotency_key TEXT,
+             PRIMARY KEY (workspace_id, sequence),
+             UNIQUE (workspace_id, idempotency_key)
+         );
+         CREATE TABLE IF NOT EXISTS client_operation_outcomes (
+             workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE RESTRICT,
+             idempotency_key TEXT NOT NULL CHECK (idempotency_key <> ''),
+             operation_name TEXT NOT NULL CHECK (operation_name <> ''),
+             sequence INTEGER NOT NULL CHECK (sequence > 0),
+             outcome_json TEXT NOT NULL CHECK (outcome_json <> ''),
+             event_json TEXT NOT NULL CHECK (event_json <> ''),
+             PRIMARY KEY (workspace_id, idempotency_key),
+             FOREIGN KEY (workspace_id, sequence)
+                 REFERENCES client_events(workspace_id, sequence) ON DELETE RESTRICT
+         );",
+    )?;
+    Ok(())
+}
+
+fn projection_revision(
+    transaction: &Transaction<'_>,
+    workspace_id: WorkspaceId,
+) -> Result<u64, AppError> {
+    transaction
+        .query_row(
+            "SELECT revision FROM workspace_projection_revisions WHERE workspace_id = ?1",
+            [workspace_id.to_string()],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?
+        .map(|revision| revision as u64)
+        .ok_or_else(|| AppError::Domain("Workspace does not exist".to_owned()))
+}
+
+fn prune_client_events(
+    transaction: &Transaction<'_>,
+    workspace_id: WorkspaceId,
+    revision: u64,
+) -> Result<(), AppError> {
+    let first_retained =
+        revision.saturating_sub(workboard_client_protocol::EVENT_JOURNAL_RETENTION);
+    transaction.execute(
+        "DELETE FROM client_operation_outcomes
+         WHERE workspace_id = ?1 AND sequence <= ?2",
+        params![workspace_id.to_string(), first_retained as i64],
+    )?;
+    transaction.execute(
+        "DELETE FROM client_events WHERE workspace_id = ?1 AND sequence <= ?2",
+        params![workspace_id.to_string(), first_retained as i64],
     )?;
     Ok(())
 }
@@ -3923,7 +4100,7 @@ mod tests {
         assert_eq!(preserved_attestation, valid_attestation);
         assert_eq!(legacy_authority, "immutable_evidence");
         let health = store.health().expect("storage health");
-        assert_eq!(health.schema_version, 31);
+        assert_eq!(health.schema_version, 32);
         assert!(health.is_healthy());
         let audited_attestations: Vec<(String, String, String, String)> = store
             .read(|connection| {
@@ -3968,7 +4145,7 @@ mod tests {
             .expect("read upgraded schema 20 attestations");
         assert_eq!(upgraded_attestations, audited_attestations);
         let health = store.health().expect("upgraded storage health");
-        assert_eq!(health.schema_version, 31);
+        assert_eq!(health.schema_version, 32);
         assert!(health.is_healthy());
         drop(store);
 

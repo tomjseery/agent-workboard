@@ -13,6 +13,7 @@ pub mod native_launch;
 pub mod native_sources;
 pub mod planning_store;
 pub mod planning_workflow;
+pub mod projection;
 pub mod recovery;
 pub mod session_launch;
 pub mod storage;

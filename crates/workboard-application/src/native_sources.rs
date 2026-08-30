@@ -1,13 +1,18 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use workboard_adapter_claude::ClaudeAdapterV1;
 use workboard_adapter_codex::CodexAdapterV1;
-use workboard_core::{ConversationId, Tool};
-use workboard_native::{ConversationKind, NativeAdapter};
+use workboard_client_protocol::{
+    CURRENT_PROTOCOL_VERSION, EntityRef, EventEnvelope, EventId, EventKind, EventPayload,
+    InvalidationScope, ReadQueryCode, RequestId,
+};
+use workboard_core::{ConversationId, Tool, WorkspaceId};
+use workboard_native::{AdapterScan, ConversationKind, NativeAdapter};
 
 use crate::AppError;
 use crate::native_launch::{ResumeContext, ResumeSource};
@@ -63,80 +68,87 @@ impl<'a> NativeSourceService<'a> {
             tool: tool_title(request.tool),
             message: failure.message,
         })?;
-        let observed_at = timestamp(request.observed_at);
-        let inventory = scan
-            .inventory
-            .iter()
-            .map(|path| path_text(path).map(str::to_owned))
-            .collect::<Result<Vec<_>, _>>()?;
-        let mut conversations = 0usize;
-        self.store.write(|transaction| {
-            transaction.execute(
-                "UPDATE native_session_sources SET missing = 1, observed_at = ?2
-                 WHERE session_id IN (
-                     SELECT id FROM native_sessions WHERE provider = ?1
-                 )",
-                params![tool_name(request.tool), observed_at],
-            )?;
-            for source in &scan.sources {
-                if source.conversation.kind != ConversationKind::TopLevel {
-                    continue;
-                }
-                conversations += 1;
-                let existing = transaction
-                    .query_row(
-                        "SELECT id FROM native_sessions WHERE provider = ?1 AND native_id = ?2",
-                        params![tool_name(request.tool), source.conversation.native_id],
-                        |row| row.get::<_, String>(0),
-                    )
-                    .optional()?;
-                let session_id = existing.unwrap_or_else(|| ConversationId::generate().to_string());
-                transaction.execute(
-                    "INSERT OR IGNORE INTO native_sessions (id, provider, native_id, discovered_at)
-                     VALUES (?1, ?2, ?3, ?4)",
-                    params![
-                        session_id,
-                        tool_name(request.tool),
-                        source.conversation.native_id,
-                        observed_at,
-                    ],
-                )?;
-                transaction.execute(
-                    "INSERT INTO native_session_sources (
-                         session_id, path, adapter_version, snapshot_json, missing, observed_at
-                     ) VALUES (?1, ?2, ?3, ?4, 0, ?5)
-                     ON CONFLICT(path) DO UPDATE SET
-                         session_id = excluded.session_id,
-                         adapter_version = excluded.adapter_version,
-                         snapshot_json = excluded.snapshot_json,
-                         missing = 0,
-                         observed_at = excluded.observed_at",
-                    params![
-                        session_id,
-                        path_text(&source.path)?,
-                        scan.adapter_version,
-                        serde_json::to_string(&source.conversation)?,
-                        observed_at,
-                    ],
-                )?;
+        let workspace_id = self.store.read(|connection| {
+            let ids = connection
+                .prepare("SELECT id FROM workspaces ORDER BY slug")?
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            match ids.as_slice() {
+                [id] => WorkspaceId::from_str(id)
+                    .map(Some)
+                    .map_err(|error| AppError::Domain(error.to_string())),
+                [] => Ok(None),
+                _ => Err(AppError::Domain(
+                    "native refresh requires one Workspace".to_owned(),
+                )),
             }
-            Ok(())
         })?;
-        Ok(NativeRefreshOutcome {
-            tool: request.tool,
-            inventory_count: inventory.len(),
-            source_count: scan.sources.len(),
-            conversation_count: conversations,
-            failures: scan
-                .failures
-                .into_iter()
-                .map(|failure| NativeSourceFailure {
-                    path: failure.path,
-                    code: format!("{:?}", failure.kind).to_ascii_lowercase(),
-                    message: failure.message,
-                })
-                .collect(),
-        })
+        let observed_at = timestamp(request.observed_at);
+        if let Some(workspace_id) = workspace_id {
+            let revision = self.store.read(|connection| {
+                connection
+                    .query_row(
+                        "SELECT revision FROM workspace_projection_revisions
+                         WHERE workspace_id = ?1",
+                        [workspace_id.to_string()],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .map(|value| value as u64)
+                    .map_err(Into::into)
+            })?;
+            let idempotency_key = format!(
+                "native-refresh:{}:{}",
+                tool_name(request.tool),
+                request.observed_at.unix_timestamp_nanos()
+            );
+            let tool = request.tool;
+            let correlation_id = RequestId::generate();
+            return self
+                .store
+                .write_projected(
+                    workspace_id,
+                    revision,
+                    &idempotency_key,
+                    "refresh_native_sessions",
+                    |transaction| persist_scan(transaction, &scan, tool, &observed_at),
+                    |revision, outcome| EventEnvelope {
+                        protocol_version: CURRENT_PROTOCOL_VERSION,
+                        event_version: 1,
+                        workspace_id: workboard_client_protocol::WorkspaceId::from_uuid(
+                            *workspace_id.as_uuid(),
+                        ),
+                        sequence: revision,
+                        event_id: EventId::generate(),
+                        occurred_at: request.observed_at,
+                        owner: EntityRef::Workspace(
+                            workboard_client_protocol::WorkspaceId::from_uuid(
+                                *workspace_id.as_uuid(),
+                            ),
+                        ),
+                        entity_revision: revision,
+                        kind: EventKind::NativeSessionsRefreshed,
+                        payload: Some(EventPayload::NativeSessionsRefreshed {
+                            session_count: outcome.conversation_count,
+                        }),
+                        invalidation_scope: Some(InvalidationScope {
+                            queries: vec![
+                                ReadQueryCode::WorkspaceSummary,
+                                ReadQueryCode::BoardSnapshot,
+                            ],
+                            owners: Vec::new(),
+                        }),
+                        operation_correlation_id: correlation_id,
+                        partial_outcomes: Vec::new(),
+                    },
+                )
+                .map(|result| {
+                    let _published = result.event;
+                    let _replayed = result.replayed;
+                    result.value
+                });
+        }
+        self.store
+            .write(|transaction| persist_scan(transaction, &scan, request.tool, &observed_at))
     }
 
     pub fn resume_context(
@@ -172,6 +184,85 @@ impl<'a> NativeSourceService<'a> {
             sources,
         })
     }
+}
+
+fn persist_scan(
+    transaction: &rusqlite::Transaction<'_>,
+    scan: &AdapterScan,
+    tool: Tool,
+    observed_at: &str,
+) -> Result<NativeRefreshOutcome, AppError> {
+    let inventory_count = scan
+        .inventory
+        .iter()
+        .map(|path| path_text(path))
+        .collect::<Result<Vec<_>, _>>()?
+        .len();
+    let mut conversations = 0usize;
+    transaction.execute(
+        "UPDATE native_session_sources SET missing = 1, observed_at = ?2
+         WHERE session_id IN (
+             SELECT id FROM native_sessions WHERE provider = ?1
+         )",
+        params![tool_name(tool), observed_at],
+    )?;
+    for source in &scan.sources {
+        if source.conversation.kind != ConversationKind::TopLevel {
+            continue;
+        }
+        conversations += 1;
+        let existing = transaction
+            .query_row(
+                "SELECT id FROM native_sessions WHERE provider = ?1 AND native_id = ?2",
+                params![tool_name(tool), source.conversation.native_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        let session_id = existing.unwrap_or_else(|| ConversationId::generate().to_string());
+        transaction.execute(
+            "INSERT OR IGNORE INTO native_sessions (id, provider, native_id, discovered_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                session_id,
+                tool_name(tool),
+                source.conversation.native_id,
+                observed_at,
+            ],
+        )?;
+        transaction.execute(
+            "INSERT INTO native_session_sources (
+                 session_id, path, adapter_version, snapshot_json, missing, observed_at
+             ) VALUES (?1, ?2, ?3, ?4, 0, ?5)
+             ON CONFLICT(path) DO UPDATE SET
+                 session_id = excluded.session_id,
+                 adapter_version = excluded.adapter_version,
+                 snapshot_json = excluded.snapshot_json,
+                 missing = 0,
+                 observed_at = excluded.observed_at",
+            params![
+                session_id,
+                path_text(&source.path)?,
+                scan.adapter_version,
+                serde_json::to_string(&source.conversation)?,
+                observed_at,
+            ],
+        )?;
+    }
+    Ok(NativeRefreshOutcome {
+        tool,
+        inventory_count,
+        source_count: scan.sources.len(),
+        conversation_count: conversations,
+        failures: scan
+            .failures
+            .iter()
+            .map(|failure| NativeSourceFailure {
+                path: failure.path.clone(),
+                code: format!("{:?}", failure.kind).to_ascii_lowercase(),
+                message: failure.message.clone(),
+            })
+            .collect(),
+    })
 }
 
 fn path_text(path: &Path) -> Result<&str, AppError> {
