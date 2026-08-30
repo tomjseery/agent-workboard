@@ -49,6 +49,7 @@ pub struct SessionChoice {
     pub checkout_id: CheckoutId,
     pub repository_id: RepositoryId,
     pub checkout_purpose: Option<CheckoutPurpose>,
+    pub checkout_access_mode: Option<CheckoutAccessMode>,
     pub checkout_path: PathBuf,
     pub branch: Option<String>,
     pub checkout_generation: Option<u64>,
@@ -206,7 +207,8 @@ impl<'a> WorkProjectionService<'a> {
                         association.associated_until, managed.status, managed.managed_until,
                         live.status, live.observed_at, managed.checkout_id,
                         checkout.repository_id, path.path, checkout.branch,
-                        readiness.purpose, readiness.reconciliation_generation,
+                        readiness.purpose, readiness.access_mode,
+                        readiness.reconciliation_generation,
                         EXISTS (
                             SELECT 1 FROM restore_entries restore
                             WHERE restore.session_id = session.id AND restore.removed_at IS NULL
@@ -265,14 +267,15 @@ impl<'a> WorkProjectionService<'a> {
                         row.get::<_, String>(10)?,
                         row.get::<_, Option<String>>(11)?,
                         row.get::<_, Option<String>>(12)?,
-                        row.get::<_, Option<i64>>(13)?,
-                        row.get::<_, bool>(14)?,
-                        row.get::<_, String>(15)?,
-                        row.get::<_, Option<u32>>(16)?,
-                        row.get::<_, Option<String>>(17)?,
+                        row.get::<_, Option<String>>(13)?,
+                        row.get::<_, Option<i64>>(14)?,
+                        row.get::<_, bool>(15)?,
+                        row.get::<_, String>(16)?,
+                        row.get::<_, Option<u32>>(17)?,
                         row.get::<_, Option<String>>(18)?,
                         row.get::<_, Option<String>>(19)?,
-                        row.get::<_, u32>(20)?,
+                        row.get::<_, Option<String>>(20)?,
+                        row.get::<_, u32>(21)?,
                     ))
                 })?
                 .collect::<Result<Vec<_>, _>>()?;
@@ -292,6 +295,7 @@ impl<'a> WorkProjectionService<'a> {
                         checkout_path,
                         branch,
                         purpose,
+                        access_mode,
                         generation,
                         restore_active,
                         resumability,
@@ -348,6 +352,10 @@ impl<'a> WorkProjectionService<'a> {
                             checkout_id: parse_id(&checkout_id)?,
                             repository_id: parse_id(&repository_id)?,
                             checkout_purpose: purpose.as_deref().map(parse_wire).transpose()?,
+                            checkout_access_mode: access_mode
+                                .as_deref()
+                                .map(parse_wire)
+                                .transpose()?,
                             checkout_path: PathBuf::from(checkout_path),
                             branch,
                             checkout_generation: generation
@@ -466,18 +474,31 @@ fn work_item_actions(
             Some("Start an additional writer in a distinct writer-session checkout".to_owned());
     }
     let mut actions = vec![start];
-    if sessions.iter().any(|session| {
-        session
-            .actions
-            .iter()
-            .any(|action| action.kind == AvailableActionKind::Resume && action.enabled)
-    }) {
-        actions.push(AvailableAction::enabled(
-            AvailableActionKind::Resume,
-            "Resume selected session",
+    for session in sessions {
+        actions.extend(session.actions.iter().cloned());
+    }
+    match work_item.status {
+        WorkItemStatus::InProgress | WorkItemStatus::Blocked => {
+            actions.push(AvailableAction::enabled(
+                AvailableActionKind::Checkpoint,
+                "Record checkpoint",
+                owner,
+                "workflow.checkpoint",
+            ))
+        }
+        WorkItemStatus::Review => actions.push(AvailableAction::enabled(
+            AvailableActionKind::Integrate,
+            "Integrate accepted work",
             owner,
-            "work.continue",
-        ));
+            "work.integrate",
+        )),
+        WorkItemStatus::Done | WorkItemStatus::Cancelled => actions.push(AvailableAction::enabled(
+            AvailableActionKind::Evidence,
+            "Show durable evidence",
+            owner,
+            "work.open",
+        )),
+        WorkItemStatus::Backlog | WorkItemStatus::Ready => {}
     }
     AvailableActions {
         schema_version: AVAILABLE_ACTIONS_SCHEMA_VERSION,
@@ -575,9 +596,9 @@ fn parse_time(value: &str) -> Result<OffsetDateTime, AppError> {
 
 #[cfg(test)]
 mod tests {
-    use workboard_core::{FeatureId, Slug, WorkItemKey};
+    use workboard_core::{AvailableActionKind, FeatureId, Slug, WorkItemKey};
 
-    use super::{dependency_layer, readiness};
+    use super::{dependency_layer, readiness, work_item_actions};
 
     fn item(status: workboard_core::WorkItemStatus, suffix: &str) -> workboard_core::WorkItem {
         workboard_core::WorkItem {
@@ -619,5 +640,46 @@ mod tests {
             .expect("layer"),
             2
         );
+    }
+
+    #[test]
+    fn every_work_item_state_projects_ordered_next_actions() {
+        for status in [
+            workboard_core::WorkItemStatus::Backlog,
+            workboard_core::WorkItemStatus::Ready,
+            workboard_core::WorkItemStatus::InProgress,
+            workboard_core::WorkItemStatus::Blocked,
+            workboard_core::WorkItemStatus::Review,
+            workboard_core::WorkItemStatus::Done,
+            workboard_core::WorkItemStatus::Cancelled,
+        ] {
+            let item = item(status, "actions");
+            let readiness = readiness(&item, std::slice::from_ref(&item), &[], &Default::default())
+                .expect("readiness");
+            let actions = work_item_actions(&item, &readiness, &[]);
+            assert!(!actions.actions.is_empty());
+            assert!(matches!(
+                actions.actions[0].kind,
+                AvailableActionKind::Start | AvailableActionKind::StartAnother
+            ));
+            match status {
+                workboard_core::WorkItemStatus::InProgress
+                | workboard_core::WorkItemStatus::Blocked => assert_eq!(
+                    actions.actions.last().map(|action| action.kind),
+                    Some(AvailableActionKind::Checkpoint)
+                ),
+                workboard_core::WorkItemStatus::Review => assert_eq!(
+                    actions.actions.last().map(|action| action.kind),
+                    Some(AvailableActionKind::Integrate)
+                ),
+                workboard_core::WorkItemStatus::Done
+                | workboard_core::WorkItemStatus::Cancelled => assert_eq!(
+                    actions.actions.last().map(|action| action.kind),
+                    Some(AvailableActionKind::Evidence)
+                ),
+                workboard_core::WorkItemStatus::Backlog | workboard_core::WorkItemStatus::Ready => {
+                }
+            }
+        }
     }
 }

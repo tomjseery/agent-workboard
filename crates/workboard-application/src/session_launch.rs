@@ -426,6 +426,64 @@ impl<'a> SessionLaunchService<'a> {
         })
     }
 
+    pub fn current_binding(
+        &self,
+        session_id: ConversationId,
+    ) -> Result<ConfirmedSessionBinding, AppError> {
+        self.store.read(|connection| {
+            let row = connection
+                .query_row(
+                    "SELECT managed.launch_intent_id, association.workspace_id,
+                            association.epic_id, association.feature_id,
+                            association.work_item_id, managed.role, session.provider,
+                            session.native_id, managed.checkout_id,
+                            managed.binding_generation, membership.id
+                     FROM native_sessions session
+                     JOIN native_session_associations association
+                       ON association.session_id = session.id
+                      AND association.associated_until IS NULL
+                     JOIN managed_sessions managed ON managed.id = (
+                        SELECT candidate.id FROM managed_sessions candidate
+                        WHERE candidate.session_id = session.id
+                          AND candidate.managed_until IS NULL
+                        ORDER BY candidate.managed_from DESC, candidate.id DESC LIMIT 1
+                     )
+                     LEFT JOIN restore_memberships membership
+                       ON membership.session_id = session.id AND membership.active_until IS NULL
+                     WHERE session.id = ?1",
+                    [session_id.to_string()],
+                    |row| {
+                        Ok((
+                            row.get::<_, Option<String>>(0)?,
+                            row.get::<_, Option<String>>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                            row.get::<_, Option<String>>(3)?,
+                            row.get::<_, Option<String>>(4)?,
+                            row.get::<_, String>(5)?,
+                            row.get::<_, String>(6)?,
+                            row.get::<_, String>(7)?,
+                            row.get::<_, String>(8)?,
+                            row.get::<_, u32>(9)?,
+                            row.get::<_, Option<String>>(10)?,
+                        ))
+                    },
+                )
+                .optional()?
+                .ok_or(AppError::ConversationNotFound)?;
+            Ok(ConfirmedSessionBinding {
+                intent_id: row.0.as_deref().map(parse_id).transpose()?,
+                owner: parse_owner(row.1, row.2, row.3, row.4)?,
+                role: parse_role(&row.5)?,
+                tool: parse_tool(&row.6)?,
+                native_id: row.7,
+                session_id,
+                checkout_id: parse_id(&row.8)?,
+                binding_generation: row.9,
+                restore_membership_id: row.10.as_deref().map(parse_id).transpose()?,
+            })
+        })
+    }
+
     pub fn bind_hook(
         &mut self,
         mutation: &HookIngestionMutation,
@@ -2288,6 +2346,12 @@ mod tests {
                 .binding_for_intent(prepared.intent_id)
                 .expect("read confirmed binding"),
             Some(binding.clone())
+        );
+        assert_eq!(
+            SessionLaunchService::new(&mut fixture.store)
+                .current_binding(binding.session_id)
+                .expect("read current binding"),
+            binding
         );
         let counts = fixture
             .store
