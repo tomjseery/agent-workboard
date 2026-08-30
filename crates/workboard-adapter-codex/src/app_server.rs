@@ -98,6 +98,22 @@ pub struct CodexAppServerStatusObservation {
     pub owned_by_connection: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodexFollowUpRequest {
+    pub native_id: String,
+    pub working_directory: PathBuf,
+    pub capability_bundle_root: PathBuf,
+    pub workflow_token: String,
+    pub text: String,
+    pub client_message_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodexFollowUpReceipt {
+    pub turn_id: String,
+    pub steered: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct CodexAppServerClient {
     executable: PathBuf,
@@ -130,7 +146,7 @@ impl CodexAppServerClient {
         let attempts = self.limits.restart_attempts.saturating_add(1);
         let mut last_failure = None;
         for attempt in 0..attempts {
-            match Connection::start(&self.executable, &self.arguments, self.limits)
+            match Connection::start(&self.executable, &self.arguments, self.limits, None)
                 .and_then(Connection::discover)
             {
                 Ok(mut snapshot) => {
@@ -147,6 +163,44 @@ impl CodexAppServerClient {
             )
         }))
     }
+
+    pub fn send_follow_up(
+        &self,
+        request: &CodexFollowUpRequest,
+    ) -> Result<CodexFollowUpReceipt, CodexAppServerFailure> {
+        let scope = ConnectionScope {
+            working_directory: &request.working_directory,
+            capability_bundle_root: &request.capability_bundle_root,
+            workflow_token: &request.workflow_token,
+        };
+        let mut connection =
+            Connection::start(&self.executable, &self.arguments, self.limits, Some(scope))?;
+        let result = connection.send_follow_up_inner(request);
+        let stderr = connection.shutdown();
+        finish_scoped(result, stderr)
+    }
+
+    pub fn reconcile_follow_up(
+        &self,
+        request: &CodexFollowUpRequest,
+    ) -> Result<Option<CodexFollowUpReceipt>, CodexAppServerFailure> {
+        let scope = ConnectionScope {
+            working_directory: &request.working_directory,
+            capability_bundle_root: &request.capability_bundle_root,
+            workflow_token: &request.workflow_token,
+        };
+        let mut connection =
+            Connection::start(&self.executable, &self.arguments, self.limits, Some(scope))?;
+        let result = connection.reconcile_follow_up_inner(request);
+        let stderr = connection.shutdown();
+        finish_scoped(result, stderr)
+    }
+}
+
+struct ConnectionScope<'a> {
+    working_directory: &'a Path,
+    capability_bundle_root: &'a Path,
+    workflow_token: &'a str,
 }
 
 struct Connection {
@@ -167,9 +221,20 @@ impl Connection {
         executable: &Path,
         arguments: &[OsString],
         limits: CodexAppServerLimits,
+        scope: Option<ConnectionScope<'_>>,
     ) -> Result<Self, CodexAppServerFailure> {
-        let mut child = Command::new(executable)
-            .args(arguments)
+        let mut command = Command::new(executable);
+        command.args(arguments);
+        if let Some(scope) = scope {
+            command
+                .current_dir(scope.working_directory)
+                .env("CODEX_HOME", scope.capability_bundle_root)
+                .env(
+                    workboard_core::WORKBOARD_WORKFLOW_TOKEN_ENV,
+                    scope.workflow_token,
+                );
+        }
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -243,18 +308,7 @@ impl Connection {
     }
 
     fn discover_inner(&mut self) -> Result<CodexAppServerSnapshot, CodexAppServerFailure> {
-        let initialized: InitializeResponse = self.request(
-            "initialize",
-            json!({
-                "clientInfo": {
-                    "name": "agent_workboard",
-                    "title": workboard_core::PRODUCT_NAME,
-                    "version": env!("CARGO_PKG_VERSION")
-                },
-                "capabilities": {}
-            }),
-        )?;
-        self.notify("initialized")?;
+        let initialized = self.initialize()?;
         let mut cursor = None;
         let mut cursors = HashSet::new();
         let mut identities = HashSet::new();
@@ -337,6 +391,144 @@ impl Connection {
             CodexAppServerFailureKind::PageLimitExceeded,
             "Codex app-server thread pagination exceeded its page limit",
         ))
+    }
+
+    fn initialize(&mut self) -> Result<InitializeResponse, CodexAppServerFailure> {
+        let initialized = self.request(
+            "initialize",
+            json!({
+                "clientInfo": {
+                    "name": "agent_workboard",
+                    "title": workboard_core::PRODUCT_NAME,
+                    "version": env!("CARGO_PKG_VERSION")
+                },
+                "capabilities": {}
+            }),
+        )?;
+        self.notify("initialized")?;
+        Ok(initialized)
+    }
+
+    fn send_follow_up_inner(
+        &mut self,
+        request: &CodexFollowUpRequest,
+    ) -> Result<CodexFollowUpReceipt, CodexAppServerFailure> {
+        self.initialize()?;
+        let resumed: FollowUpThreadResponse = self.request(
+            "thread/resume",
+            json!({
+                "threadId": request.native_id,
+                "cwd": request.working_directory,
+                "initialTurnsPage": {
+                    "limit": 20,
+                    "sortDirection": "desc",
+                    "itemsView": "full"
+                }
+            }),
+        )?;
+        if resumed.thread.id != request.native_id {
+            return Err(failure(
+                CodexAppServerFailureKind::Protocol,
+                "Codex app-server resumed a different thread",
+            ));
+        }
+        let input = json!([{ "type": "text", "text": request.text }]);
+        match resumed.thread.status {
+            WireStatus::Active => {
+                if resumed.thread.can_accept_direct_input != Some(true) {
+                    return Err(failure(
+                        CodexAppServerFailureKind::Protocol,
+                        "the active Codex thread cannot accept direct input",
+                    ));
+                }
+                let turn_id = resumed
+                    .thread
+                    .turns
+                    .iter()
+                    .find(|turn| turn.status == "inProgress")
+                    .map(|turn| turn.id.as_str())
+                    .or_else(|| {
+                        resumed.initial_turns_page.as_ref().and_then(|page| {
+                            page.data
+                                .iter()
+                                .find(|turn| turn.status == "inProgress")
+                                .map(|turn| turn.id.as_str())
+                        })
+                    })
+                    .ok_or_else(|| {
+                        failure(
+                            CodexAppServerFailureKind::Protocol,
+                            "the active Codex thread had no active turn",
+                        )
+                    })?;
+                let response: TurnSteerResponse = self.request(
+                    "turn/steer",
+                    json!({
+                        "threadId": request.native_id,
+                        "expectedTurnId": turn_id,
+                        "input": input,
+                        "clientUserMessageId": request.client_message_id
+                    }),
+                )?;
+                Ok(CodexFollowUpReceipt {
+                    turn_id: bounded_required("steered turn identity", response.turn_id, 256)?,
+                    steered: true,
+                })
+            }
+            WireStatus::Idle | WireStatus::NotLoaded => {
+                let response: TurnStartResponse = self.request(
+                    "turn/start",
+                    json!({
+                        "threadId": request.native_id,
+                        "input": input,
+                        "clientUserMessageId": request.client_message_id,
+                        "cwd": request.working_directory
+                    }),
+                )?;
+                Ok(CodexFollowUpReceipt {
+                    turn_id: bounded_required("started turn identity", response.turn.id, 256)?,
+                    steered: false,
+                })
+            }
+            WireStatus::SystemError => Err(failure(
+                CodexAppServerFailureKind::Protocol,
+                "the Codex thread is in a system-error state",
+            )),
+        }
+    }
+
+    fn reconcile_follow_up_inner(
+        &mut self,
+        request: &CodexFollowUpRequest,
+    ) -> Result<Option<CodexFollowUpReceipt>, CodexAppServerFailure> {
+        self.initialize()?;
+        let response: FollowUpThreadResponse = self.request(
+            "thread/resume",
+            json!({
+                "threadId": request.native_id,
+                "initialTurnsPage": {
+                    "limit": 100,
+                    "sortDirection": "desc",
+                    "itemsView": "full"
+                }
+            }),
+        )?;
+        let turns = response
+            .initial_turns_page
+            .map(|page| page.data)
+            .unwrap_or(response.thread.turns);
+        Ok(turns.into_iter().find_map(|turn| {
+            turn.items
+                .iter()
+                .any(|item| {
+                    item.kind == "userMessage"
+                        && item.client_id.as_deref() == Some(request.client_message_id.as_str())
+                })
+                .then_some(CodexFollowUpReceipt {
+                    turn_id: turn.id,
+                    steered: false,
+                })
+        }))
     }
 
     fn request<T: for<'de> Deserialize<'de>>(
@@ -581,6 +773,55 @@ struct WireThread {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FollowUpThreadResponse {
+    thread: FollowUpThread,
+    initial_turns_page: Option<FollowUpTurnsPage>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FollowUpThread {
+    id: String,
+    status: WireStatus,
+    can_accept_direct_input: Option<bool>,
+    #[serde(default)]
+    turns: Vec<FollowUpTurn>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FollowUpTurnsPage {
+    data: Vec<FollowUpTurn>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FollowUpTurn {
+    id: String,
+    status: String,
+    #[serde(default)]
+    items: Vec<FollowUpItem>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FollowUpItem {
+    #[serde(rename = "type")]
+    kind: String,
+    client_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TurnSteerResponse {
+    turn_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct TurnStartResponse {
+    turn: FollowUpTurn,
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 enum WireStatus {
     NotLoaded,
@@ -614,6 +855,29 @@ struct ThreadStatusChanged {
 struct BoundedStderr {
     bytes: Vec<u8>,
     oversized: bool,
+}
+
+fn finish_scoped<T>(
+    result: Result<T, CodexAppServerFailure>,
+    stderr: Result<BoundedStderr, CodexAppServerFailure>,
+) -> Result<T, CodexAppServerFailure> {
+    match (result, stderr) {
+        (Ok(_), Ok(stderr)) if stderr.oversized => Err(failure(
+            CodexAppServerFailureKind::StderrTooLarge,
+            "Codex app-server stderr exceeded its byte limit",
+        )),
+        (Ok(value), Ok(_)) => Ok(value),
+        (Ok(_), Err(error)) => Err(error),
+        (Err(mut error), Ok(stderr)) => {
+            let detail = clean_stderr(&stderr.bytes);
+            if !detail.is_empty() {
+                error.message.push_str(": ");
+                error.message.push_str(&detail);
+            }
+            Err(error)
+        }
+        (Err(error), Err(_)) => Err(error),
+    }
 }
 
 fn read_bounded_stderr(mut input: impl Read, limit: usize) -> std::io::Result<BoundedStderr> {
@@ -818,12 +1082,73 @@ fn failure(kind: CodexAppServerFailureKind, message: impl Into<String>) -> Codex
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    use std::fs;
+
     use serde_json::json;
+    #[cfg(windows)]
+    use tempfile::TempDir;
     use workboard_core::LiveStatus;
 
     use super::{
         CodexAppServerFailureKind, ConversationKind, WireThread, map_thread, read_bounded_line,
     };
+
+    #[cfg(windows)]
+    #[test]
+    fn sends_and_reconciles_a_correlated_follow_up_through_app_server() {
+        let directory = TempDir::new().expect("temporary directory");
+        let script = directory.path().join("app-server.ps1");
+        fs::write(
+            &script,
+            r#"while (($line = [Console]::In.ReadLine()) -ne $null) {
+    $request = $line | ConvertFrom-Json
+    if ($request.method -eq 'initialize') {
+        @{ id = $request.id; result = @{ userAgent = 'fake'; serverInfo = @{ version = 'fake' } } } | ConvertTo-Json -Compress -Depth 20
+    } elseif ($request.method -eq 'thread/resume') {
+        @{ id = $request.id; result = @{ thread = @{ id = 'thread-one'; status = @{ type = 'idle' }; canAcceptDirectInput = $true; turns = @() }; initialTurnsPage = @{ data = @(@{ id = 'turn-existing'; status = 'completed'; items = @(@{ type = 'userMessage'; clientId = 'follow-up-key' }) }) } } } | ConvertTo-Json -Compress -Depth 20
+    } elseif ($request.method -eq 'turn/start') {
+        @{ id = $request.id; result = @{ turn = @{ id = 'turn-new'; status = 'inProgress'; items = @() } } } | ConvertTo-Json -Compress -Depth 20
+    }
+    [Console]::Out.Flush()
+}"#,
+        )
+        .expect("fake app-server script");
+        fs::create_dir(directory.path().join("bundle")).expect("bundle directory");
+        let limits = super::CodexAppServerLimits {
+            request_timeout: std::time::Duration::from_secs(5),
+            ..Default::default()
+        };
+        let client = super::CodexAppServerClient::with_arguments(
+            "powershell.exe",
+            [
+                std::ffi::OsString::from("-NoProfile"),
+                std::ffi::OsString::from("-ExecutionPolicy"),
+                std::ffi::OsString::from("Bypass"),
+                std::ffi::OsString::from("-File"),
+                script.as_os_str().to_owned(),
+            ],
+            limits,
+        );
+        let request = super::CodexFollowUpRequest {
+            native_id: "thread-one".to_owned(),
+            working_directory: std::env::current_dir().expect("current directory"),
+            capability_bundle_root: directory.path().join("bundle"),
+            workflow_token: "workflow-token".to_owned(),
+            text: "continue safely".to_owned(),
+            client_message_id: "follow-up-key".to_owned(),
+        };
+
+        let receipt = client.send_follow_up(&request).expect("send follow-up");
+        let reconciled = client
+            .reconcile_follow_up(&request)
+            .expect("reconcile follow-up")
+            .expect("reconciled receipt");
+
+        assert_eq!(receipt.turn_id, "turn-new");
+        assert!(!receipt.steered);
+        assert_eq!(reconciled.turn_id, "turn-existing");
+    }
 
     #[test]
     fn maps_the_supported_thread_subset_without_storage_paths() {

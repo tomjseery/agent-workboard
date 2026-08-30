@@ -16,6 +16,7 @@ use workboard_core::{
 
 use crate::AppError;
 use crate::checkout::CheckoutService;
+use crate::follow_up::FollowUpService;
 use crate::git::{GitCli, GitRepositoryDiscovery, GitWorktreeResolver};
 use crate::integration_service::IntegrationService;
 use crate::native_sources::NativeSourceService;
@@ -241,6 +242,10 @@ impl WorkboardApplication {
 
     pub fn workflow_operations(&mut self) -> WorkflowOperationService<'_> {
         WorkflowOperationService::new(&mut self.store)
+    }
+
+    pub fn follow_ups(&mut self) -> FollowUpService<'_> {
+        FollowUpService::new(&mut self.store)
     }
 
     pub fn assigned_hierarchy(
