@@ -6,7 +6,6 @@
 - Roadmap item: `agent-workflow-state-authority/frictionless-managed-work-item-launch-and-recovery`
 - Workboard Feature: `8c3d49f6-00da-4a4f-8470-88065964db72`
 - Delivery repositories: `agent-workboard`, with final dogfood against `agent-standards`
-- Progress: `plans/agent-workflow-state-authority/FRICTIONLESS_MANAGED_WORK_ITEM_LAUNCH_AND_RECOVERY_PROGRESS.md`
 
 The published Workboard Work items remain the durable execution records for these phases. This file is the
 human-readable planning authority for their combined design and acceptance contract.
@@ -195,6 +194,18 @@ After all upstream gates, dogfood the blocked Agent Standards Work item in its i
 final Start/Resume/Start another choice, bind exact cwd before first turn, prove scoped context and one default
 primary writer, send a follow-up, checkpoint through Workboard, and retain integration and rollback evidence.
 Only this accepted evidence may authorize the downstream Work item.
+
+## Current delivery state
+
+All nine implementation phases are present in the local committed candidate. It includes managed checkout
+reconciliation and isolation, scoped assigned context and per-session capability injection, exact lifecycle
+binding, launch profiles, ordered follow-ups, dependency-aware batch fan-out and integration, action
+projection, actionable start/continue TUI flows, unique short selectors, and real-provider smoke coverage.
+
+The merged candidate passes `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D
+warnings`, and `cargo test --workspace` (208 tests). Both explicit authenticated provider smokes passed.
+The remaining delivery gate is review and PR publication; final Agent Standards dogfood remains gated on a
+newly launched scoped-credential session rather than the legacy pre-feature session.
 
 ## Verification and acceptance
 

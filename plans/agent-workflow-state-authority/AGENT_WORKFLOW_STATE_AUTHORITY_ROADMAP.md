@@ -2,15 +2,14 @@
 
 This roadmap makes repository `_PLAN.md` files the single planning format for the Epic while retaining
 Workboard Features and Work items as durable execution, assignment, session, and checkpoint records. The
-plans below are translated from the published Workboard documents; implementation status remains in their
-companion progress ledgers and Workboard.
+plans below are translated from the published Workboard documents; each plan owns its own current state.
 
 ## Outcome
 
 Make Agent Workboard the runtime authority for managed Agent Standards workflows without creating a second
 planning language. Managed Claude and Codex sessions start in the correct isolated checkout, receive scoped
 context, bind and resume through Workboard identity, and persist execution state through typed operations.
-Repositories continue to use ordinary `_PLAN.md` and `_PROGRESS.md` files for human-readable planning.
+Repositories use ordinary `_PLAN.md` files for human-readable planning.
 
 ## Roadmap
 
