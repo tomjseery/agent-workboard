@@ -158,6 +158,24 @@ selects repository, generated mirrors are clean, and all canonical tests pass.
 
 Workboard item: `implement-three-state-provider-selection`.
 
+Status: implementation committed on 2026-08-30 in Agent Standards commit
+`a53f470` (`feat(workflow): select managed state authority`). The implementation is ready for the remaining
+complete-hook-suite delivery gate before Phase 4 begins.
+
+`select_state_provider` now returns an explicit selection: an absent token creates the repository provider;
+an empty token, unavailable typed operations, failed read, or any principal, role, owner, session, checkout,
+Git-head, branch, document, or schema mismatch returns `reconciliation-required` with no provider; and a
+valid authenticated assigned hierarchy creates `WorkboardStateProvider`. The managed provider performs only
+typed `hierarchy_read` and `work_checkpoint` operations. It maps Epic, Feature, Work-item, document, and
+exact checkout identities into the managed state shape, represents unavailable decisions and findings as
+empty collections, and does not resolve or write a repository plan, ledger, roadmap, or review.
+
+Focused offline provider-matrix tests, valid managed-state validation, exact checkout binding, Git-observed
+no-incidental-plan-mutation checkpointing, Workflow verification, and generated-copy parity are green. The
+Windows PowerShell foreground runner cannot retain the complete hook suite beyond its execution window in
+this environment and left orphaned Python processes; those were stopped. Re-run the complete PowerShell hook
+suite in a supported long-running runner before routing skills or starting Phase 4.
+
 Replace unconditional repository selection with an explicit managed/repository/reconciliation result.
 Implement `WorkboardStateProvider` over `discover`, `resolve-task`, `read-state`, `checkpoint-state`, and
 `bind-worktree`. Read only the authenticated assigned hierarchy, map it to managed state, bind the exact
@@ -222,9 +240,9 @@ and generated Claude/Codex skills, hooks, workflows, and manifests match their s
 
 ## Current delivery state
 
-Phases 1 and 2 are complete and separately committed. The immutable recovery evidence is recorded above, and
-Workflow v2 now expresses both providers without changing runtime selection. Phase 3,
-`implement-three-state-provider-selection`, is the next delivery gate. Before managed checkpoint behavior can
-be considered complete, that phase must retain the unresolved upstream ownership gap for a structured atomic
-replacement of the current opaque `work_checkpoint` payload; it must not fill the gap with repository state or
-a second planning record.
+Phases 1 and 2 are complete and separately committed. Phase 3 implementation is committed and the remaining
+delivery gate is the complete PowerShell hook suite in a supported long-running runner. The immutable recovery
+evidence is recorded above, and Workflow v2 now selects deterministic repository, Workboard, or
+reconciliation-required authority. The unresolved upstream ownership gap for a structured atomic replacement
+of the current opaque `work_checkpoint` payload remains explicit; managed checkpointing must not fill it with
+repository state or a second planning record.
