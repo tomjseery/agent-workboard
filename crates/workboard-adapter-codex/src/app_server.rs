@@ -248,7 +248,7 @@ impl Connection {
             json!({
                 "clientInfo": {
                     "name": "agent_workboard",
-                    "title": "Agent Workboard",
+                    "title": workboard_core::PRODUCT_NAME,
                     "version": env!("CARGO_PKG_VERSION")
                 },
                 "capabilities": {}

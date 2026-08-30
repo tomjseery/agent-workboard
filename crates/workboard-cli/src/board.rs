@@ -14,7 +14,7 @@ use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 use ratatui::{Frame, Terminal};
 use workboard_application::AppError;
 use workboard_core::{
-    CheckoutAvailability, HierarchyOwner, WorkItem, WorkItemStatus, WorkflowState,
+    CheckoutAvailability, HierarchyOwner, PRODUCT_NAME, WorkItem, WorkItemStatus, WorkflowState,
     WorkspaceSnapshot,
 };
 
@@ -231,7 +231,7 @@ pub fn checklist(
 
 pub fn plain(snapshot: &WorkspaceSnapshot) -> String {
     let mut output = format!(
-        "Agent Workboard: {}\nRepositories: {}\nEpics: {}\nFeatures: {}\nWork items: {}\n",
+        "{PRODUCT_NAME}: {}\nRepositories: {}\nEpics: {}\nFeatures: {}\nWork items: {}\n",
         snapshot.workspace.title,
         snapshot.repositories.len(),
         snapshot.epics.len(),
@@ -427,7 +427,7 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, state: &BoardState) {
         .join(", ");
     let title = Line::from(vec![
         styled(
-            " Agent Workboard ",
+            format!(" {PRODUCT_NAME} "),
             state.no_color,
             Color::Cyan,
             Modifier::BOLD,

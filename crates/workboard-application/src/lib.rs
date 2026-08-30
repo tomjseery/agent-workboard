@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod caller;
+pub mod capability_bundle;
 pub mod checkout;
 pub mod concertable_import;
 mod error;
@@ -19,6 +20,7 @@ pub mod storage;
 mod workflow_contract;
 pub mod workflow_operations;
 pub mod workspace;
+pub mod workspace_planning;
 
 pub use error::AppError;
 

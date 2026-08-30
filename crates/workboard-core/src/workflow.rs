@@ -153,6 +153,7 @@ pub enum IntentStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ManagedSessionRole {
+    WorkspacePlanning,
     EpicNavigation,
     FeaturePlanning,
     WorkItemExecution,
@@ -202,6 +203,11 @@ mod tests {
             serde_json::to_string(&ManagedSessionRole::WorkItemExecution)
                 .expect("session role should serialise"),
             "\"work_item_execution\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ManagedSessionRole::WorkspacePlanning)
+                .expect("session role should serialise"),
+            "\"workspace_planning\""
         );
     }
 }
