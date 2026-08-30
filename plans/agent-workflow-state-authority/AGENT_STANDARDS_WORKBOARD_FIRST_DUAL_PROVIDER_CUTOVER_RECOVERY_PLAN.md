@@ -158,9 +158,8 @@ selects repository, generated mirrors are clean, and all canonical tests pass.
 
 Workboard item: `implement-three-state-provider-selection`.
 
-Status: implementation committed on 2026-08-30 in Agent Standards commit
-`a53f470` (`feat(workflow): select managed state authority`). The implementation is ready for the remaining
-complete-hook-suite delivery gate before Phase 4 begins.
+Status: complete on 2026-08-30 in Agent Standards commit `a53f470`
+(`feat(workflow): select managed state authority`).
 
 `select_state_provider` now returns an explicit selection: an absent token creates the repository provider;
 an empty token, unavailable typed operations, failed read, or any principal, role, owner, session, checkout,
@@ -172,9 +171,11 @@ empty collections, and does not resolve or write a repository plan, ledger, road
 
 Focused offline provider-matrix tests, valid managed-state validation, exact checkout binding, Git-observed
 no-incidental-plan-mutation checkpointing, Workflow verification, and generated-copy parity are green. The
-Windows PowerShell foreground runner cannot retain the complete hook suite beyond its execution window in
-this environment and left orphaned Python processes; those were stopped. Re-run the complete PowerShell hook
-suite in a supported long-running runner before routing skills or starting Phase 4.
+complete hook suite was then run from Windows PowerShell in a persistent runner at `a53f470` and reported 429
+tests passing in 654.287 seconds with the one expected POSIX-only skip. No Phase 3 regression was found and no
+follow-up Agent Standards change was required. Workflow verification still reports contract v2, two
+providers, ten examples, and five schemas; the generated-copy check still reports 302 files current,
+including 73 skills and 29 docs. The Agent Standards worktree remains clean at the implementation commit.
 
 Replace unconditional repository selection with an explicit managed/repository/reconciliation result.
 Implement `WorkboardStateProvider` over `discover`, `resolve-task`, `read-state`, `checkpoint-state`, and
@@ -240,9 +241,8 @@ and generated Claude/Codex skills, hooks, workflows, and manifests match their s
 
 ## Current delivery state
 
-Phases 1 and 2 are complete and separately committed. Phase 3 implementation is committed and the remaining
-delivery gate is the complete PowerShell hook suite in a supported long-running runner. The immutable recovery
-evidence is recorded above, and Workflow v2 now selects deterministic repository, Workboard, or
-reconciliation-required authority. The unresolved upstream ownership gap for a structured atomic replacement
-of the current opaque `work_checkpoint` payload remains explicit; managed checkpointing must not fill it with
-repository state or a second planning record.
+Phases 1, 2, and 3 are complete and separately committed. The immutable recovery evidence is recorded above,
+and Workflow v2 now selects deterministic repository, Workboard, or reconciliation-required authority. The
+unresolved upstream ownership gap for a structured atomic replacement of the current opaque `work_checkpoint`
+payload remains explicit; managed checkpointing must not fill it with repository state or a second planning
+record. Phase 4 has not started.
