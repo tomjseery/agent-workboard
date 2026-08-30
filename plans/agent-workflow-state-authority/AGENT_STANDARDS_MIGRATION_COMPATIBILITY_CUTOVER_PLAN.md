@@ -6,7 +6,6 @@
 - Roadmap item: `agent-workflow-state-authority/agent-standards-migration-compatibility-cutover`
 - Workboard Feature: `9d30120b-bd63-428f-8e74-5fbb08115d50`
 - Delivery repositories: `agent-standards`, `concertable`, and an isolated `vel` acceptance checkout
-- Progress: `plans/agent-workflow-state-authority/AGENT_STANDARDS_MIGRATION_COMPATIBILITY_CUTOVER_PROGRESS.md`
 
 The published Workboard Work items remain the durable execution records for these phases. This file is the
 human-readable planning authority for their combined design and acceptance contract.
@@ -114,3 +113,9 @@ Both repositories must pass the full managed lifecycle and failure matrix for Cl
 be durably accepted, and separately approved Concertable cleanup must remove migrated machinery from active
 routing without deleting or rewriting rollback evidence. Agent Standards unmanaged compatibility remains
 available until every legacy plan is finished or migrated.
+
+## Current delivery state
+
+Planning is published and its five Work items are ready. It begins only after the Workboard managed-lifecycle
+and Agent Standards dual-provider foundations are accepted. Concertable cleanup remains separately gated on
+Tommy's explicit durable approval after parity evidence is accepted.

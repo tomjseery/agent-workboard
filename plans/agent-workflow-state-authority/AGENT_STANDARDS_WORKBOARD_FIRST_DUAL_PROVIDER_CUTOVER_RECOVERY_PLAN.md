@@ -6,7 +6,6 @@
 - Roadmap item: `agent-workflow-state-authority/agent-standards-workboard-first-dual-provider-cutover-recovery`
 - Workboard Feature: `ab593e4c-b12f-4e73-be03-4708992cadbd`
 - Delivery repository: `agent-standards`
-- Progress: `plans/agent-workflow-state-authority/AGENT_STANDARDS_WORKBOARD_FIRST_DUAL_PROVIDER_CUTOVER_RECOVERY_PROGRESS.md`
 
 The published Workboard Work items remain the durable execution records for these phases. This file is the
 human-readable planning authority for their combined design and acceptance contract.
@@ -16,9 +15,8 @@ human-readable planning authority for their combined design and acceptance contr
 Make Agent Standards select workflow-state authority deterministically across managed Agent Workboard,
 unmanaged repository, and reconciliation-required states. Planning, execution, checkpoint, hook, worktree,
 generator, and mirror surfaces must behave correctly on both managed and unmanaged routes under Claude and
-Codex. Managed runtime state travels through typed Workboard operations; repository `_PLAN.md` and
-`_PROGRESS.md` files remain the common planning format and are not mutated as an incidental managed
-checkpoint.
+Codex. Managed runtime state travels through typed Workboard operations; repository planning remains the
+common format and is not mutated as an incidental managed checkpoint.
 
 This is recovery work because the two predecessor Features produced no durable implementation plan, retained
 stalled workflow records, and recorded checkouts whose Workboard availability disagreed with Git. Recovery
@@ -37,8 +35,8 @@ another Feature.
 - Workflow v2 evolves in place. It admits `repository` and `workboard`, makes repository artifacts conditional
   on the repository provider, and gives managed state Workboard Epic, Feature, Work-item, document, and
   checkout identities without repository plan/ledger paths.
-- Managed checkpoints go only through `work_checkpoint`. Plan and progress files express the plan and
-  delivery ledger, but runtime checkpointing does not dual-write them.
+- Managed checkpoints go only through `work_checkpoint`. Runtime checkpointing does not create a second
+  planning record.
 
 ## Baseline evidence
 
@@ -147,3 +145,9 @@ The plan completes when selection is deterministic and fail-closed for both prov
 validates both providers, managed runtime operations cannot incidentally mutate repository planning files,
 the unmanaged route is unchanged for repositories without a token, all canonical PowerShell tests pass,
 and generated Claude/Codex skills, hooks, workflows, and manifests match their sources.
+
+## Current delivery state
+
+Planning is published and its six Work items are ready. No implementation phase is recorded complete. Start
+with the immutable recovery baseline, then deliver the contract and provider selection before routing skills,
+cutting over hooks and generated artifacts, and closing with the offline recovery matrix.
