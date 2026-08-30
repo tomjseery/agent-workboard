@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use rusqlite::{OptionalExtension, Transaction, params};
@@ -483,6 +483,25 @@ impl<'a> PlanningWorkflowService<'a> {
                         "INSERT INTO work_item_repositories (work_item_id, repository_id)
                          VALUES (?1, ?2)",
                         params![item.work_item_id.to_string(), repository_id.to_string()],
+                    )?;
+                }
+            }
+            for item in &publication.proposal.work_items {
+                for dependency in &item.proposal.dependencies {
+                    let dependency_id = publication
+                        .proposal
+                        .work_items
+                        .iter()
+                        .find(|candidate| candidate.proposal.slug == *dependency)
+                        .map(|candidate| candidate.work_item_id)
+                        .ok_or_else(|| {
+                            AppError::Domain("Work-item dependency is missing".to_owned())
+                        })?;
+                    transaction.execute(
+                        "INSERT INTO work_item_dependencies (
+                             work_item_id, depends_on_work_item_id
+                         ) VALUES (?1, ?2)",
+                        params![item.work_item_id.to_string(), dependency_id.to_string()],
                     )?;
                 }
             }
@@ -1167,6 +1186,21 @@ fn validate_proposal(proposal: &FeatureProposal) -> Result<(), AppError> {
             ));
         }
     }
+    let dependencies = proposal
+        .work_items
+        .iter()
+        .map(|item| (item.slug.clone(), item.dependencies.clone()))
+        .collect::<HashMap<_, _>>();
+    let mut visiting = HashSet::new();
+    let mut visited = HashSet::new();
+    if dependencies
+        .keys()
+        .any(|slug| !dependency_branch_is_acyclic(slug, &dependencies, &mut visiting, &mut visited))
+    {
+        return Err(AppError::PlanningDocumentInvalid(
+            "Work-item dependencies must form an acyclic graph".to_owned(),
+        ));
+    }
     if proposal
         .first_work_item_slug
         .as_ref()
@@ -1177,6 +1211,32 @@ fn validate_proposal(proposal: &FeatureProposal) -> Result<(), AppError> {
         ));
     }
     Ok(())
+}
+
+fn dependency_branch_is_acyclic(
+    slug: &Slug,
+    dependencies: &HashMap<Slug, Vec<Slug>>,
+    visiting: &mut HashSet<Slug>,
+    visited: &mut HashSet<Slug>,
+) -> bool {
+    if visited.contains(slug) {
+        return true;
+    }
+    if !visiting.insert(slug.clone()) {
+        return false;
+    }
+    let valid = dependencies
+        .get(slug)
+        .into_iter()
+        .flatten()
+        .all(|dependency| {
+            dependency_branch_is_acyclic(dependency, dependencies, visiting, visited)
+        });
+    visiting.remove(slug);
+    if valid {
+        visited.insert(slug.clone());
+    }
+    valid
 }
 
 fn validate_title(value: &str) -> Result<(), AppError> {
@@ -1263,7 +1323,9 @@ mod tests {
         WorkflowState,
     };
 
-    use super::{CreateFeaturePlanning, FeatureProposal, ProposedWorkItem};
+    use super::{
+        CreateFeaturePlanning, FeatureProposal, ProposedWorkItem, dependency_branch_is_acyclic,
+    };
     use crate::AppError;
     use crate::checkout::PrepareFeatureCheckout;
     use crate::hooks::HookIngestionMutation;
@@ -1285,6 +1347,22 @@ mod tests {
         terminal: PathBuf,
         native: PathBuf,
         at: OffsetDateTime,
+    }
+
+    #[test]
+    fn dependency_cycles_are_rejected_before_publication() {
+        let first = Slug::new("first").expect("first slug");
+        let second = Slug::new("second").expect("second slug");
+        let dependencies = std::collections::HashMap::from([
+            (first.clone(), vec![second.clone()]),
+            (second, vec![first.clone()]),
+        ]);
+        assert!(!dependency_branch_is_acyclic(
+            &first,
+            &dependencies,
+            &mut std::collections::HashSet::new(),
+            &mut std::collections::HashSet::new(),
+        ));
     }
 
     struct ActivePlanning {

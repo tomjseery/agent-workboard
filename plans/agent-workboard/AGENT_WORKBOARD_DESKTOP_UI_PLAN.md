@@ -328,7 +328,7 @@ Saved views are additive daemon-owned preferences. The default unsaved hierarchy
 
 ### 5. Deliver the large board, dependency readiness, and What needs me
 
-- Status: [ ]
+- Status: [x]
 - Slug: `deliver-large-board-dependencies-and-attention-view`
 - Dependencies: item 4
 - Delivery type: scalable read-only delivery UI

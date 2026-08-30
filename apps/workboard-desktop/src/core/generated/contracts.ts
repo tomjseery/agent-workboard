@@ -1,6 +1,26 @@
 export type AssociationId = string;
 
+export type AttentionEntryProjection = { owner: EntityRef, title: string, subtitle: string, repositories: Array<RepositoryReference>, card: BoardCardProjection | null, reasons: Array<AttentionReason>, revision: number, availableActions: Array<AvailableAction>, position: number, totalCount: number, };
+
+export type AttentionPage = { entries: Array<AttentionEntryProjection>, nextCursor: string | null, totalCount: number, revision: number, };
+
+export type AttentionQuery = { cursor: string | null, limit: number, repositoryIds: Array<RepositoryId>, reasonCodes: Array<AttentionReasonCode>, };
+
+export type AttentionReason = { code: AttentionReasonCode, rank: number, message: string, };
+
+export type AttentionReasonCode = "approval_required" | "revision_requested" | "reconciliation_required" | "blocked" | "checkpoint_due" | "interrupted_operation" | "recovery_conflict" | "stale_or_unknown_session";
+
 export type AvailableAction = { code: CommandCode, available: boolean, unavailableReason: UnavailableReason | null, expectedRevision: number | null, };
+
+export type BlockedByEvidence = { workItem: WorkItemReference, status: WorkItemStatus, };
+
+export type BoardCardProjection = { workItem: WorkItemReference, feature: FeatureReference, status: WorkItemStatus, laneKey: string, lanePosition: number, laneCount: number, dependencyReadiness: DependencyReadiness, blockedBy: Array<BlockedByEvidence>, parallelReadiness: ParallelReadiness, repositories: Array<RepositoryReference>, sessionSummary: SessionSummary, attentionReasons: Array<AttentionReason>, revision: number, availableActions: Array<AvailableAction>, };
+
+export type BoardLaneProjection = { key: string, title: string, position: number, totalCount: number, };
+
+export type BoardPage = { lanes: Array<BoardLaneProjection>, cards: Array<BoardCardProjection>, nextCursor: string | null, totalCount: number, revision: number, };
+
+export type BoardQuery = { cursor: string | null, limit: number, query: string | null, repositoryIds: Array<RepositoryId>, statuses: Array<WorkItemStatus>, laneKeys: Array<string>, sort: BoardViewSort, };
 
 export type BoardViewDefinition = { id: BoardViewId, workspaceId: WorkspaceId, title: string, filters: BoardViewFilters, grouping: BoardViewGrouping, sort: BoardViewSort, density: BoardViewDensity, revision: number, };
 
@@ -36,6 +56,8 @@ export type CommandOperation = { "type": "save_board_view", "value": { definitio
 
 export type DaemonInstanceId = string;
 
+export type DependencyReadiness = "ready" | "waiting" | "blocked" | "complete";
+
 export type Diagnostic = { code: string, severity: ErrorSeverity, message: string, owner: EntityRef | null, };
 
 export type DocumentId = string;
@@ -58,7 +80,7 @@ export type EventId = string;
 
 export type EventKind = "projection_changed" | "board_view_saved" | "native_sessions_refreshed" | "partial_outcome_recorded";
 
-export type EventPayload = { "type": "projection_changed", "value": { entity: EntityRef, } } | { "type": "board_view_saved", "value": { view: BoardViewDefinition, } } | { "type": "native_sessions_refreshed", "value": { sessionCount: number, } } | { "type": "partial_outcome", "value": { outcome: PartialOutcome, } };
+export type EventPayload = { "type": "projection_changed", "value": { entity: EntityRef, } } | { "type": "board_view_saved", "value": { view: BoardViewDefinition, } } | { "type": "native_sessions_refreshed", "value": { sessionCount: number, } } | { "type": "partial_outcome", "value": { outcome: PartialOutcome, } } | { "type": "board_card_changed", "value": { card: BoardCardProjection, } };
 
 export type FeatureId = string;
 
@@ -90,15 +112,17 @@ export type Operation = { "type": "handshake", "value": HandshakeRequest } | { "
 
 export type OwnerProjection = { "kind": "epic", "id": EpicId } | { "kind": "feature", "id": FeatureId } | { "kind": "work_item", "id": WorkItemId };
 
+export type ParallelReadiness = { groupKey: string, readyCount: number, waitingCount: number, };
+
 export type PartialOutcome = { owner: EntityRef | null, code: string, succeeded: boolean, message: string, reconciliationRequired: boolean, evidence: Array<Diagnostic>, };
 
 export type ProtocolError = { code: string, message: string, severity: ErrorSeverity, retryable: boolean, validationFields: Array<ValidationField>, staleRevision: number | null, currentRevision: number | null, reconciliationOwner: EntityRef | null, correlationId: RequestId | null, resync: ResyncRequirement | null, };
 
 export type Provider = "claude" | "codex";
 
-export type ReadQuery = { "type": "workspace_summary" } | { "type": "hierarchy_children", "value": { parent: HierarchyRef, } } | { "type": "workspace_hierarchy" } | { "type": "board_views" } | { "type": "board_view", "value": { viewId: BoardViewId, } } | { "type": "board_snapshot" };
+export type ReadQuery = { "type": "workspace_summary" } | { "type": "hierarchy_children", "value": { parent: HierarchyRef, } } | { "type": "workspace_hierarchy" } | { "type": "board_views" } | { "type": "board_view", "value": { viewId: BoardViewId, } } | { "type": "board", "value": { query: BoardQuery, } } | { "type": "attention", "value": { query: AttentionQuery, } } | { "type": "board_snapshot" };
 
-export type ReadQueryCode = "workspace_summary" | "hierarchy_children" | "workspace_hierarchy" | "board_views" | "board_view" | "board_snapshot";
+export type ReadQueryCode = "workspace_summary" | "hierarchy_children" | "workspace_hierarchy" | "board_views" | "board_view" | "board" | "attention" | "board_snapshot";
 
 export type RepositoryId = string;
 
@@ -112,7 +136,7 @@ export type RequestId = string;
 
 export type ResponseEnvelope = { protocolVersion: number, requestId: RequestId, correlationId: RequestId, workspaceId: WorkspaceId | null, authoritativeRevision: number | null, serverTimestamp: string, result: ResponseResult | null, error: ProtocolError | null, diagnostics: Array<Diagnostic>, availableActions: Array<AvailableAction>, partialOutcomes: Array<PartialOutcome>, };
 
-export type ResponseResult = { "type": "handshake", "value": HandshakeResponse } | { "type": "workspace_summary", "value": WorkspaceSummary } | { "type": "hierarchy_children", "value": HierarchyChildren } | { "type": "workspace_hierarchy", "value": WorkspaceHierarchy } | { "type": "board_views", "value": Array<BoardViewDefinition> } | { "type": "board_view", "value": BoardViewDefinition } | { "type": "board_snapshot", "value": unknown } | { "type": "subscription_accepted", "value": { cursor: EventCursor, } } | { "type": "command_accepted", "value": { code: CommandCode, } };
+export type ResponseResult = { "type": "handshake", "value": HandshakeResponse } | { "type": "workspace_summary", "value": WorkspaceSummary } | { "type": "hierarchy_children", "value": HierarchyChildren } | { "type": "workspace_hierarchy", "value": WorkspaceHierarchy } | { "type": "board_views", "value": Array<BoardViewDefinition> } | { "type": "board_view", "value": BoardViewDefinition } | { "type": "board", "value": BoardPage } | { "type": "attention", "value": AttentionPage } | { "type": "board_snapshot", "value": unknown } | { "type": "subscription_accepted", "value": { cursor: EventCursor, } } | { "type": "command_accepted", "value": { code: CommandCode, } };
 
 export type ResyncReason = "gap" | "cursor_expired" | "daemon_restarted" | "incompatible_event" | "heartbeat_lost";
 
@@ -121,6 +145,8 @@ export type ResyncRequirement = { reason: ResyncReason, workspaceId: WorkspaceId
 export type ServerMessage = { "type": "response", "value": ResponseEnvelope } | { "type": "event", "value": EventEnvelope } | { "type": "heartbeat", "value": Heartbeat } | { "type": "resync_required", "value": ResyncRequirement };
 
 export type SessionId = string;
+
+export type SessionSummary = { total: number, active: number, idle: number, unknown: number, providers: Array<Provider>, };
 
 export type SubscriptionRequest = { cursor: EventCursor | null, };
 

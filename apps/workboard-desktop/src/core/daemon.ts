@@ -5,6 +5,8 @@ import type {
   EventCursor,
   ExecuteRequest,
   BoardViewId,
+  BoardQuery,
+  AttentionQuery,
   HierarchyRef,
   ResponseEnvelope,
   ResponseResult,
@@ -46,6 +48,8 @@ export interface DaemonFacade {
   workspaceHierarchy(workspaceId: WorkspaceId): Promise<QueryResponse<"workspace_hierarchy">>;
   boardViews(workspaceId: WorkspaceId): Promise<QueryResponse<"board_views">>;
   boardView(workspaceId: WorkspaceId, viewId: BoardViewId): Promise<QueryResponse<"board_view">>;
+  board(workspaceId: WorkspaceId, request: BoardQuery): Promise<QueryResponse<"board">>;
+  attention(workspaceId: WorkspaceId, request: AttentionQuery): Promise<QueryResponse<"attention">>;
   hierarchyChildren(
     workspaceId: WorkspaceId,
     parent: HierarchyRef,
@@ -81,6 +85,10 @@ export function createDaemonFacade(transport: DaemonTransport): DaemonFacade {
     boardViews: (workspaceId) => query(workspaceId, { type: "board_views" }),
     boardView: (workspaceId, viewId) =>
       query(workspaceId, { type: "board_view", value: { viewId } }),
+    board: (workspaceId, request) =>
+      query(workspaceId, { type: "board", value: { query: request } }),
+    attention: (workspaceId, request) =>
+      query(workspaceId, { type: "attention", value: { query: request } }),
     hierarchyChildren: (workspaceId, parent) =>
       query(workspaceId, { type: "hierarchy_children", value: { parent } }),
     execute: (request) =>

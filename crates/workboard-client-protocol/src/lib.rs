@@ -9,11 +9,12 @@ pub use identity::*;
 pub use projection::*;
 pub use wire::*;
 
-pub const CURRENT_PROTOCOL_VERSION: u32 = 3;
-pub const PREVIOUS_PROTOCOL_VERSION: u32 = 2;
+pub const CURRENT_PROTOCOL_VERSION: u32 = 4;
+pub const PREVIOUS_PROTOCOL_VERSION: u32 = 3;
 pub const SUPPORTED_READ_VERSIONS: [u32; 2] = [CURRENT_PROTOCOL_VERSION, PREVIOUS_PROTOCOL_VERSION];
 pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_COLLECTION_ITEMS: usize = 10_000;
+pub const MAX_QUERY_PAGE_ITEMS: usize = 500;
 pub const MAX_DIAGNOSTICS: usize = 128;
 pub const MAX_AVAILABLE_ACTIONS: usize = 128;
 pub const MAX_PARTIAL_OUTCOMES: usize = 1_024;

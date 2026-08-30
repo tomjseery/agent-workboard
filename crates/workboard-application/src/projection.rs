@@ -402,6 +402,8 @@ impl WorkboardApplication {
                 protocol::ReadQueryCode::WorkspaceHierarchy,
                 protocol::ReadQueryCode::BoardViews,
                 protocol::ReadQueryCode::BoardView,
+                protocol::ReadQueryCode::Board,
+                protocol::ReadQueryCode::Attention,
                 protocol::ReadQueryCode::BoardSnapshot,
             ],
         };
@@ -870,7 +872,11 @@ mod tests {
                 entity: protocol::EntityRef::Workspace(workspace_id),
             }),
             invalidation_scope: Some(protocol::InvalidationScope {
-                queries: vec![protocol::ReadQueryCode::BoardSnapshot],
+                queries: vec![
+                    protocol::ReadQueryCode::Board,
+                    protocol::ReadQueryCode::Attention,
+                    protocol::ReadQueryCode::BoardSnapshot,
+                ],
                 owners: Vec::new(),
             }),
             operation_correlation_id: correlation_id,
@@ -1137,6 +1143,51 @@ mod tests {
             Some(protocol::EntityRef::WorkItem(
                 protocol::WorkItemId::from_uuid(*work_item_id.as_uuid())
             ))
+        );
+        let board = application
+            .client_board(
+                workspace_id,
+                protocol::BoardQuery {
+                    cursor: None,
+                    limit: 100,
+                    query: Some("Desktop".to_owned()),
+                    repository_ids: vec![protocol::RepositoryId::from_uuid(
+                        *repository_ids[0].as_uuid(),
+                    )],
+                    statuses: vec![protocol::WorkItemStatus::InProgress],
+                    lane_keys: vec!["in_progress".to_owned()],
+                    sort: protocol::BoardViewSort {
+                        field: protocol::BoardViewSortField::Key,
+                        direction: protocol::BoardViewSortDirection::Ascending,
+                    },
+                },
+            )
+            .expect("board projection");
+        assert_eq!(board.cards.len(), 1);
+        assert_eq!(
+            board.cards[0].work_item.id.as_uuid(),
+            work_item_id.as_uuid()
+        );
+        assert_eq!(board.cards[0].repositories.len(), 99);
+        assert_eq!(
+            board.cards[0].dependency_readiness,
+            protocol::DependencyReadiness::Ready
+        );
+        let attention = application
+            .client_attention(
+                workspace_id,
+                protocol::AttentionQuery {
+                    cursor: None,
+                    limit: 100,
+                    repository_ids: Vec::new(),
+                    reason_codes: Vec::new(),
+                },
+            )
+            .expect("attention projection");
+        assert_eq!(attention.entries.len(), 1);
+        assert_eq!(
+            attention.entries[0].reasons[0].code,
+            protocol::AttentionReasonCode::CheckpointDue
         );
         let workspace_count = application
             .store

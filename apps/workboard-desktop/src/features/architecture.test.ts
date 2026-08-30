@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-const featureSources = import.meta.glob("./{workspace,hierarchy,saved-views}/**/*.{ts,tsx}", {
+const featureSources = import.meta.glob("./{workspace,hierarchy,saved-views,board}/**/*.{ts,tsx}", {
   eager: true,
   import: "default",
   query: "?raw",
@@ -17,6 +17,8 @@ const savedViewSources = import.meta.glob("./saved-views/**/*.{ts,tsx}", {
   import: "default",
   query: "?raw",
 }) as Record<string, string>;
+
+const boardStoreSources = import.meta.glob("./board/store/**/*.{ts,tsx}", { eager: true, import: "default", query: "?raw" }) as Record<string, string>;
 
 describe("feature authority boundaries", () => {
   it("keeps feature slices behind generated contracts and the daemon facade", () => {
@@ -40,5 +42,11 @@ describe("feature authority boundaries", () => {
     expect(implementation).toContain("workspaceId: draft.workspaceId");
     expect(implementation).toContain("repositoryIds: draft.repositoryIds");
     expect(implementation).not.toMatch(/createWorkspace|newWorkspace|databasePath|openDatabase/);
+  });
+  it("keeps daemon board dependency attention session and workflow facts out of Zustand", () => {
+    const implementation = Object.values(boardStoreSources).join("\\n");
+    expect(implementation).not.toMatch(/BoardCardProjection|AttentionEntryProjection|DependencyReadiness|SessionSummary|AvailableAction/);
+    expect(implementation).toContain("selectedWorkItemId");
+    expect(implementation).toContain("focusedWorkItemId");
   });
 });
