@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-workboard-client",
+  "description": "Allows the main Workboard webview to use the four typed daemon bridge families.",
+  "local": true,
+  "webviews": ["main"],
+  "permissions": [
+    "allow-workboard-handshake",
+    "allow-workboard-query",
+    "allow-workboard-execute",
+    "allow-workboard-subscribe"
+  ]
+}

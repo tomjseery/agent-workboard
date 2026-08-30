@@ -214,7 +214,7 @@ Keep the v1 daemon compatibility adapter until the first Desktop read-only miles
 
 ### 2. Secure the Tauri v2 runtime and daemon IPC bridge
 
-- Status: [ ]
+- Status: [x]
 - Slug: `secure-tauri-runtime-and-ipc-bridge`
 - Dependencies: item 1
 - Delivery type: Rust/Tauri security shell

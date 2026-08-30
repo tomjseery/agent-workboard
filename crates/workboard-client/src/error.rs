@@ -23,6 +23,8 @@ pub enum ClientError {
     IncompatibleProtocol,
     #[error("Workboard event stream requires authoritative resynchronization")]
     ResyncRequired(ResyncRequirement),
+    #[error("Workboard event stream subscription was cancelled")]
+    SubscriptionCancelled,
 }
 
 impl ClientError {
@@ -37,6 +39,7 @@ impl ClientError {
             Self::UnexpectedResponse => "unexpected_response",
             Self::IncompatibleProtocol => "incompatible_protocol",
             Self::ResyncRequired(_) => "resync_required",
+            Self::SubscriptionCancelled => "subscription_cancelled",
         }
     }
 }
