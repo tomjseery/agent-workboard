@@ -1,19 +1,20 @@
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
+use ts_rs::TS;
 
 use crate::{
     BoardSnapshot, DaemonInstanceId, EntityRef, EventId, HierarchyChildren, HierarchyRef,
     RequestId, WorkspaceId, WorkspaceReference, WorkspaceSummary,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct HandshakeRequest {
     pub supported_read_versions: Vec<u32>,
     pub supported_command_versions: Vec<u32>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct HandshakeResponse {
     pub daemon_instance_id: DaemonInstanceId,
@@ -26,7 +27,7 @@ pub struct HandshakeResponse {
     pub max_frame_bytes: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestEnvelope {
     pub protocol_version: u32,
@@ -112,7 +113,7 @@ fn validate_versions(versions: &[u32]) -> Result<(), Box<ProtocolError>> {
     Ok(())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum Operation {
     Handshake(HandshakeRequest),
@@ -121,15 +122,20 @@ pub enum Operation {
     Subscribe(SubscriptionRequest),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "type",
+    content = "value",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum ReadQuery {
     WorkspaceSummary,
     HierarchyChildren { parent: HierarchyRef },
     BoardSnapshot,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandCode {
     SaveBoardView,
@@ -159,8 +165,13 @@ impl CommandCode {
     ];
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "type",
+    content = "value",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum CommandOperation {
     SaveBoardView,
     ApproveFeature { feature_id: crate::FeatureId },
@@ -191,20 +202,20 @@ impl CommandOperation {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SubscriptionRequest {
     pub cursor: Option<EventCursor>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct EventCursor {
     pub daemon_instance_id: DaemonInstanceId,
     pub sequence: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ResponseEnvelope {
     pub protocol_version: u32,
@@ -213,6 +224,7 @@ pub struct ResponseEnvelope {
     pub workspace_id: Option<WorkspaceId>,
     pub authoritative_revision: Option<u64>,
     #[serde(with = "time::serde::rfc3339")]
+    #[ts(type = "string")]
     pub server_timestamp: OffsetDateTime,
     pub result: Option<ResponseResult>,
     pub error: Option<ProtocolError>,
@@ -261,18 +273,23 @@ impl ResponseEnvelope {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "type",
+    content = "value",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum ResponseResult {
     Handshake(HandshakeResponse),
     WorkspaceSummary(WorkspaceSummary),
     HierarchyChildren(HierarchyChildren),
-    BoardSnapshot(BoardSnapshot),
+    BoardSnapshot(#[ts(type = "unknown")] BoardSnapshot),
     SubscriptionAccepted { cursor: EventCursor },
     CommandAccepted { code: CommandCode },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProtocolError {
     pub code: String,
@@ -314,7 +331,7 @@ impl ProtocolError {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorSeverity {
     Info,
@@ -323,7 +340,7 @@ pub enum ErrorSeverity {
     Fatal,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ValidationField {
     pub field: String,
@@ -331,7 +348,7 @@ pub struct ValidationField {
     pub message: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Diagnostic {
     pub code: String,
@@ -340,7 +357,7 @@ pub struct Diagnostic {
     pub owner: Option<EntityRef>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AvailableAction {
     pub code: CommandCode,
@@ -349,7 +366,7 @@ pub struct AvailableAction {
     pub expected_revision: Option<u64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandCapability {
     pub code: CommandCode,
@@ -358,14 +375,14 @@ pub struct CommandCapability {
     pub unavailable_reason: Option<UnavailableReason>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct UnavailableReason {
     pub code: String,
     pub message: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PartialOutcome {
     pub owner: Option<EntityRef>,
@@ -376,7 +393,7 @@ pub struct PartialOutcome {
     pub evidence: Vec<Diagnostic>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct EventEnvelope {
     pub protocol_version: u32,
@@ -385,6 +402,7 @@ pub struct EventEnvelope {
     pub sequence: u64,
     pub event_id: EventId,
     #[serde(with = "time::serde::rfc3339")]
+    #[ts(type = "string")]
     pub occurred_at: OffsetDateTime,
     pub owner: EntityRef,
     pub entity_revision: u64,
@@ -395,7 +413,7 @@ pub struct EventEnvelope {
     pub partial_outcomes: Vec<PartialOutcome>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {
     ProjectionChanged,
@@ -403,22 +421,27 @@ pub enum EventKind {
     PartialOutcomeRecorded,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "type",
+    content = "value",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum EventPayload {
     ProjectionChanged { entity: EntityRef },
     NativeSessionsRefreshed { session_count: usize },
     PartialOutcome { outcome: PartialOutcome },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct InvalidationScope {
     pub queries: Vec<ReadQueryCode>,
     pub owners: Vec<EntityRef>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum ReadQueryCode {
     WorkspaceSummary,
@@ -426,7 +449,7 @@ pub enum ReadQueryCode {
     BoardSnapshot,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum ServerMessage {
     Response(Box<ResponseEnvelope>),
@@ -435,17 +458,18 @@ pub enum ServerMessage {
     ResyncRequired(ResyncRequirement),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Heartbeat {
     pub daemon_instance_id: DaemonInstanceId,
     pub workspace_id: WorkspaceId,
     pub revision: u64,
     #[serde(with = "time::serde::rfc3339")]
+    #[ts(type = "string")]
     pub sent_at: OffsetDateTime,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ResyncRequirement {
     pub reason: ResyncReason,
@@ -455,7 +479,7 @@ pub struct ResyncRequirement {
     pub required_queries: Vec<ReadQueryCode>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum ResyncReason {
     Gap,

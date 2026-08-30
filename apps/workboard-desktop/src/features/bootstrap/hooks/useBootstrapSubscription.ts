@@ -1,13 +1,13 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 
-import { cancelSubscription, subscribe } from "../../../core/bridge";
 import type {
   BootstrapHandshake,
   BootstrapState,
   SubscriptionMessage,
   SubscriptionTarget,
-} from "../types/bootstrap";
+} from "../../../core/generated";
+import { daemon } from "../../../core/daemon";
 import { bootstrapQueryKey } from "./useBootstrapQuery";
 
 const ignoreBridgeFailure = () => undefined;
@@ -42,7 +42,7 @@ export function useBootstrapSubscription(target: SubscriptionTarget | undefined)
     }
 
     let disposed = false;
-    let receipt: Awaited<ReturnType<typeof subscribe>> | undefined;
+    let subscription: Awaited<ReturnType<typeof daemon.subscribe>> | undefined;
     const onMessage = (message: SubscriptionMessage) => {
       queryClient.setQueryData<BootstrapHandshake>(bootstrapQueryKey, (current) => {
         if (current === undefined) {
@@ -55,11 +55,12 @@ export function useBootstrapSubscription(target: SubscriptionTarget | undefined)
       });
     };
 
-    void subscribe(target, onMessage)
+    void daemon
+      .subscribe(target, null, onMessage)
       .then((started) => {
-        receipt = started;
+        subscription = started;
         if (disposed) {
-          void cancelSubscription(started.subscriptionId).catch(ignoreBridgeFailure);
+          void started.cancel().catch(ignoreBridgeFailure);
         }
       })
       .catch(() => {
@@ -72,8 +73,8 @@ export function useBootstrapSubscription(target: SubscriptionTarget | undefined)
 
     return () => {
       disposed = true;
-      if (receipt !== undefined) {
-        void cancelSubscription(receipt.subscriptionId).catch(ignoreBridgeFailure);
+      if (subscription !== undefined) {
+        void subscription.cancel().catch(ignoreBridgeFailure);
       }
     };
   }, [queryClient, target]);

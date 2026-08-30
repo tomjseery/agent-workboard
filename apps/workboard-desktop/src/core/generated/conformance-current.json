@@ -1,0 +1,1003 @@
+{
+  "discriminants": {
+    "checkoutAvailability": [
+      "available",
+      "missing",
+      "deleted",
+      "replaced"
+    ],
+    "commandCodes": [
+      "save_board_view",
+      "approve_feature",
+      "request_feature_revision",
+      "reject_feature",
+      "checkpoint_work_item",
+      "start_session",
+      "resume_session",
+      "focus_session",
+      "follow_up_session",
+      "recover_session"
+    ],
+    "entityRefs": [
+      {
+        "id": "20000000-0000-0000-0000-000000000001",
+        "kind": "workspace"
+      },
+      {
+        "id": "30000000-0000-0000-0000-000000000001",
+        "kind": "repository"
+      },
+      {
+        "id": "40000000-0000-0000-0000-000000000001",
+        "kind": "epic"
+      },
+      {
+        "id": "50000000-0000-0000-0000-000000000001",
+        "kind": "feature"
+      },
+      {
+        "id": "60000000-0000-0000-0000-000000000001",
+        "kind": "work_item"
+      },
+      {
+        "id": "70000000-0000-0000-0000-000000000001",
+        "kind": "session"
+      }
+    ],
+    "errorSeverities": [
+      "info",
+      "warning",
+      "error",
+      "fatal"
+    ],
+    "eventKinds": [
+      "projection_changed",
+      "native_sessions_refreshed",
+      "partial_outcome_recorded"
+    ],
+    "eventPayloads": [
+      {
+        "type": "projection_changed",
+        "value": {
+          "entity": {
+            "id": "50000000-0000-0000-0000-000000000001",
+            "kind": "feature"
+          }
+        }
+      },
+      {
+        "type": "native_sessions_refreshed",
+        "value": {
+          "sessionCount": 1
+        }
+      },
+      {
+        "type": "partial_outcome",
+        "value": {
+          "outcome": {
+            "code": "planning_store_pending",
+            "evidence": [
+              {
+                "code": "safe_evidence",
+                "message": "Safe evidence is available.",
+                "owner": {
+                  "id": "50000000-0000-0000-0000-000000000001",
+                  "kind": "feature"
+                },
+                "severity": "warning"
+              }
+            ],
+            "message": "The durable operation requires reconciliation.",
+            "owner": {
+              "id": "50000000-0000-0000-0000-000000000001",
+              "kind": "feature"
+            },
+            "reconciliationRequired": true,
+            "succeeded": false
+          }
+        }
+      }
+    ],
+    "hierarchyNodes": [
+      {
+        "kind": "repository",
+        "value": {
+          "id": "30000000-0000-0000-0000-000000000001",
+          "slug": "fixture-repository",
+          "title": "Fixture Repository",
+          "workspaceId": "20000000-0000-0000-0000-000000000001"
+        }
+      },
+      {
+        "kind": "epic",
+        "value": {
+          "id": "40000000-0000-0000-0000-000000000001",
+          "slug": "fixture-epic",
+          "title": "Fixture Epic",
+          "workspaceId": "20000000-0000-0000-0000-000000000001"
+        }
+      },
+      {
+        "kind": "feature",
+        "value": {
+          "epicId": "40000000-0000-0000-0000-000000000001",
+          "id": "50000000-0000-0000-0000-000000000001",
+          "slug": "fixture-feature",
+          "title": "Fixture Feature"
+        }
+      },
+      {
+        "kind": "work_item",
+        "value": {
+          "featureId": "50000000-0000-0000-0000-000000000001",
+          "id": "60000000-0000-0000-0000-000000000001",
+          "key": "WI-1",
+          "slug": "fixture-work-item",
+          "title": "Fixture Work item"
+        }
+      }
+    ],
+    "hierarchyRefs": [
+      {
+        "id": "20000000-0000-0000-0000-000000000001",
+        "kind": "workspace"
+      },
+      {
+        "id": "40000000-0000-0000-0000-000000000001",
+        "kind": "epic"
+      },
+      {
+        "id": "50000000-0000-0000-0000-000000000001",
+        "kind": "feature"
+      },
+      {
+        "id": "60000000-0000-0000-0000-000000000001",
+        "kind": "work_item"
+      }
+    ],
+    "managedSessionRoles": [
+      "epic_navigation",
+      "feature_planning",
+      "work_item_execution",
+      "debugging",
+      "review"
+    ],
+    "operations": [
+      "handshake",
+      "query",
+      "command",
+      "subscribe"
+    ],
+    "ownerProjections": [
+      {
+        "id": "40000000-0000-0000-0000-000000000001",
+        "kind": "epic"
+      },
+      {
+        "id": "50000000-0000-0000-0000-000000000001",
+        "kind": "feature"
+      },
+      {
+        "id": "60000000-0000-0000-0000-000000000001",
+        "kind": "work_item"
+      }
+    ],
+    "providers": [
+      "claude",
+      "codex"
+    ],
+    "readQueries": [
+      "workspace_summary",
+      "hierarchy_children",
+      "board_snapshot"
+    ],
+    "readQueryCodes": [
+      "workspace_summary",
+      "hierarchy_children",
+      "board_snapshot"
+    ],
+    "responseResults": [
+      "handshake",
+      "workspace_summary",
+      "hierarchy_children",
+      "board_snapshot",
+      "subscription_accepted",
+      "command_accepted"
+    ],
+    "resyncReasons": [
+      "gap",
+      "cursor_expired",
+      "daemon_restarted",
+      "incompatible_event",
+      "heartbeat_lost"
+    ],
+    "serverMessages": [
+      "response",
+      "event",
+      "heartbeat",
+      "resync_required"
+    ],
+    "workItemStatuses": [
+      "backlog",
+      "ready",
+      "in_progress",
+      "blocked",
+      "review",
+      "done",
+      "cancelled"
+    ],
+    "workflowStates": [
+      "draft",
+      "worktree_pending",
+      "planning_launch_pending",
+      "planning_active",
+      "proposal_ready",
+      "awaiting_approval",
+      "publishing",
+      "planned",
+      "work_item_launch_pending",
+      "work_item_active",
+      "reconciliation_required",
+      "blocked",
+      "paused",
+      "completed",
+      "cancelled"
+    ]
+  },
+  "fixtureVersion": 1,
+  "frontendRequests": {
+    "execute": {
+      "command": {
+        "type": "approve_feature",
+        "value": {
+          "featureId": "50000000-0000-0000-0000-000000000001"
+        }
+      },
+      "expectedRevision": 41,
+      "idempotencyKey": "fixture-command-1",
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    },
+    "hierarchyChildren": {
+      "query": {
+        "type": "hierarchy_children",
+        "value": {
+          "parent": {
+            "id": "20000000-0000-0000-0000-000000000001",
+            "kind": "workspace"
+          }
+        }
+      },
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    },
+    "subscribe": {
+      "type": "start",
+      "value": {
+        "cursor": {
+          "daemonInstanceId": "80000000-0000-0000-0000-000000000001",
+          "sequence": 40
+        },
+        "workspaceId": "20000000-0000-0000-0000-000000000001"
+      }
+    },
+    "workspaceSummary": {
+      "query": {
+        "type": "workspace_summary"
+      },
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    }
+  },
+  "incompatibleCommands": [
+    {
+      "expectedRevision": 41,
+      "idempotencyKey": "fixture-incompatible-command",
+      "operation": {
+        "type": "command",
+        "value": {
+          "type": "save_board_view"
+        }
+      },
+      "protocolVersion": 1,
+      "requestId": "10000000-0000-0000-0000-000000000001",
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    },
+    {
+      "expectedRevision": 41,
+      "idempotencyKey": "fixture-incompatible-command",
+      "operation": {
+        "type": "command",
+        "value": {
+          "type": "approve_feature",
+          "value": {
+            "featureId": "50000000-0000-0000-0000-000000000001"
+          }
+        }
+      },
+      "protocolVersion": 1,
+      "requestId": "10000000-0000-0000-0000-000000000001",
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    },
+    {
+      "expectedRevision": 41,
+      "idempotencyKey": "fixture-incompatible-command",
+      "operation": {
+        "type": "command",
+        "value": {
+          "type": "request_feature_revision",
+          "value": {
+            "featureId": "50000000-0000-0000-0000-000000000001"
+          }
+        }
+      },
+      "protocolVersion": 1,
+      "requestId": "10000000-0000-0000-0000-000000000001",
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    },
+    {
+      "expectedRevision": 41,
+      "idempotencyKey": "fixture-incompatible-command",
+      "operation": {
+        "type": "command",
+        "value": {
+          "type": "reject_feature",
+          "value": {
+            "featureId": "50000000-0000-0000-0000-000000000001"
+          }
+        }
+      },
+      "protocolVersion": 1,
+      "requestId": "10000000-0000-0000-0000-000000000001",
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    },
+    {
+      "expectedRevision": 41,
+      "idempotencyKey": "fixture-incompatible-command",
+      "operation": {
+        "type": "command",
+        "value": {
+          "type": "checkpoint_work_item",
+          "value": {
+            "workItemId": "60000000-0000-0000-0000-000000000001"
+          }
+        }
+      },
+      "protocolVersion": 1,
+      "requestId": "10000000-0000-0000-0000-000000000001",
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    },
+    {
+      "expectedRevision": 41,
+      "idempotencyKey": "fixture-incompatible-command",
+      "operation": {
+        "type": "command",
+        "value": {
+          "type": "start_session",
+          "value": {
+            "workItemId": "60000000-0000-0000-0000-000000000001"
+          }
+        }
+      },
+      "protocolVersion": 1,
+      "requestId": "10000000-0000-0000-0000-000000000001",
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    },
+    {
+      "expectedRevision": 41,
+      "idempotencyKey": "fixture-incompatible-command",
+      "operation": {
+        "type": "command",
+        "value": {
+          "type": "resume_session",
+          "value": {
+            "sessionId": "70000000-0000-0000-0000-000000000001"
+          }
+        }
+      },
+      "protocolVersion": 1,
+      "requestId": "10000000-0000-0000-0000-000000000001",
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    },
+    {
+      "expectedRevision": 41,
+      "idempotencyKey": "fixture-incompatible-command",
+      "operation": {
+        "type": "command",
+        "value": {
+          "type": "focus_session",
+          "value": {
+            "sessionId": "70000000-0000-0000-0000-000000000001"
+          }
+        }
+      },
+      "protocolVersion": 1,
+      "requestId": "10000000-0000-0000-0000-000000000001",
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    },
+    {
+      "expectedRevision": 41,
+      "idempotencyKey": "fixture-incompatible-command",
+      "operation": {
+        "type": "command",
+        "value": {
+          "type": "follow_up_session",
+          "value": {
+            "sessionId": "70000000-0000-0000-0000-000000000001"
+          }
+        }
+      },
+      "protocolVersion": 1,
+      "requestId": "10000000-0000-0000-0000-000000000001",
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    },
+    {
+      "expectedRevision": 41,
+      "idempotencyKey": "fixture-incompatible-command",
+      "operation": {
+        "type": "command",
+        "value": {
+          "type": "recover_session",
+          "value": {
+            "sessionId": "70000000-0000-0000-0000-000000000001"
+          }
+        }
+      },
+      "protocolVersion": 1,
+      "requestId": "10000000-0000-0000-0000-000000000001",
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    }
+  ],
+  "partialOutcome": {
+    "code": "planning_store_pending",
+    "evidence": [
+      {
+        "code": "safe_evidence",
+        "message": "Safe evidence is available.",
+        "owner": {
+          "id": "50000000-0000-0000-0000-000000000001",
+          "kind": "feature"
+        },
+        "severity": "warning"
+      }
+    ],
+    "message": "The durable operation requires reconciliation.",
+    "owner": {
+      "id": "50000000-0000-0000-0000-000000000001",
+      "kind": "feature"
+    },
+    "reconciliationRequired": true,
+    "succeeded": false
+  },
+  "protocolVersion": 2,
+  "readRequests": [
+    {
+      "expectedRevision": null,
+      "idempotencyKey": null,
+      "operation": {
+        "type": "handshake",
+        "value": {
+          "supportedCommandVersions": [
+            2
+          ],
+          "supportedReadVersions": [
+            2,
+            1
+          ]
+        }
+      },
+      "protocolVersion": 2,
+      "requestId": "10000000-0000-0000-0000-000000000001",
+      "workspaceId": null
+    },
+    {
+      "expectedRevision": null,
+      "idempotencyKey": null,
+      "operation": {
+        "type": "query",
+        "value": {
+          "type": "workspace_summary"
+        }
+      },
+      "protocolVersion": 2,
+      "requestId": "10000000-0000-0000-0000-000000000001",
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    },
+    {
+      "expectedRevision": null,
+      "idempotencyKey": null,
+      "operation": {
+        "type": "query",
+        "value": {
+          "type": "hierarchy_children",
+          "value": {
+            "parent": {
+              "id": "20000000-0000-0000-0000-000000000001",
+              "kind": "workspace"
+            }
+          }
+        }
+      },
+      "protocolVersion": 2,
+      "requestId": "10000000-0000-0000-0000-000000000001",
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    },
+    {
+      "expectedRevision": null,
+      "idempotencyKey": null,
+      "operation": {
+        "type": "query",
+        "value": {
+          "type": "board_snapshot"
+        }
+      },
+      "protocolVersion": 2,
+      "requestId": "10000000-0000-0000-0000-000000000001",
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    },
+    {
+      "expectedRevision": null,
+      "idempotencyKey": null,
+      "operation": {
+        "type": "subscribe",
+        "value": {
+          "cursor": {
+            "daemonInstanceId": "80000000-0000-0000-0000-000000000001",
+            "sequence": 40
+          }
+        }
+      },
+      "protocolVersion": 2,
+      "requestId": "10000000-0000-0000-0000-000000000001",
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    }
+  ],
+  "responses": [
+    {
+      "authoritativeRevision": 41,
+      "availableActions": [
+        {
+          "available": false,
+          "code": "approve_feature",
+          "expectedRevision": 41,
+          "unavailableReason": {
+            "code": "not_accepted",
+            "message": "The capability is not accepted."
+          }
+        }
+      ],
+      "correlationId": "10000000-0000-0000-0000-000000000002",
+      "diagnostics": [],
+      "error": null,
+      "partialOutcomes": [],
+      "protocolVersion": 2,
+      "requestId": "10000000-0000-0000-0000-000000000001",
+      "result": {
+        "type": "handshake",
+        "value": {
+          "commandCapabilities": [
+            {
+              "available": false,
+              "code": "save_board_view",
+              "compatibleVersions": [
+                2
+              ],
+              "unavailableReason": {
+                "code": "not_accepted",
+                "message": "The capability is not accepted."
+              }
+            }
+          ],
+          "compatibleCommandVersions": [
+            2
+          ],
+          "daemonInstanceId": "80000000-0000-0000-0000-000000000001",
+          "eventVersion": 1,
+          "heartbeatIntervalMs": 1000,
+          "maxFrameBytes": 8388608,
+          "negotiatedReadVersion": 2,
+          "workspaces": [
+            {
+              "id": "20000000-0000-0000-0000-000000000001",
+              "slug": "fixture-workspace",
+              "title": "Fixture Workspace"
+            }
+          ]
+        }
+      },
+      "serverTimestamp": "2026-08-30T12:00:00Z",
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    },
+    {
+      "authoritativeRevision": 41,
+      "availableActions": [
+        {
+          "available": false,
+          "code": "approve_feature",
+          "expectedRevision": 41,
+          "unavailableReason": {
+            "code": "not_accepted",
+            "message": "The capability is not accepted."
+          }
+        }
+      ],
+      "correlationId": "10000000-0000-0000-0000-000000000002",
+      "diagnostics": [],
+      "error": null,
+      "partialOutcomes": [],
+      "protocolVersion": 2,
+      "requestId": "10000000-0000-0000-0000-000000000001",
+      "result": {
+        "type": "workspace_summary",
+        "value": {
+          "epicCount": 1,
+          "featureCount": 1,
+          "repositoryCount": 1,
+          "sessionCount": 1,
+          "workItemCount": 1,
+          "workspace": {
+            "id": "20000000-0000-0000-0000-000000000001",
+            "slug": "fixture-workspace",
+            "title": "Fixture Workspace"
+          }
+        }
+      },
+      "serverTimestamp": "2026-08-30T12:00:00Z",
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    },
+    {
+      "authoritativeRevision": 41,
+      "availableActions": [
+        {
+          "available": false,
+          "code": "approve_feature",
+          "expectedRevision": 41,
+          "unavailableReason": {
+            "code": "not_accepted",
+            "message": "The capability is not accepted."
+          }
+        }
+      ],
+      "correlationId": "10000000-0000-0000-0000-000000000002",
+      "diagnostics": [],
+      "error": null,
+      "partialOutcomes": [],
+      "protocolVersion": 2,
+      "requestId": "10000000-0000-0000-0000-000000000001",
+      "result": {
+        "type": "hierarchy_children",
+        "value": {
+          "children": [
+            {
+              "kind": "repository",
+              "value": {
+                "id": "30000000-0000-0000-0000-000000000001",
+                "slug": "fixture-repository",
+                "title": "Fixture Repository",
+                "workspaceId": "20000000-0000-0000-0000-000000000001"
+              }
+            }
+          ],
+          "parent": {
+            "id": "20000000-0000-0000-0000-000000000001",
+            "kind": "workspace"
+          }
+        }
+      },
+      "serverTimestamp": "2026-08-30T12:00:00Z",
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    },
+    {
+      "authoritativeRevision": 41,
+      "availableActions": [
+        {
+          "available": false,
+          "code": "approve_feature",
+          "expectedRevision": 41,
+          "unavailableReason": {
+            "code": "not_accepted",
+            "message": "The capability is not accepted."
+          }
+        }
+      ],
+      "correlationId": "10000000-0000-0000-0000-000000000002",
+      "diagnostics": [],
+      "error": null,
+      "partialOutcomes": [],
+      "protocolVersion": 2,
+      "requestId": "10000000-0000-0000-0000-000000000001",
+      "result": {
+        "type": "board_snapshot",
+        "value": {
+          "associations": [],
+          "checkouts": [],
+          "documents": [],
+          "effectiveCheckouts": [],
+          "epics": [],
+          "features": [],
+          "repositories": [],
+          "sessions": [],
+          "workItems": [],
+          "workspace": {
+            "id": "20000000-0000-0000-0000-000000000001",
+            "planning_store_repository_id": "30000000-0000-0000-0000-000000000001",
+            "slug": "fixture-workspace",
+            "title": "Fixture Workspace"
+          }
+        }
+      },
+      "serverTimestamp": "2026-08-30T12:00:00Z",
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    },
+    {
+      "authoritativeRevision": 41,
+      "availableActions": [
+        {
+          "available": false,
+          "code": "approve_feature",
+          "expectedRevision": 41,
+          "unavailableReason": {
+            "code": "not_accepted",
+            "message": "The capability is not accepted."
+          }
+        }
+      ],
+      "correlationId": "10000000-0000-0000-0000-000000000002",
+      "diagnostics": [],
+      "error": null,
+      "partialOutcomes": [],
+      "protocolVersion": 2,
+      "requestId": "10000000-0000-0000-0000-000000000001",
+      "result": {
+        "type": "subscription_accepted",
+        "value": {
+          "cursor": {
+            "daemonInstanceId": "80000000-0000-0000-0000-000000000001",
+            "sequence": 40
+          }
+        }
+      },
+      "serverTimestamp": "2026-08-30T12:00:00Z",
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    },
+    {
+      "authoritativeRevision": 41,
+      "availableActions": [
+        {
+          "available": false,
+          "code": "approve_feature",
+          "expectedRevision": 41,
+          "unavailableReason": {
+            "code": "not_accepted",
+            "message": "The capability is not accepted."
+          }
+        }
+      ],
+      "correlationId": "10000000-0000-0000-0000-000000000002",
+      "diagnostics": [],
+      "error": null,
+      "partialOutcomes": [],
+      "protocolVersion": 2,
+      "requestId": "10000000-0000-0000-0000-000000000001",
+      "result": {
+        "type": "command_accepted",
+        "value": {
+          "code": "approve_feature"
+        }
+      },
+      "serverTimestamp": "2026-08-30T12:00:00Z",
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    }
+  ],
+  "serverMessages": [
+    {
+      "type": "response",
+      "value": {
+        "authoritativeRevision": 41,
+        "availableActions": [
+          {
+            "available": false,
+            "code": "approve_feature",
+            "expectedRevision": 41,
+            "unavailableReason": {
+              "code": "not_accepted",
+              "message": "The capability is not accepted."
+            }
+          }
+        ],
+        "correlationId": "10000000-0000-0000-0000-000000000002",
+        "diagnostics": [],
+        "error": null,
+        "partialOutcomes": [],
+        "protocolVersion": 2,
+        "requestId": "10000000-0000-0000-0000-000000000001",
+        "result": {
+          "type": "workspace_summary",
+          "value": {
+            "epicCount": 1,
+            "featureCount": 1,
+            "repositoryCount": 1,
+            "sessionCount": 1,
+            "workItemCount": 1,
+            "workspace": {
+              "id": "20000000-0000-0000-0000-000000000001",
+              "slug": "fixture-workspace",
+              "title": "Fixture Workspace"
+            }
+          }
+        },
+        "serverTimestamp": "2026-08-30T12:00:00Z",
+        "workspaceId": "20000000-0000-0000-0000-000000000001"
+      }
+    },
+    {
+      "type": "event",
+      "value": {
+        "entityRevision": 42,
+        "eventId": "90000000-0000-0000-0000-000000000001",
+        "eventVersion": 1,
+        "invalidationScope": {
+          "owners": [
+            {
+              "id": "50000000-0000-0000-0000-000000000001",
+              "kind": "feature"
+            }
+          ],
+          "queries": [
+            "workspace_summary",
+            "hierarchy_children",
+            "board_snapshot"
+          ]
+        },
+        "kind": "partial_outcome_recorded",
+        "occurredAt": "2026-08-30T12:00:01Z",
+        "operationCorrelationId": "10000000-0000-0000-0000-000000000002",
+        "owner": {
+          "id": "50000000-0000-0000-0000-000000000001",
+          "kind": "feature"
+        },
+        "partialOutcomes": [
+          {
+            "code": "planning_store_pending",
+            "evidence": [
+              {
+                "code": "safe_evidence",
+                "message": "Safe evidence is available.",
+                "owner": {
+                  "id": "50000000-0000-0000-0000-000000000001",
+                  "kind": "feature"
+                },
+                "severity": "warning"
+              }
+            ],
+            "message": "The durable operation requires reconciliation.",
+            "owner": {
+              "id": "50000000-0000-0000-0000-000000000001",
+              "kind": "feature"
+            },
+            "reconciliationRequired": true,
+            "succeeded": false
+          }
+        ],
+        "payload": {
+          "type": "partial_outcome",
+          "value": {
+            "outcome": {
+              "code": "planning_store_pending",
+              "evidence": [
+                {
+                  "code": "safe_evidence",
+                  "message": "Safe evidence is available.",
+                  "owner": {
+                    "id": "50000000-0000-0000-0000-000000000001",
+                    "kind": "feature"
+                  },
+                  "severity": "warning"
+                }
+              ],
+              "message": "The durable operation requires reconciliation.",
+              "owner": {
+                "id": "50000000-0000-0000-0000-000000000001",
+                "kind": "feature"
+              },
+              "reconciliationRequired": true,
+              "succeeded": false
+            }
+          }
+        },
+        "protocolVersion": 2,
+        "sequence": 42,
+        "workspaceId": "20000000-0000-0000-0000-000000000001"
+      }
+    },
+    {
+      "type": "heartbeat",
+      "value": {
+        "daemonInstanceId": "80000000-0000-0000-0000-000000000001",
+        "revision": 42,
+        "sentAt": "2026-08-30T12:00:02Z",
+        "workspaceId": "20000000-0000-0000-0000-000000000001"
+      }
+    },
+    {
+      "type": "resync_required",
+      "value": {
+        "authoritativeRevision": 41,
+        "oldestReplayableSequence": 20,
+        "reason": "gap",
+        "requiredQueries": [
+          "workspace_summary",
+          "hierarchy_children",
+          "board_snapshot"
+        ],
+        "workspaceId": "20000000-0000-0000-0000-000000000001"
+      }
+    }
+  ],
+  "typedErrors": [
+    {
+      "code": "incompatible_command_version",
+      "correlationId": "10000000-0000-0000-0000-000000000002",
+      "currentRevision": null,
+      "message": "A safe fixture error.",
+      "reconciliationOwner": null,
+      "resync": null,
+      "retryable": false,
+      "severity": "info",
+      "staleRevision": null,
+      "validationFields": []
+    },
+    {
+      "code": "typed_error",
+      "correlationId": "10000000-0000-0000-0000-000000000002",
+      "currentRevision": null,
+      "message": "A safe fixture error.",
+      "reconciliationOwner": null,
+      "resync": {
+        "authoritativeRevision": 41,
+        "oldestReplayableSequence": 20,
+        "reason": "gap",
+        "requiredQueries": [
+          "workspace_summary",
+          "hierarchy_children",
+          "board_snapshot"
+        ],
+        "workspaceId": "20000000-0000-0000-0000-000000000001"
+      },
+      "retryable": true,
+      "severity": "warning",
+      "staleRevision": null,
+      "validationFields": []
+    },
+    {
+      "code": "typed_error",
+      "correlationId": "10000000-0000-0000-0000-000000000002",
+      "currentRevision": 41,
+      "message": "A safe fixture error.",
+      "reconciliationOwner": null,
+      "resync": null,
+      "retryable": false,
+      "severity": "error",
+      "staleRevision": 40,
+      "validationFields": [
+        {
+          "code": "stale_revision",
+          "field": "expectedRevision",
+          "message": "The revision is stale."
+        }
+      ]
+    },
+    {
+      "code": "typed_error",
+      "correlationId": "10000000-0000-0000-0000-000000000002",
+      "currentRevision": null,
+      "message": "A safe fixture error.",
+      "reconciliationOwner": {
+        "id": "50000000-0000-0000-0000-000000000001",
+        "kind": "feature"
+      },
+      "resync": null,
+      "retryable": false,
+      "severity": "fatal",
+      "staleRevision": null,
+      "validationFields": []
+    }
+  ]
+}

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 use workboard_client_protocol::{
     BoardSnapshot, CommandOperation, EventCursor, EventEnvelope, ReadQuery, ResyncRequirement,
     WorkspaceId,
@@ -6,7 +7,7 @@ use workboard_client_protocol::{
 
 pub const MAX_IPC_REQUEST_BYTES: usize = 64 * 1024;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum BootstrapState {
     Connecting,
@@ -17,27 +18,27 @@ pub enum BootstrapState {
     Ready,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SubscriptionTarget {
     pub workspace_id: WorkspaceId,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct BootstrapHandshake {
     pub state: BootstrapState,
     pub subscriptions: Vec<SubscriptionTarget>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct QueryRequest {
     pub workspace_id: WorkspaceId,
     pub query: ReadQuery,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ExecuteRequest {
     pub workspace_id: WorkspaceId,
@@ -46,8 +47,13 @@ pub struct ExecuteRequest {
     pub command: CommandOperation,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "type",
+    content = "value",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum SubscribeRequest {
     Start {
         workspace_id: WorkspaceId,
@@ -58,14 +64,19 @@ pub enum SubscribeRequest {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SubscriptionReceipt {
     pub subscription_id: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "type",
+    content = "value",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum SubscriptionMessage {
     Connected {
         state: BootstrapState,
@@ -74,6 +85,7 @@ pub enum SubscriptionMessage {
     Resyncing(ResyncRequirement),
     Resynced {
         requirement: ResyncRequirement,
+        #[ts(type = "unknown")]
         snapshot: BoardSnapshot,
     },
     Disconnected {
@@ -82,7 +94,7 @@ pub enum SubscriptionMessage {
     Incompatible,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct BridgeError {
     pub code: String,

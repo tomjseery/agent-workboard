@@ -12,6 +12,10 @@ name = "workboard_desktop"
 name = "workboard-desktop"
 path = "src/main.rs"
 
+[[bin]]
+name = "generate-contracts"
+path = "src/generate_contracts.rs"
+
 [build-dependencies]
 ico = "0.5.0"
 tauri-build = { version = "2.6.3", features = ["isolation"] }
@@ -21,6 +25,8 @@ directories.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2.11.5", default-features = false, features = ["isolation", "wry"] }
+tempfile.workspace = true
+ts-rs.workspace = true
 workboard-client = { path = "../../../crates/workboard-client" }
 workboard-client-protocol = { path = "../../../crates/workboard-client-protocol" }
 

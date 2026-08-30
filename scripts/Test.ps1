@@ -10,6 +10,8 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Push-Location (Join-Path $PSScriptRoot '..\apps\workboard-desktop')
 try {
+    npm run generate:check
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     npm run typecheck
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     npm test

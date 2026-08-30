@@ -2,12 +2,14 @@ use std::fmt::{self, Display, Formatter};
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 use uuid::Uuid;
 
 macro_rules! define_id {
     ($name:ident) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
         #[serde(transparent)]
+        #[ts(type = "string")]
         pub struct $name(Uuid);
 
         impl $name {
@@ -55,7 +57,7 @@ define_id!(CheckoutPathId);
 define_id!(DocumentId);
 define_id!(AssociationId);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", content = "id", rename_all = "snake_case")]
 pub enum HierarchyRef {
     Workspace(WorkspaceId),
@@ -64,7 +66,7 @@ pub enum HierarchyRef {
     WorkItem(WorkItemId),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", content = "id", rename_all = "snake_case")]
 pub enum EntityRef {
     Workspace(WorkspaceId),

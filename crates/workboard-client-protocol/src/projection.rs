@@ -1,12 +1,13 @@
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
+use ts_rs::TS;
 
 use crate::{
     AssociationId, CheckoutId, CheckoutPathId, DocumentId, EpicId, FeatureId, HierarchyRef,
     RepositoryId, RepositoryPathId, SessionId, WorkItemId, WorkspaceId,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceReference {
     pub id: WorkspaceId,
@@ -14,7 +15,7 @@ pub struct WorkspaceReference {
     pub title: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RepositoryReference {
     pub id: RepositoryId,
@@ -23,7 +24,7 @@ pub struct RepositoryReference {
     pub title: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct EpicReference {
     pub id: EpicId,
@@ -32,7 +33,7 @@ pub struct EpicReference {
     pub title: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct FeatureReference {
     pub id: FeatureId,
@@ -41,7 +42,7 @@ pub struct FeatureReference {
     pub title: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkItemReference {
     pub id: WorkItemId,
@@ -59,7 +60,7 @@ pub struct SessionReference {
     pub native_id: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceSummary {
     pub workspace: WorkspaceReference,
@@ -70,14 +71,14 @@ pub struct WorkspaceSummary {
     pub session_count: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct HierarchyChildren {
     pub parent: HierarchyRef,
     pub children: Vec<HierarchyNode>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum HierarchyNode {
     Repository(RepositoryReference),
@@ -168,7 +169,7 @@ pub struct WorkItemProjection {
     pub repository_ids: Vec<RepositoryId>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", content = "id", rename_all = "snake_case")]
 pub enum OwnerProjection {
     Epic(EpicId),
@@ -209,7 +210,8 @@ pub struct CheckoutPathProjection {
     pub observed_until: Option<OffsetDateTime>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct EffectiveCheckoutProjection {
     pub feature_id: FeatureId,
     pub work_item_id: Option<WorkItemId>,
@@ -244,14 +246,14 @@ pub struct SessionAssociationProjection {
     pub associated_until: Option<OffsetDateTime>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum Provider {
     Claude,
     Codex,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkItemStatus {
     Backlog,
@@ -263,7 +265,7 @@ pub enum WorkItemStatus {
     Cancelled,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkflowState {
     Draft,
@@ -283,7 +285,7 @@ pub enum WorkflowState {
     Cancelled,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum CheckoutAvailability {
     Available,
@@ -292,7 +294,7 @@ pub enum CheckoutAvailability {
     Replaced,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum ManagedSessionRole {
     EpicNavigation,

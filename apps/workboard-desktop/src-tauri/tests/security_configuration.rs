@@ -138,6 +138,12 @@ fn isolation_and_frontend_have_no_alternate_native_or_network_bridge() {
     let source = desktop.join("src");
     let mut invoke_owners = Vec::new();
     for entry in walk(&source) {
+        if entry
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().ends_with(".test.ts"))
+        {
+            continue;
+        }
         let contents = read(&entry);
         for forbidden in [
             "@tauri-apps/plugin-",
@@ -157,7 +163,67 @@ fn isolation_and_frontend_have_no_alternate_native_or_network_bridge() {
             invoke_owners.push(entry);
         }
     }
-    assert_eq!(invoke_owners, vec![source.join("core").join("bridge.ts")]);
+    assert_eq!(invoke_owners, vec![source.join("core").join("daemon.ts")]);
+}
+
+#[test]
+fn generated_contracts_are_the_single_safe_frontend_protocol_surface() {
+    let desktop = desktop();
+    let source = desktop.join("src");
+    let generated = source.join("core/generated/contracts.ts");
+    let contracts = read(&generated);
+    for required in [
+        "export type RequestEnvelope",
+        "export type ResponseEnvelope",
+        "export type ProtocolError",
+        "export type CommandCapability",
+        "export type EventEnvelope",
+        "export type EventCursor",
+        "export type BootstrapHandshake",
+        "export type SubscriptionMessage",
+    ] {
+        assert!(contracts.contains(required), "{required}");
+    }
+    assert!(
+        contracts
+            .lines()
+            .any(|line| line.contains("board_snapshot") && line.contains("unknown"))
+    );
+    for forbidden in [
+        " token:",
+        " credential:",
+        " path:",
+        " paths:",
+        " url:",
+        " socket:",
+        " commandLine:",
+        " providerCommand:",
+        " internalDiagnostics:",
+        " gitCommonDirectory:",
+    ] {
+        assert!(!contracts.contains(forbidden), "{forbidden}");
+    }
+
+    for entry in walk(&source) {
+        if entry == generated {
+            continue;
+        }
+        let contents = read(&entry);
+        for duplicate in [
+            "interface BootstrapHandshake",
+            "interface QueryRequest",
+            "interface ExecuteRequest",
+            "type SubscriptionMessage =",
+            "type CommandOperation =",
+            "type ResponseEnvelope =",
+        ] {
+            assert!(
+                !contents.contains(duplicate),
+                "{}: {duplicate}",
+                entry.display()
+            );
+        }
+    }
 }
 
 #[test]
