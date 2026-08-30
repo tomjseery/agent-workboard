@@ -323,16 +323,14 @@ impl<'a> WorkProjectionService<'a> {
                         };
                         let live_status = live_status.as_deref().map(parse_wire).transpose()?;
                         let resumability = parse_wire(&resumability)?;
-                        let primary_writer = role == ManagedSessionRole::WorkItemExecution
-                            && associated_until.is_none()
-                            && managed_until.is_none()
-                            && purpose.as_deref() == Some("work_item_write");
+                        let current = associated_until.is_none() && managed_until.is_none();
+                        let primary_writer = is_primary_writer(role, current, purpose.as_deref());
                         let actions = session_actions(
                             work_item_id,
                             session_id,
                             live_status,
                             resumability,
-                            associated_until.is_none() && managed_until.is_none(),
+                            current,
                         );
                         Ok(SessionChoice {
                             session_id,
@@ -370,6 +368,12 @@ impl<'a> WorkProjectionService<'a> {
                 .collect()
         })
     }
+}
+
+fn is_primary_writer(role: ManagedSessionRole, current: bool, purpose: Option<&str>) -> bool {
+    role == ManagedSessionRole::WorkItemExecution
+        && current
+        && matches!(purpose, None | Some("work_item_write"))
 }
 
 fn readiness(
@@ -598,7 +602,7 @@ fn parse_time(value: &str) -> Result<OffsetDateTime, AppError> {
 mod tests {
     use workboard_core::{AvailableActionKind, FeatureId, Slug, WorkItemKey};
 
-    use super::{dependency_layer, readiness, work_item_actions};
+    use super::{dependency_layer, is_primary_writer, readiness, work_item_actions};
 
     fn item(status: workboard_core::WorkItemStatus, suffix: &str) -> workboard_core::WorkItem {
         workboard_core::WorkItem {
@@ -681,5 +685,29 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn legacy_current_execution_bindings_remain_primary_writers() {
+        assert!(is_primary_writer(
+            workboard_core::ManagedSessionRole::WorkItemExecution,
+            true,
+            None
+        ));
+        assert!(is_primary_writer(
+            workboard_core::ManagedSessionRole::WorkItemExecution,
+            true,
+            Some("work_item_write")
+        ));
+        assert!(!is_primary_writer(
+            workboard_core::ManagedSessionRole::WorkItemExecution,
+            true,
+            Some("writer_session")
+        ));
+        assert!(!is_primary_writer(
+            workboard_core::ManagedSessionRole::Review,
+            true,
+            None
+        ));
     }
 }
