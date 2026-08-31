@@ -338,6 +338,38 @@ impl FakeServer {
                     revision: 0,
                 })
             }
+            ReadQuery::ApprovalQueue => {
+                ResponseResult::ApprovalQueue(workboard_client_protocol::ApprovalQueueProjection {
+                    entries: Vec::new(),
+                    revision: self.revision(),
+                })
+            }
+            ReadQuery::FeatureProposal { feature_id } => ResponseResult::FeatureProposal(
+                workboard_client_protocol::FeatureProposalProjection {
+                    feature: workboard_client_protocol::FeatureReference {
+                        id: *feature_id,
+                        epic_id: "40000000-0000-0000-0000-000000000001"
+                            .parse()
+                            .expect("test Epic ID"),
+                        slug: "test-proposal".to_owned(),
+                        title: "Test proposal".to_owned(),
+                    },
+                    generation: 1,
+                    revision: self.revision(),
+                    proposal_hash: "a".repeat(64),
+                    submitted_at: "2026-08-31T12:00:00Z".to_owned(),
+                    changed_since_previous: false,
+                    feature_body: "Test proposal body".to_owned(),
+                    work_items: Vec::new(),
+                    repositories: Vec::new(),
+                    verification_gates: Vec::new(),
+                    warnings: Vec::new(),
+                    planner_sessions: Vec::new(),
+                    diagnostics: Vec::new(),
+                    workflow_state: workboard_client_protocol::WorkflowState::AwaitingApproval,
+                    available_actions: Vec::new(),
+                },
+            ),
             ReadQuery::RepositoryObservability { repository_id } => {
                 ResponseResult::RepositoryObservability(RepositoryObservabilityProjection {
                     repository: RepositoryReference {

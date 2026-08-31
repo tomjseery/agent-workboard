@@ -243,6 +243,8 @@ fn execute_protocol(
                     | ReadQuery::CheckoutObservability { .. }
                     | ReadQuery::SessionObservability { .. }
                     | ReadQuery::RecoveryPreview { .. }
+                    | ReadQuery::ApprovalQueue
+                    | ReadQuery::FeatureProposal { .. }
             );
             let revision = match application.projection_revision(core_id) {
                 Ok(revision) => revision,
@@ -280,6 +282,23 @@ fn execute_protocol(
                 ReadQuery::Attention { query } => application
                     .client_attention(core_id, query.clone())
                     .map(ResponseResult::Attention),
+                ReadQuery::ApprovalQueue
+                    if request.protocol_version == CURRENT_PROTOCOL_VERSION =>
+                {
+                    application
+                        .client_approval_queue(core_id)
+                        .map(ResponseResult::ApprovalQueue)
+                }
+                ReadQuery::FeatureProposal { feature_id }
+                    if request.protocol_version == CURRENT_PROTOCOL_VERSION =>
+                {
+                    application
+                        .client_feature_proposal(
+                            core_id,
+                            workboard_core::FeatureId::from_uuid(*feature_id.as_uuid()),
+                        )
+                        .map(ResponseResult::FeatureProposal)
+                }
                 ReadQuery::RepositoryObservability { repository_id }
                     if request.protocol_version == CURRENT_PROTOCOL_VERSION =>
                 {
@@ -323,7 +342,9 @@ fn execute_protocol(
                 ReadQuery::RepositoryObservability { .. }
                 | ReadQuery::CheckoutObservability { .. }
                 | ReadQuery::SessionObservability { .. }
-                | ReadQuery::RecoveryPreview { .. } => Err(AppError::External {
+                | ReadQuery::RecoveryPreview { .. }
+                | ReadQuery::ApprovalQueue
+                | ReadQuery::FeatureProposal { .. } => Err(AppError::External {
                     code: "projection_version_unavailable".to_owned(),
                     message:
                         "the requested projection is unavailable for the negotiated read version"
@@ -457,6 +478,15 @@ fn response_within_limits(result: &ResponseResult) -> bool {
             value.lanes.len() <= MAX_COLLECTION_ITEMS && value.cards.len() <= MAX_COLLECTION_ITEMS
         }
         ResponseResult::Attention(value) => value.entries.len() <= MAX_COLLECTION_ITEMS,
+        ResponseResult::ApprovalQueue(value) => value.entries.len() <= MAX_COLLECTION_ITEMS,
+        ResponseResult::FeatureProposal(value) => {
+            value.work_items.len() <= MAX_COLLECTION_ITEMS
+                && value.repositories.len() <= MAX_COLLECTION_ITEMS
+                && value.verification_gates.len() <= MAX_COLLECTION_ITEMS
+                && value.warnings.len() <= MAX_DIAGNOSTICS
+                && value.planner_sessions.len() <= MAX_COLLECTION_ITEMS
+                && value.diagnostics.len() <= MAX_DIAGNOSTICS
+        }
         ResponseResult::RepositoryObservability(value) => {
             value.display_paths.len() <= MAX_COLLECTION_ITEMS
                 && value.checkout_ids.len() <= MAX_COLLECTION_ITEMS

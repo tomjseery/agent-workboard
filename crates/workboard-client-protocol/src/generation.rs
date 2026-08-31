@@ -2,21 +2,23 @@ use serde_json::{Value, json};
 use ts_rs::{Config, TS};
 
 use crate::{
-    AssociationId, AttentionEntryProjection, AttentionPage, AttentionQuery, AttentionReason,
-    AttentionReasonCode, AvailableAction, BlockedByEvidence, BoardCardProjection,
-    BoardLaneProjection, BoardPage, BoardQuery, BoardViewDefinition, BoardViewDensity,
-    BoardViewFilters, BoardViewGrouping, BoardViewGroupingKind, BoardViewId,
-    BoardViewLaneDefinition, BoardViewSort, BoardViewSortDirection, BoardViewSortField,
-    CURRENT_PROTOCOL_VERSION, CheckoutAvailability, CheckoutBindingProjection, CheckoutId,
-    CheckoutObservabilityProjection, CheckoutPathId, CheckoutPurpose, CheckoutPurposeSource,
-    ClassifiedEvidence, CommandCapability, CommandCode, CommandOperation, DaemonInstanceId,
-    DependencyReadiness, Diagnostic, DocumentId, EffectiveCheckoutProjection, EntityRef, EpicId,
-    EpicReference, ErrorSeverity, EventCursor, EventEnvelope, EventId, EventKind, EventPayload,
-    EvidenceState, FeatureId, FeatureReference, HandshakeRequest, HandshakeResponse, Heartbeat,
+    ApprovalQueueItemProjection, ApprovalQueueProjection, AssociationId, AttentionEntryProjection,
+    AttentionPage, AttentionQuery, AttentionReason, AttentionReasonCode, AvailableAction,
+    BlockedByEvidence, BoardCardProjection, BoardLaneProjection, BoardPage, BoardQuery,
+    BoardViewDefinition, BoardViewDensity, BoardViewFilters, BoardViewGrouping,
+    BoardViewGroupingKind, BoardViewId, BoardViewLaneDefinition, BoardViewSort,
+    BoardViewSortDirection, BoardViewSortField, CURRENT_PROTOCOL_VERSION, CheckoutAvailability,
+    CheckoutBindingProjection, CheckoutId, CheckoutObservabilityProjection, CheckoutPathId,
+    CheckoutPurpose, CheckoutPurposeSource, ClassifiedEvidence, CommandCapability, CommandCode,
+    CommandOperation, DaemonInstanceId, DependencyReadiness, Diagnostic, DocumentId,
+    EffectiveCheckoutProjection, EntityRef, EpicId, EpicReference, ErrorSeverity, EventCursor,
+    EventEnvelope, EventId, EventKind, EventPayload, EvidenceState, FeatureId,
+    FeatureProposalProjection, FeatureReference, HandshakeRequest, HandshakeResponse, Heartbeat,
     HierarchyChildren, HierarchyEpic, HierarchyFeature, HierarchyNode, HierarchyRef,
     HierarchyWorkItem, InvalidationScope, ManagedSessionRole, ObservedDisplayPath, Operation,
     OwnerProjection, PREVIOUS_PROTOCOL_VERSION, ParallelReadiness, PartialOutcome,
-    PrimaryWriterEvidence, ProtocolError, Provider, ReadQuery, ReadQueryCode,
+    PlannerSessionProjection, PrimaryWriterEvidence, ProposalWarningProjection,
+    ProposedWorkItemProjection, ProtocolError, Provider, ReadQuery, ReadQueryCode,
     RecoveryDispositionProjection, RecoveryPreviewProjection, RepositoryId,
     RepositoryObservabilityProjection, RepositoryPathId, RepositoryReference, RequestEnvelope,
     RequestId, ResponseEnvelope, ResponseResult, ResyncReason, ResyncRequirement, ServerMessage,
@@ -149,6 +151,61 @@ fn recovery_preview() -> Value {
     })
 }
 
+fn feature_proposal() -> Value {
+    json!({
+        "feature": { "id": FEATURE_ID, "epicId": EPIC_ID, "slug": "fixture-feature", "title": "Fixture Feature" },
+        "generation": 2,
+        "revision": 41,
+        "proposalHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "submittedAt": "2026-08-30T12:00:00Z",
+        "changedSincePrevious": true,
+        "featureBody": "# Fixture Feature\n\n<script>not executable</script>\n\n[unsafe](javascript:alert(1))",
+        "workItems": [{
+            "id": WORK_ITEM_ID,
+            "slug": "fixture-work-item",
+            "title": "Fixture Work item",
+            "body": "Review the complete proposal as text.",
+            "repositories": [{ "id": REPOSITORY_ID, "workspaceId": WORKSPACE_ID, "slug": "fixture-repository", "title": "Fixture Repository" }],
+            "dependencies": [],
+            "position": 1
+        }],
+        "repositories": [{ "id": REPOSITORY_ID, "workspaceId": WORKSPACE_ID, "slug": "fixture-repository", "title": "Fixture Repository" }],
+        "verificationGates": ["The focused verification suite passes."],
+        "warnings": [{ "code": "proposal_changed", "severity": "warning", "message": "This proposal replaces an earlier submitted generation." }],
+        "plannerSessions": [{ "id": SESSION_ID, "provider": "codex", "role": "feature_planning", "bindingState": "current", "liveState": "active", "lastActivityAt": "2026-08-30T12:00:00Z" }],
+        "diagnostics": [],
+        "workflowState": "awaiting_approval",
+        "availableActions": [{
+            "code": "approve_feature",
+            "available": false,
+            "unavailableReason": { "code": "publication_policy_unavailable", "message": "Desktop approval actions are unavailable until the daemon accepts the typed publication policy." },
+            "expectedRevision": 41
+        }]
+    })
+}
+
+fn approval_queue() -> Value {
+    let proposal = feature_proposal();
+    json!({
+        "entries": [{
+            "feature": proposal["feature"],
+            "generation": proposal["generation"],
+            "revision": proposal["revision"],
+            "proposalHash": proposal["proposalHash"],
+            "submittedAt": proposal["submittedAt"],
+            "changedSincePrevious": proposal["changedSincePrevious"],
+            "workflowState": proposal["workflowState"],
+            "repositories": proposal["repositories"],
+            "warningCount": 1,
+            "plannerCount": 1,
+            "availableActions": proposal["availableActions"],
+            "position": 1,
+            "totalCount": 1
+        }],
+        "revision": 41
+    })
+}
+
 pub fn typescript_declarations() -> String {
     let config = Config::default();
     let mut declarations = Vec::new();
@@ -192,6 +249,12 @@ pub fn typescript_declarations() -> String {
     declaration!(AttentionQuery);
     declaration!(BoardPage);
     declaration!(AttentionPage);
+    declaration!(ApprovalQueueProjection);
+    declaration!(ApprovalQueueItemProjection);
+    declaration!(FeatureProposalProjection);
+    declaration!(ProposedWorkItemProjection);
+    declaration!(ProposalWarningProjection);
+    declaration!(PlannerSessionProjection);
     declaration!(BoardLaneProjection);
     declaration!(BoardCardProjection);
     declaration!(AttentionEntryProjection);
@@ -303,6 +366,8 @@ pub fn conformance_fixture(protocol_version: u32) -> Value {
             })),
             "board": query_request(json!({ "type": "board", "value": { "query": board_query() } })),
             "attention": query_request(json!({ "type": "attention", "value": { "query": { "cursor": null, "limit": 100, "repositoryIds": [], "reasonCodes": [] } } })),
+            "approvalQueue": query_request(json!({ "type": "approval_queue" })),
+            "featureProposal": query_request(json!({ "type": "feature_proposal", "value": { "featureId": FEATURE_ID } })),
             "repositoryObservability": query_request(json!({ "type": "repository_observability", "value": { "repositoryId": REPOSITORY_ID } })),
             "checkoutObservability": query_request(json!({ "type": "checkout_observability", "value": { "checkoutId": CHECKOUT_ID } })),
             "sessionObservability": query_request(json!({ "type": "session_observability", "value": { "sessionId": SESSION_ID } })),
@@ -409,10 +474,19 @@ fn read_requests(protocol_version: u32) -> Vec<Value> {
     if protocol_version == CURRENT_PROTOCOL_VERSION {
         requests.insert(6, request(json!({ "type": "query", "value": { "type": "board", "value": { "query": board_query() } } }), protocol_version, Some(WORKSPACE_ID)));
         requests.insert(7, request(json!({ "type": "query", "value": { "type": "attention", "value": { "query": { "cursor": null, "limit": 100, "repositoryIds": [], "reasonCodes": [] } } } }), protocol_version, Some(WORKSPACE_ID)));
-        requests.insert(8, request(json!({ "type": "query", "value": { "type": "repository_observability", "value": { "repositoryId": REPOSITORY_ID } } }), protocol_version, Some(WORKSPACE_ID)));
-        requests.insert(9, request(json!({ "type": "query", "value": { "type": "checkout_observability", "value": { "checkoutId": CHECKOUT_ID } } }), protocol_version, Some(WORKSPACE_ID)));
-        requests.insert(10, request(json!({ "type": "query", "value": { "type": "session_observability", "value": { "sessionId": SESSION_ID } } }), protocol_version, Some(WORKSPACE_ID)));
-        requests.insert(11, request(json!({ "type": "query", "value": { "type": "recovery_preview", "value": { "sessionId": SESSION_ID } } }), protocol_version, Some(WORKSPACE_ID)));
+        requests.insert(
+            8,
+            request(
+                json!({ "type": "query", "value": { "type": "approval_queue" } }),
+                protocol_version,
+                Some(WORKSPACE_ID),
+            ),
+        );
+        requests.insert(9, request(json!({ "type": "query", "value": { "type": "feature_proposal", "value": { "featureId": FEATURE_ID } } }), protocol_version, Some(WORKSPACE_ID)));
+        requests.insert(10, request(json!({ "type": "query", "value": { "type": "repository_observability", "value": { "repositoryId": REPOSITORY_ID } } }), protocol_version, Some(WORKSPACE_ID)));
+        requests.insert(11, request(json!({ "type": "query", "value": { "type": "checkout_observability", "value": { "checkoutId": CHECKOUT_ID } } }), protocol_version, Some(WORKSPACE_ID)));
+        requests.insert(12, request(json!({ "type": "query", "value": { "type": "session_observability", "value": { "sessionId": SESSION_ID } } }), protocol_version, Some(WORKSPACE_ID)));
+        requests.insert(13, request(json!({ "type": "query", "value": { "type": "recovery_preview", "value": { "sessionId": SESSION_ID } } }), protocol_version, Some(WORKSPACE_ID)));
     }
     requests
 }
@@ -659,25 +733,39 @@ fn response_results(protocol_version: u32) -> Vec<Value> {
             8,
             response_envelope(
                 protocol_version,
-                json!({ "type": "repository_observability", "value": repository_observability() }),
+                json!({ "type": "approval_queue", "value": approval_queue() }),
             ),
         );
         results.insert(
             9,
             response_envelope(
                 protocol_version,
-                json!({ "type": "checkout_observability", "value": checkout_observability() }),
+                json!({ "type": "feature_proposal", "value": feature_proposal() }),
             ),
         );
         results.insert(
             10,
             response_envelope(
                 protocol_version,
-                json!({ "type": "session_observability", "value": session_observability() }),
+                json!({ "type": "repository_observability", "value": repository_observability() }),
             ),
         );
         results.insert(
             11,
+            response_envelope(
+                protocol_version,
+                json!({ "type": "checkout_observability", "value": checkout_observability() }),
+            ),
+        );
+        results.insert(
+            12,
+            response_envelope(
+                protocol_version,
+                json!({ "type": "session_observability", "value": session_observability() }),
+            ),
+        );
+        results.insert(
+            13,
             response_envelope(
                 protocol_version,
                 json!({ "type": "recovery_preview", "value": recovery_preview() }),
@@ -802,7 +890,7 @@ fn server_messages(protocol_version: u32) -> Vec<Value> {
 fn discriminants() -> Value {
     json!({
         "operations": ["handshake", "query", "command", "subscribe"],
-        "readQueries": ["workspace_summary", "hierarchy_children", "workspace_hierarchy", "board_views", "board_view", "board", "attention", "repository_observability", "checkout_observability", "session_observability", "recovery_preview", "board_snapshot"],
+        "readQueries": ["workspace_summary", "hierarchy_children", "workspace_hierarchy", "board_views", "board_view", "board", "attention", "approval_queue", "feature_proposal", "repository_observability", "checkout_observability", "session_observability", "recovery_preview", "board_snapshot"],
         "responseResults": [
             "handshake",
             "workspace_summary",
@@ -812,6 +900,8 @@ fn discriminants() -> Value {
             "board_view",
             "board",
             "attention",
+            "approval_queue",
+            "feature_proposal",
             "repository_observability",
             "checkout_observability",
             "session_observability",
@@ -840,6 +930,7 @@ fn discriminants() -> Value {
             "partial_outcome_recorded",
             "checkout_changed",
             "session_liveness_changed"
+            ,"proposal_changed"
         ],
         "eventPayloads": [
             { "type": "projection_changed", "value": {
@@ -851,6 +942,7 @@ fn discriminants() -> Value {
             ,{ "type": "board_card_changed", "value": { "card": board_card() }}
             ,{ "type": "checkout_changed", "value": { "checkout": checkout_observability(), "cards": [board_card()] }}
             ,{ "type": "session_liveness_changed", "value": { "session": session_observability(), "recovery": recovery_preview(), "cards": [board_card()] }}
+            ,{ "type": "proposal_changed", "value": { "proposal": feature_proposal(), "queueItem": approval_queue()["entries"][0] }}
         ],
         "resyncReasons": [
             "gap",
@@ -860,7 +952,7 @@ fn discriminants() -> Value {
             "heartbeat_lost"
         ],
         "errorSeverities": ["info", "warning", "error", "fatal"],
-        "readQueryCodes": ["workspace_summary", "hierarchy_children", "workspace_hierarchy", "board_views", "board_view", "board", "attention", "repository_observability", "checkout_observability", "session_observability", "recovery_preview", "board_snapshot"],
+        "readQueryCodes": ["workspace_summary", "hierarchy_children", "workspace_hierarchy", "board_views", "board_view", "board", "attention", "approval_queue", "feature_proposal", "repository_observability", "checkout_observability", "session_observability", "recovery_preview", "board_snapshot"],
         "hierarchyRefs": [
             { "kind": "workspace", "id": WORKSPACE_ID },
             { "kind": "epic", "id": EPIC_ID },

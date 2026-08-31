@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-const featureSources = import.meta.glob("./{workspace,hierarchy,saved-views,board,repository,checkout,session}/**/*.{ts,tsx}", {
+const featureSources = import.meta.glob("./{workspace,hierarchy,saved-views,board,repository,checkout,session,proposal}/**/*.{ts,tsx}", {
   eager: true,
   import: "default",
   query: "?raw",
@@ -20,6 +20,7 @@ const savedViewSources = import.meta.glob("./saved-views/**/*.{ts,tsx}", {
 
 const boardStoreSources = import.meta.glob("./board/store/**/*.{ts,tsx}", { eager: true, import: "default", query: "?raw" }) as Record<string, string>;
 const operationalSources = import.meta.glob("./{repository,checkout,session}/**/*.{ts,tsx}", { eager: true, import: "default", query: "?raw" }) as Record<string, string>;
+const proposalSources = import.meta.glob("./proposal/**/*.{ts,tsx}", { eager: true, import: "default", query: "?raw" }) as Record<string, string>;
 
 describe("feature authority boundaries", () => {
   it("keeps feature slices behind generated contracts and the daemon facade", () => {
@@ -56,5 +57,12 @@ describe("feature authority boundaries", () => {
     expect(implementation).not.toMatch(/BoardCardProjection|AttentionEntryProjection|DependencyReadiness|SessionSummary|AvailableAction/);
     expect(implementation).toContain("selectedWorkItemId");
     expect(implementation).toContain("focusedWorkItemId");
+  });
+
+  it("keeps proposal authority and unsafe native surfaces outside React", () => {
+    for (const [path, source] of Object.entries(proposalSources)) {
+      if (path.includes(".test.")) continue;
+      expect(source).not.toMatch(/zustand|createStore|useStore|@tauri-apps\/api|\binvoke\s*\(|\bChannel\b|node:fs|child_process|process\.|transcript|credential|planning[_-]store|publication[_-](?:store|retry)|workboard\s+workflow|dangerouslySetInnerHTML|javascript:/i);
+    }
   });
 });

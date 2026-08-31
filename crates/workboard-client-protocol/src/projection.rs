@@ -340,6 +340,82 @@ pub struct AttentionPage {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+pub struct FeatureProposalProjection {
+    pub feature: FeatureReference,
+    pub generation: u64,
+    pub revision: u64,
+    pub proposal_hash: String,
+    pub submitted_at: String,
+    pub changed_since_previous: bool,
+    pub feature_body: String,
+    pub work_items: Vec<ProposedWorkItemProjection>,
+    pub repositories: Vec<RepositoryReference>,
+    pub verification_gates: Vec<String>,
+    pub warnings: Vec<ProposalWarningProjection>,
+    pub planner_sessions: Vec<PlannerSessionProjection>,
+    pub diagnostics: Vec<crate::Diagnostic>,
+    pub workflow_state: WorkflowState,
+    pub available_actions: Vec<AvailableAction>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProposedWorkItemProjection {
+    pub id: WorkItemId,
+    pub slug: String,
+    pub title: String,
+    pub body: String,
+    pub repositories: Vec<RepositoryReference>,
+    pub dependencies: Vec<String>,
+    pub position: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProposalWarningProjection {
+    pub code: String,
+    pub severity: crate::ErrorSeverity,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PlannerSessionProjection {
+    pub id: SessionId,
+    pub provider: Provider,
+    pub role: ManagedSessionRole,
+    pub binding_state: SessionBindingState,
+    pub live_state: SessionLiveState,
+    pub last_activity_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalQueueProjection {
+    pub entries: Vec<ApprovalQueueItemProjection>,
+    pub revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalQueueItemProjection {
+    pub feature: FeatureReference,
+    pub generation: u64,
+    pub revision: u64,
+    pub proposal_hash: String,
+    pub submitted_at: String,
+    pub changed_since_previous: bool,
+    pub workflow_state: WorkflowState,
+    pub repositories: Vec<RepositoryReference>,
+    pub warning_count: usize,
+    pub planner_count: usize,
+    pub available_actions: Vec<AvailableAction>,
+    pub position: usize,
+    pub total_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct BoardLaneProjection {
     pub key: String,
     pub title: String,

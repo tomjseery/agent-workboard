@@ -400,7 +400,7 @@ Disable the observability routes independently; no checkout/session state is sto
 
 ### 7. Deliver Feature proposal detail and approval queues
 
-- Status: [ ]
+- Status: [x]
 - Slug: `deliver-feature-proposal-and-approval-queues`
 - Dependencies: items 4 and 5
 - Mutation gate: accepted Autonomous publication policy and daemon-advertised approval operations
