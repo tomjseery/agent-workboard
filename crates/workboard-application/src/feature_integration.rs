@@ -429,6 +429,16 @@ impl<'a> FeatureIntegrationService<'a> {
                  )",
                 params![run_id, result_head, at],
             )?;
+            transaction.execute(
+                "UPDATE work_items
+                 SET status = 'done'
+                 WHERE id = ?1 AND status = 'review'
+                   AND NOT EXISTS (
+                       SELECT 1 FROM work_item_integrations
+                       WHERE work_item_id = ?1 AND status <> 'integrated'
+                   )",
+                [work_item_id.to_string()],
+            )?;
             Ok(())
         })
     }
@@ -820,7 +830,8 @@ mod tests {
     use tempfile::TempDir;
     use time::OffsetDateTime;
     use workboard_core::{
-        CheckoutId, DocumentId, EpicId, FeatureId, RepositoryId, WorkItemId, WorkspaceId,
+        CheckoutId, DocumentId, EpicId, FeatureId, RepositoryId, WorkItemId, WorkItemStatus,
+        WorkspaceId,
     };
 
     use super::{
@@ -1148,6 +1159,14 @@ mod tests {
             git.merged.borrow().as_slice(),
             ["root-head".to_owned(), "middle-head".to_owned()]
         );
+        let root = WorkProjectionService::new(&fixture.store)
+            .project(fixture.root_id)
+            .expect("root projection");
+        let middle = WorkProjectionService::new(&fixture.store)
+            .project(fixture.middle_id)
+            .expect("middle projection");
+        assert_eq!(root.work_item.status, WorkItemStatus::Done);
+        assert_eq!(middle.work_item.status, WorkItemStatus::Done);
         let leaf = WorkProjectionService::new(&fixture.store)
             .project(fixture.leaf_id)
             .expect("leaf projection");
@@ -1180,6 +1199,14 @@ mod tests {
         assert_eq!(outcome.status, "conflict");
         assert_eq!(outcome.steps[0].status, "integrated");
         assert_eq!(outcome.steps[1].status, "conflict");
+        let root = WorkProjectionService::new(&fixture.store)
+            .project(fixture.root_id)
+            .expect("root projection");
+        let middle = WorkProjectionService::new(&fixture.store)
+            .project(fixture.middle_id)
+            .expect("middle projection");
+        assert_eq!(root.work_item.status, WorkItemStatus::Done);
+        assert_eq!(middle.work_item.status, WorkItemStatus::Review);
         assert!(
             outcome.steps[1]
                 .conflict

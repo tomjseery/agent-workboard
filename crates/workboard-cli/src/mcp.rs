@@ -189,6 +189,22 @@ fn tool_definitions() -> Value {
             }
         },
         {
+            "name": "work_items_propose",
+            "description": "Submit additional Work items for the assigned published Feature for explicit user approval.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["featureId", "workItems", "expectedFeatureContentHash", "expectedRepositoryHead", "idempotencyKey"],
+                "properties": {
+                    "featureId": { "type": "string", "format": "uuid" },
+                    "workItems": { "type": "array", "minItems": 1, "items": { "type": "object" } },
+                    "expectedFeatureContentHash": { "type": "string", "minLength": 64, "maxLength": 64 },
+                    "expectedRepositoryHead": { "type": "string", "minLength": 40 },
+                    "idempotencyKey": { "type": "string", "minLength": 1 }
+                },
+                "additionalProperties": false
+            }
+        },
+        {
             "name": "work_checkpoint",
             "description": "Record durable Work-item knowledge and its next action.",
             "inputSchema": {
@@ -314,6 +330,15 @@ fn call_tool(application: &mut WorkboardApplication, request: &Value) -> Result<
                     .publish_approved(request.feature_id, now)?,
             )?
         }
+        "work_items_propose" => {
+            let mut request: Value = arguments;
+            request["proposedAt"] = json!(now.format(&Rfc3339).unwrap_or_default());
+            serde_json::to_value(
+                application
+                    .feature_work_item_planning()
+                    .propose(&token, serde_json::from_value(request)?)?,
+            )?
+        }
         "work_checkpoint" => {
             let request: WorkItemCheckpointRequest = serde_json::from_value(arguments)?;
             serde_json::to_value(application.workflow_operations().checkpoint(
@@ -398,6 +423,7 @@ mod tests {
                 "feature_propose",
                 "feature_submit_proposal",
                 "feature_publish",
+                "work_items_propose",
                 "work_checkpoint",
                 "session_request",
                 "session_send_follow_up"
@@ -457,6 +483,6 @@ mod tests {
             }),
         )
         .expect("tools response");
-        assert_eq!(listed["result"]["tools"].as_array().map(Vec::len), Some(9));
+        assert_eq!(listed["result"]["tools"].as_array().map(Vec::len), Some(10));
     }
 }

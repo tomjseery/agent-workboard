@@ -215,6 +215,12 @@ impl WorkboardApplication {
         PlanningWorkflowService::new(&mut self.store)
     }
 
+    pub fn feature_work_item_planning(
+        &mut self,
+    ) -> crate::feature_work_item_planning::FeatureWorkItemPlanningService<'_> {
+        crate::feature_work_item_planning::FeatureWorkItemPlanningService::new(&mut self.store)
+    }
+
     pub fn recovery(&mut self) -> RecoveryService<'_> {
         RecoveryService::new(&mut self.store)
     }
@@ -464,6 +470,44 @@ impl WorkboardApplication {
                 repository_id: parse_id(repository_id)?,
                 path: PathBuf::from(path),
                 title: title.clone(),
+            })
+        })
+    }
+
+    pub fn feature_checkout(
+        &self,
+        feature_id: workboard_core::FeatureId,
+        repository_id: RepositoryId,
+    ) -> Result<ManagedCheckout, AppError> {
+        self.store.read(|connection| {
+            let row = connection
+                .query_row(
+                    "SELECT checkout.id, path.path, feature.title
+                     FROM feature_checkouts feature_checkout
+                     JOIN checkouts checkout
+                       ON checkout.id = feature_checkout.checkout_id
+                      AND checkout.availability = 'available'
+                     JOIN checkout_paths path
+                       ON path.checkout_id = checkout.id AND path.observed_until IS NULL
+                     JOIN features feature ON feature.id = feature_checkout.feature_id
+                     WHERE feature_checkout.feature_id = ?1
+                       AND feature_checkout.repository_id = ?2",
+                    params![feature_id.to_string(), repository_id.to_string()],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                        ))
+                    },
+                )
+                .optional()?
+                .ok_or(AppError::ResumeCheckoutRequired)?;
+            Ok(ManagedCheckout {
+                checkout_id: parse_id(&row.0)?,
+                repository_id,
+                path: PathBuf::from(row.1),
+                title: row.2,
             })
         })
     }

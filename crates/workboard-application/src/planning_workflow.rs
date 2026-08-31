@@ -860,6 +860,9 @@ pub(crate) fn activate_planning_for_binding(
         return Ok(());
     };
     let draft = draft_by_feature(transaction, feature_id)?;
+    if draft.state == WorkflowState::Planned {
+        return Ok(());
+    }
     if draft.state == WorkflowState::PlanningActive {
         return Ok(());
     }
@@ -1463,6 +1466,7 @@ mod tests {
     use super::{CreateFeaturePlanning, FeatureProposal, ProposedWorkItem};
     use crate::AppError;
     use crate::checkout::PrepareFeatureCheckout;
+    use crate::feature_work_item_planning::ProposeFeatureWorkItems;
     use crate::hooks::HookIngestionMutation;
     use crate::planning_store::PlanningStore;
     use crate::session_launch::BeginManagedSessionLaunch;
@@ -1904,6 +1908,121 @@ mod tests {
         .parse::<u32>()
         .expect("published commit count");
         assert_eq!(published_count, before_count + 1);
+    }
+
+    #[test]
+    fn published_feature_planner_adds_approval_gated_work_items_without_execution_assignment() {
+        let mut fixture = fixture();
+        let active = activate_planning(&mut fixture, Tool::Claude);
+        fixture
+            .app
+            .planning_workflows()
+            .submit_proposal(
+                active.draft.feature_id,
+                &active.workflow_token,
+                proposal(&active, fixture.repository_id),
+                "initial-feature-proposal",
+                fixture.at + time::Duration::minutes(3),
+            )
+            .expect("submit initial proposal");
+        fixture
+            .app
+            .planning_workflows()
+            .approve_proposal(
+                active.draft.feature_id,
+                fixture.at + time::Duration::minutes(4),
+            )
+            .expect("approve initial proposal");
+        fixture
+            .app
+            .planning_workflows()
+            .publish_approved(
+                active.draft.feature_id,
+                fixture.at + time::Duration::minutes(5),
+            )
+            .expect("publish initial Feature");
+
+        let hierarchy = fixture
+            .app
+            .assigned_hierarchy(
+                &active.workflow_token,
+                fixture.at + time::Duration::minutes(6),
+            )
+            .expect("read assigned hierarchy");
+        let feature_hash = hierarchy
+            .documents
+            .iter()
+            .find(|document| {
+                document.document.owner == HierarchyOwner::Feature(active.draft.feature_id)
+            })
+            .map(|document| document.document.content_hash.clone())
+            .expect("Feature document hash");
+        let request = ProposeFeatureWorkItems {
+            feature_id: active.draft.feature_id,
+            work_items: vec![ProposedWorkItem {
+                slug: Slug::new("docs").expect("Work-item slug"),
+                title: "Availability documentation".to_owned(),
+                body: "# Availability documentation\n\nDocument the endpoint.\n".to_owned(),
+                repository_ids: vec![fixture.repository_id],
+                dependencies: vec![Slug::new("api").expect("dependency slug")],
+            }],
+            expected_feature_content_hash: feature_hash,
+            expected_repository_head: active.draft.repository_head,
+            idempotency_key: "add-docs-work-item".to_owned(),
+            proposed_at: fixture.at + time::Duration::minutes(6),
+        };
+        let proposed = fixture
+            .app
+            .feature_work_item_planning()
+            .propose(&active.workflow_token, request.clone())
+            .expect("propose additional Work item");
+        let repeated = fixture
+            .app
+            .feature_work_item_planning()
+            .propose(&active.workflow_token, request)
+            .expect("repeat proposal");
+        assert_eq!(repeated.id, proposed.id);
+
+        let before = fixture
+            .app
+            .snapshot(fixture.workspace_id)
+            .expect("snapshot");
+        assert!(
+            !before
+                .work_items
+                .iter()
+                .any(|item| item.slug.as_str() == "docs")
+        );
+        let publication = fixture
+            .app
+            .feature_work_item_planning()
+            .approve(&proposed.id, fixture.at + time::Duration::minutes(7))
+            .expect("approve additional Work item");
+        let repeated_publication = fixture
+            .app
+            .feature_work_item_planning()
+            .approve(&proposed.id, fixture.at + time::Duration::minutes(8))
+            .expect("repeat approval");
+        assert_eq!(repeated_publication, publication);
+        let after = fixture
+            .app
+            .snapshot(fixture.workspace_id)
+            .expect("snapshot");
+        let item = after
+            .work_items
+            .iter()
+            .find(|item| item.slug.as_str() == "docs")
+            .expect("published Work item");
+        assert_eq!(item.status, workboard_core::WorkItemStatus::Backlog);
+        assert_eq!(item.repository_ids, vec![fixture.repository_id]);
+        assert!(
+            fixture
+                .app
+                .work_item_projection(item.id)
+                .expect("projection")
+                .sessions
+                .is_empty()
+        );
     }
 
     #[test]

@@ -3261,7 +3261,7 @@ mod tests {
                 .health()
                 .expect("repaired schema 30 health")
                 .schema_version,
-            40
+            41
         );
         let (membership_count, evidence_count, source_evidence_count): (i64, i64, i64) = application
             .store
@@ -3608,7 +3608,7 @@ mod tests {
                 .health()
                 .expect("repaired schema 30 health")
                 .schema_version,
-            40
+            41
         );
         let replay = application
             .apply_concertable_import(workspace.workspace.id, repository.id, &preview)
@@ -3868,7 +3868,7 @@ mod tests {
                 .health()
                 .expect("schema 30 health")
                 .schema_version,
-            40
+            41
         );
         let replay = application
             .apply_concertable_import(workspace.workspace.id, repository.id, &preview)
@@ -4114,7 +4114,7 @@ mod tests {
                 .health()
                 .expect("repaired schema 30 health")
                 .schema_version,
-            40
+            41
         );
         let replay = application
             .apply_concertable_import(workspace.workspace.id, repository.id, &preview)
@@ -4310,7 +4310,7 @@ mod tests {
                 .health()
                 .expect("upgraded storage health")
                 .schema_version,
-            40
+            41
         );
     }
 

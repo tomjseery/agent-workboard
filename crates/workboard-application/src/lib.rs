@@ -8,6 +8,7 @@ pub mod checkout;
 pub mod concertable_import;
 mod error;
 pub mod feature_integration;
+pub mod feature_work_item_planning;
 pub mod follow_up;
 pub mod git;
 pub mod hooks;

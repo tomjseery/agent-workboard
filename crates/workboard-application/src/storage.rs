@@ -12,7 +12,7 @@ use workboard_core::{ConversationId, LaunchLeaseId};
 
 use crate::AppError;
 
-const CURRENT_SCHEMA_VERSION: i64 = 40;
+const CURRENT_SCHEMA_VERSION: i64 = 41;
 const FOUNDATION_SCHEMA_CHECKSUM: &str = "agent-workboard-foundation-v1";
 const WORKSPACE_PLANNING_SCHEMA_CHECKSUM: &str = "agent-workboard-workspace-planning-v1";
 const WORK_ITEM_DEPENDENCY_SCHEMA_CHECKSUM: &str = "agent-workboard-work-item-dependency-v1";
@@ -27,6 +27,27 @@ const WRITER_SESSION_RESERVATION_SCHEMA_CHECKSUM: &str =
 const MANAGED_LAUNCH_BATCH_SCHEMA_CHECKSUM: &str = "agent-workboard-managed-launch-batch-v1";
 const FEATURE_BRANCH_INTEGRATION_SCHEMA_CHECKSUM: &str =
     "agent-workboard-feature-branch-integration-v1";
+const FEATURE_WORK_ITEM_PROPOSAL_SCHEMA_CHECKSUM: &str =
+    "agent-workboard-feature-work-item-proposal-v1";
+const FEATURE_WORK_ITEM_PROPOSAL_SQL: &str = r#"
+CREATE TABLE feature_work_item_proposals (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE RESTRICT,
+    feature_id TEXT NOT NULL REFERENCES features(id) ON DELETE RESTRICT,
+    repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE RESTRICT,
+    session_id TEXT NOT NULL REFERENCES native_sessions(id) ON DELETE RESTRICT,
+    idempotency_key TEXT NOT NULL UNIQUE CHECK (idempotency_key <> ''),
+    proposal_json TEXT NOT NULL CHECK (proposal_json <> ''),
+    observed_feature_hash TEXT NOT NULL CHECK (length(observed_feature_hash) = 64),
+    observed_repository_head TEXT NOT NULL CHECK (observed_repository_head <> ''),
+    status TEXT NOT NULL CHECK (status IN ('awaiting_approval', 'approved', 'rejected')),
+    outcome_json TEXT,
+    created_at TEXT NOT NULL,
+    decided_at TEXT
+);
+CREATE INDEX feature_work_item_proposals_feature
+    ON feature_work_item_proposals (feature_id, status, created_at);
+"#;
 const FEATURE_BRANCH_INTEGRATION_SQL: &str = r#"
 CREATE TABLE feature_integration_runs (
     id TEXT PRIMARY KEY,
@@ -2792,6 +2813,12 @@ fn migrate(connection: &Connection) -> Result<(), AppError> {
         FEATURE_BRANCH_INTEGRATION_SCHEMA_CHECKSUM,
         FEATURE_BRANCH_INTEGRATION_SQL,
     )?;
+    apply_migration(
+        connection,
+        41,
+        FEATURE_WORK_ITEM_PROPOSAL_SCHEMA_CHECKSUM,
+        FEATURE_WORK_ITEM_PROPOSAL_SQL,
+    )?;
     Ok(())
 }
 
@@ -3720,7 +3747,10 @@ fn health(connection: &Connection) -> Result<StorageHealth, AppError> {
 pub(crate) fn drop_workspace_planning_schema(connection: &Connection) {
     connection
         .execute_batch(
-            r#"DROP TABLE feature_integration_steps;
+            r#"DROP TABLE feature_work_item_proposals;
+            DELETE FROM schema_migrations WHERE version = 41;
+
+            DROP TABLE feature_integration_steps;
             DROP TABLE work_item_integrations;
             DROP TABLE feature_integration_runs;
             DELETE FROM schema_migrations WHERE version = 40;
@@ -4161,7 +4191,7 @@ mod tests {
                 "launch-intent".to_owned()
             )
         );
-        assert_eq!(store.health().expect("storage health").schema_version, 40);
+        assert_eq!(store.health().expect("storage health").schema_version, 41);
         assert!(store.health().expect("storage health").is_healthy());
     }
 
@@ -4860,7 +4890,7 @@ mod tests {
         assert_eq!(preserved_attestation, valid_attestation);
         assert_eq!(legacy_authority, "immutable_evidence");
         let health = store.health().expect("storage health");
-        assert_eq!(health.schema_version, 40);
+        assert_eq!(health.schema_version, 41);
         assert!(health.is_healthy());
         let audited_attestations: Vec<(String, String, String, String)> = store
             .read(|connection| {
@@ -4905,7 +4935,7 @@ mod tests {
             .expect("read upgraded schema 20 attestations");
         assert_eq!(upgraded_attestations, audited_attestations);
         let health = store.health().expect("upgraded storage health");
-        assert_eq!(health.schema_version, 40);
+        assert_eq!(health.schema_version, 41);
         assert!(health.is_healthy());
         drop(store);
 
