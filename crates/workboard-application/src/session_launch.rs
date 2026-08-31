@@ -2075,6 +2075,21 @@ mod tests {
             super::HookIngestionOutcome::Observed { session_id, .. } => session_id,
             super::HookIngestionOutcome::Bound { .. } => panic!("unexpected managed binding"),
         };
+        let unmanaged_tracking = fixture
+            .store
+            .read(|connection| {
+                connection
+                    .query_row(
+                        "SELECT
+                    (SELECT COUNT(*) FROM managed_sessions WHERE session_id = ?1),
+                    (SELECT COUNT(*) FROM native_session_associations WHERE session_id = ?1)",
+                        [unmanaged_id.to_string()],
+                        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+                    )
+                    .map_err(Into::into)
+            })
+            .expect("unmanaged tracking state");
+        assert_eq!(unmanaged_tracking, (0, 0));
         assert!(matches!(
             SessionLaunchService::new(&mut fixture.store).close(
                 unmanaged_id,

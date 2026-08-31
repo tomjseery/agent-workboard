@@ -4,11 +4,13 @@ import { useEffect } from "react";
 import type { WorkspaceId } from "../core/generated";
 import { AttentionPage } from "../features/board/pages/AttentionPage";
 import { BoardPage } from "../features/board/pages/BoardPage";
+import { CheckoutPage } from "../features/checkout/pages/CheckoutPage";
 import { EpicPage } from "../features/hierarchy/pages/EpicPage";
 import { FeaturePage } from "../features/hierarchy/pages/FeaturePage";
 import { RepositoryPage } from "../features/hierarchy/pages/RepositoryPage";
 import { WorkItemPage } from "../features/hierarchy/pages/WorkItemPage";
 import { SavedViewPage } from "../features/saved-views/pages/SavedViewPage";
+import { SessionPage } from "../features/session/pages/SessionPage";
 import { WorkspacePage } from "../features/workspace/pages/WorkspacePage";
 import { hierarchySearchSchema } from "./search";
 
@@ -35,8 +37,10 @@ const workItemRoute = createRoute({ getParentRoute: () => rootRoute, path: "/wor
 const savedViewRoute = createRoute({ getParentRoute: () => rootRoute, path: "/workspaces/$workspaceId/views/$viewId", validateSearch: hierarchySearchSchema, component: () => { const { workspaceId, viewId } = savedViewRoute.useParams(); const { q } = savedViewRoute.useSearch(); const navigate = savedViewRoute.useNavigate(); return <SavedViewPage workspaceId={workspaceId} viewId={viewId} query={q} onQueryChange={(value) => void navigate({ search: { q: value } })} />; } });
 const boardRoute = createRoute({ getParentRoute: () => rootRoute, path: "/workspaces/$workspaceId/board", component: () => { const { workspaceId } = boardRoute.useParams(); const navigate = boardRoute.useNavigate(); return <BoardPage workspaceId={workspaceId} onOpenWorkItem={(workItemId) => void navigate({ to: "/workspaces/$workspaceId/work-items/$workItemId", params: { workspaceId, workItemId }, search: { q: "" } })} />; } });
 const attentionRoute = createRoute({ getParentRoute: () => rootRoute, path: "/workspaces/$workspaceId/attention", component: () => { const { workspaceId } = attentionRoute.useParams(); const navigate = attentionRoute.useNavigate(); return <AttentionPage workspaceId={workspaceId} onOpenWorkItem={(workItemId) => void navigate({ to: "/workspaces/$workspaceId/work-items/$workItemId", params: { workspaceId, workItemId }, search: { q: "" } })} />; } });
+const checkoutRoute = createRoute({ getParentRoute: () => rootRoute, path: "/workspaces/$workspaceId/checkouts/$checkoutId", component: () => { const { workspaceId, checkoutId } = checkoutRoute.useParams(); return <CheckoutPage workspaceId={workspaceId} checkoutId={checkoutId} />; } });
+const sessionRoute = createRoute({ getParentRoute: () => rootRoute, path: "/workspaces/$workspaceId/sessions/$sessionId", component: () => { const { workspaceId, sessionId } = sessionRoute.useParams(); return <SessionPage workspaceId={workspaceId} sessionId={sessionId} />; } });
 
-const routeTree = rootRoute.addChildren([indexRoute, workspaceRoute, repositoryRoute, epicRoute, featureRoute, workItemRoute, savedViewRoute, boardRoute, attentionRoute]);
+const routeTree = rootRoute.addChildren([indexRoute, workspaceRoute, repositoryRoute, epicRoute, featureRoute, workItemRoute, savedViewRoute, boardRoute, attentionRoute, checkoutRoute, sessionRoute]);
 export const router = createRouter({ routeTree, context: { workspaceId: "00000000-0000-0000-0000-000000000000" } });
 
 declare module "@tanstack/react-router" {

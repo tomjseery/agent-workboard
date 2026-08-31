@@ -6,6 +6,19 @@
       "deleted",
       "replaced"
     ],
+    "checkoutPurposeSources": [
+      "declared",
+      "inherited",
+      "override",
+      "unknown"
+    ],
+    "checkoutPurposes": [
+      "feature_integration",
+      "work_item_write",
+      "writer_session",
+      "read_only_shared",
+      "unknown"
+    ],
     "commandCodes": [
       "save_board_view",
       "approve_feature",
@@ -54,7 +67,9 @@
       "projection_changed",
       "board_view_saved",
       "native_sessions_refreshed",
-      "partial_outcome_recorded"
+      "partial_outcome_recorded",
+      "checkout_changed",
+      "session_liveness_changed"
     ],
     "eventPayloads": [
       {
@@ -146,6 +161,9 @@
             ],
             "availableActions": [],
             "blockedBy": [],
+            "checkoutIds": [
+              "b0000000-0000-0000-0000-000000000001"
+            ],
             "dependencyReadiness": "ready",
             "feature": {
               "epicId": "40000000-0000-0000-0000-000000000001",
@@ -170,6 +188,9 @@
               }
             ],
             "revision": 3,
+            "sessionIds": [
+              "70000000-0000-0000-0000-000000000001"
+            ],
             "sessionSummary": {
               "active": 1,
               "idle": 0,
@@ -189,7 +210,247 @@
             }
           }
         }
+      },
+      {
+        "type": "checkout_changed",
+        "value": {
+          "cards": [
+            {
+              "attentionReasons": [
+                {
+                  "code": "checkpoint_due",
+                  "message": "Checkpoint evidence is due",
+                  "rank": 5
+                }
+              ],
+              "availableActions": [],
+              "blockedBy": [],
+              "checkoutIds": [
+                "b0000000-0000-0000-0000-000000000001"
+              ],
+              "dependencyReadiness": "ready",
+              "feature": {
+                "epicId": "40000000-0000-0000-0000-000000000001",
+                "id": "50000000-0000-0000-0000-000000000001",
+                "slug": "fixture-feature",
+                "title": "Fixture Feature"
+              },
+              "laneCount": 1,
+              "laneKey": "in_progress",
+              "lanePosition": 1,
+              "parallelReadiness": {
+                "groupKey": "fixture-ready",
+                "readyCount": 1,
+                "waitingCount": 0
+              },
+              "repositories": [
+                {
+                  "id": "30000000-0000-0000-0000-000000000001",
+                  "slug": "fixture-repository",
+                  "title": "Fixture Repository",
+                  "workspaceId": "20000000-0000-0000-0000-000000000001"
+                }
+              ],
+              "revision": 3,
+              "sessionIds": [
+                "70000000-0000-0000-0000-000000000001"
+              ],
+              "sessionSummary": {
+                "active": 1,
+                "idle": 0,
+                "providers": [
+                  "codex"
+                ],
+                "total": 1,
+                "unknown": 0
+              },
+              "status": "in_progress",
+              "workItem": {
+                "featureId": "50000000-0000-0000-0000-000000000001",
+                "id": "60000000-0000-0000-0000-000000000001",
+                "key": "WI-1",
+                "slug": "fixture-work-item",
+                "title": "Fixture Work item"
+              }
+            }
+          ],
+          "checkout": {
+            "availability": "available",
+            "bindings": [
+              {
+                "featureId": "50000000-0000-0000-0000-000000000001",
+                "purposeSource": "override",
+                "workItemId": "60000000-0000-0000-0000-000000000001"
+              }
+            ],
+            "branch": "feature/fixture",
+            "collisionEvidence": {
+              "code": "collision_evidence_unknown",
+              "message": "No authoritative collision scan is loaded.",
+              "observedAt": "2026-08-30T12:00:00Z",
+              "state": "unknown"
+            },
+            "diagnostics": [],
+            "dirtyEvidence": {
+              "code": "dirty_evidence_not_loaded",
+              "message": "No authoritative dirty-state observation is loaded.",
+              "observedAt": "2026-08-30T12:00:00Z",
+              "state": "not_loaded"
+            },
+            "displayPaths": [
+              {
+                "displayPath": "worktrees/fixture",
+                "observedFrom": "2026-08-30T12:00:00Z",
+                "observedUntil": null,
+                "state": "current"
+              }
+            ],
+            "head": "0123456789abcdef",
+            "id": "b0000000-0000-0000-0000-000000000001",
+            "isolationGeneration": 2,
+            "purpose": "work_item_write",
+            "purposeSource": "override",
+            "reconciliationEvidence": {
+              "code": "checkout_reconciled",
+              "message": "The latest recorded checkout generation is available.",
+              "observedAt": "2026-08-30T12:00:00Z",
+              "state": "current"
+            },
+            "reconciliationGeneration": 3,
+            "replacedByCheckoutId": null,
+            "replacesCheckoutId": null,
+            "repository": {
+              "id": "30000000-0000-0000-0000-000000000001",
+              "slug": "fixture-repository",
+              "title": "Fixture Repository",
+              "workspaceId": "20000000-0000-0000-0000-000000000001"
+            },
+            "revision": 41,
+            "sessionIds": [
+              "70000000-0000-0000-0000-000000000001"
+            ]
+          }
+        }
+      },
+      {
+        "type": "session_liveness_changed",
+        "value": {
+          "cards": [
+            {
+              "attentionReasons": [
+                {
+                  "code": "checkpoint_due",
+                  "message": "Checkpoint evidence is due",
+                  "rank": 5
+                }
+              ],
+              "availableActions": [],
+              "blockedBy": [],
+              "checkoutIds": [
+                "b0000000-0000-0000-0000-000000000001"
+              ],
+              "dependencyReadiness": "ready",
+              "feature": {
+                "epicId": "40000000-0000-0000-0000-000000000001",
+                "id": "50000000-0000-0000-0000-000000000001",
+                "slug": "fixture-feature",
+                "title": "Fixture Feature"
+              },
+              "laneCount": 1,
+              "laneKey": "in_progress",
+              "lanePosition": 1,
+              "parallelReadiness": {
+                "groupKey": "fixture-ready",
+                "readyCount": 1,
+                "waitingCount": 0
+              },
+              "repositories": [
+                {
+                  "id": "30000000-0000-0000-0000-000000000001",
+                  "slug": "fixture-repository",
+                  "title": "Fixture Repository",
+                  "workspaceId": "20000000-0000-0000-0000-000000000001"
+                }
+              ],
+              "revision": 3,
+              "sessionIds": [
+                "70000000-0000-0000-0000-000000000001"
+              ],
+              "sessionSummary": {
+                "active": 1,
+                "idle": 0,
+                "providers": [
+                  "codex"
+                ],
+                "total": 1,
+                "unknown": 0
+              },
+              "status": "in_progress",
+              "workItem": {
+                "featureId": "50000000-0000-0000-0000-000000000001",
+                "id": "60000000-0000-0000-0000-000000000001",
+                "key": "WI-1",
+                "slug": "fixture-work-item",
+                "title": "Fixture Work item"
+              }
+            }
+          ],
+          "recovery": {
+            "conflicts": [],
+            "disposition": "already_live",
+            "observedAt": "2026-08-30T12:00:00Z",
+            "revision": 41,
+            "sessionId": "70000000-0000-0000-0000-000000000001",
+            "stale": false
+          },
+          "session": {
+            "authoritativeModel": "fixture-model",
+            "authoritativeProfile": "reviewed",
+            "bindingState": "current",
+            "checkoutId": "b0000000-0000-0000-0000-000000000001",
+            "diagnostics": [],
+            "id": "70000000-0000-0000-0000-000000000001",
+            "lastActivityAt": "2026-08-30T12:00:00Z",
+            "liveness": {
+              "evidence": {
+                "code": "liveness_observed",
+                "message": "The liveness state is backed by current Workboard evidence.",
+                "observedAt": "2026-08-30T12:00:00Z",
+                "state": "current"
+              },
+              "expiresAt": "2026-08-30T12:05:00Z",
+              "observedAt": "2026-08-30T12:00:00Z",
+              "stale": false,
+              "state": "active"
+            },
+            "owner": {
+              "id": "60000000-0000-0000-0000-000000000001",
+              "kind": "work_item"
+            },
+            "primaryWriter": "confirmed_primary",
+            "profileEvidence": {
+              "code": "profile_observed",
+              "message": "The profile was observed by Workboard.",
+              "observedAt": "2026-08-30T12:00:00Z",
+              "state": "current"
+            },
+            "provider": "codex",
+            "restoreState": "tracked",
+            "resumability": "validated",
+            "revision": 41,
+            "role": "work_item_execution"
+          }
+        }
       }
+    ],
+    "evidenceStates": [
+      "current",
+      "historical",
+      "stale",
+      "missing",
+      "unknown",
+      "conflict",
+      "not_loaded"
     ],
     "hierarchyNodes": [
       {
@@ -275,6 +536,13 @@
         "kind": "work_item"
       }
     ],
+    "primaryWriterEvidence": [
+      "confirmed_primary",
+      "confirmed_secondary",
+      "not_applicable",
+      "unknown",
+      "conflict"
+    ],
     "providers": [
       "claude",
       "codex"
@@ -287,6 +555,10 @@
       "board_view",
       "board",
       "attention",
+      "repository_observability",
+      "checkout_observability",
+      "session_observability",
+      "recovery_preview",
       "board_snapshot"
     ],
     "readQueryCodes": [
@@ -297,7 +569,19 @@
       "board_view",
       "board",
       "attention",
+      "repository_observability",
+      "checkout_observability",
+      "session_observability",
+      "recovery_preview",
       "board_snapshot"
+    ],
+    "recoveryDispositions": [
+      "ready_present",
+      "ready_recreate",
+      "already_live",
+      "conflict",
+      "unresumable",
+      "not_loaded"
     ],
     "responseResults": [
       "handshake",
@@ -308,6 +592,10 @@
       "board_view",
       "board",
       "attention",
+      "repository_observability",
+      "checkout_observability",
+      "session_observability",
+      "recovery_preview",
       "board_snapshot",
       "subscription_accepted",
       "command_accepted"
@@ -324,6 +612,34 @@
       "event",
       "heartbeat",
       "resync_required"
+    ],
+    "sessionBindingStates": [
+      "pending",
+      "current",
+      "stopped",
+      "reconciliation_required"
+    ],
+    "sessionLiveStates": [
+      "active",
+      "idle",
+      "stopped",
+      "unknown",
+      "system_error",
+      "not_loaded"
+    ],
+    "sessionRestoreStates": [
+      "tracked",
+      "removed",
+      "not_tracked",
+      "conflict"
+    ],
+    "sessionResumabilities": [
+      "validated",
+      "preflight_passed",
+      "unknown",
+      "missing",
+      "corrupt",
+      "unsupported"
     ],
     "workItemStatuses": [
       "backlog",
@@ -396,6 +712,15 @@
       },
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
+    "checkoutObservability": {
+      "query": {
+        "type": "checkout_observability",
+        "value": {
+          "checkoutId": "b0000000-0000-0000-0000-000000000001"
+        }
+      },
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    },
     "execute": {
       "command": {
         "type": "approve_feature",
@@ -415,6 +740,33 @@
             "id": "20000000-0000-0000-0000-000000000001",
             "kind": "workspace"
           }
+        }
+      },
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    },
+    "recoveryPreview": {
+      "query": {
+        "type": "recovery_preview",
+        "value": {
+          "sessionId": "70000000-0000-0000-0000-000000000001"
+        }
+      },
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    },
+    "repositoryObservability": {
+      "query": {
+        "type": "repository_observability",
+        "value": {
+          "repositoryId": "30000000-0000-0000-0000-000000000001"
+        }
+      },
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    },
+    "sessionObservability": {
+      "query": {
+        "type": "session_observability",
+        "value": {
+          "sessionId": "70000000-0000-0000-0000-000000000001"
         }
       },
       "workspaceId": "20000000-0000-0000-0000-000000000001"
@@ -478,7 +830,7 @@
           }
         }
       },
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -494,7 +846,7 @@
           }
         }
       },
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -510,7 +862,7 @@
           }
         }
       },
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -526,7 +878,7 @@
           }
         }
       },
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -542,7 +894,7 @@
           }
         }
       },
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -558,7 +910,7 @@
           }
         }
       },
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -574,7 +926,7 @@
           }
         }
       },
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -590,7 +942,7 @@
           }
         }
       },
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -606,7 +958,7 @@
           }
         }
       },
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -622,7 +974,7 @@
           }
         }
       },
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     }
@@ -648,7 +1000,7 @@
     "reconciliationRequired": true,
     "succeeded": false
   },
-  "protocolVersion": 3,
+  "protocolVersion": 4,
   "readRequests": [
     {
       "expectedRevision": null,
@@ -657,15 +1009,15 @@
         "type": "handshake",
         "value": {
           "supportedCommandVersions": [
-            4
+            5
           ],
           "supportedReadVersions": [
-            4,
-            3
+            5,
+            4
           ]
         }
       },
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": null
     },
@@ -678,7 +1030,7 @@
           "type": "workspace_summary"
         }
       },
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -697,7 +1049,7 @@
           }
         }
       },
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -710,7 +1062,7 @@
           "type": "workspace_hierarchy"
         }
       },
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -723,7 +1075,7 @@
           "type": "board_views"
         }
       },
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -739,7 +1091,7 @@
           }
         }
       },
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -752,7 +1104,7 @@
           "type": "board_snapshot"
         }
       },
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -768,7 +1120,7 @@
           }
         }
       },
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     }
@@ -792,7 +1144,7 @@
       "error": null,
       "futureOptionalReadField": "ignored",
       "partialOutcomes": [],
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "handshake",
@@ -802,7 +1154,7 @@
               "available": false,
               "code": "save_board_view",
               "compatibleVersions": [
-                4
+                5
               ],
               "unavailableReason": {
                 "code": "not_accepted",
@@ -811,14 +1163,14 @@
             }
           ],
           "compatibleCommandVersions": [
-            4
+            5
           ],
           "daemonInstanceId": "80000000-0000-0000-0000-000000000001",
           "eventVersion": 1,
           "futureOptionalProjectionField": true,
           "heartbeatIntervalMs": 1000,
           "maxFrameBytes": 8388608,
-          "negotiatedReadVersion": 3,
+          "negotiatedReadVersion": 4,
           "workspaces": [
             {
               "id": "20000000-0000-0000-0000-000000000001",
@@ -849,7 +1201,7 @@
       "error": null,
       "futureOptionalReadField": "ignored",
       "partialOutcomes": [],
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "workspace_summary",
@@ -888,7 +1240,7 @@
       "error": null,
       "futureOptionalReadField": "ignored",
       "partialOutcomes": [],
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "hierarchy_children",
@@ -932,7 +1284,7 @@
       "error": null,
       "futureOptionalReadField": "ignored",
       "partialOutcomes": [],
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "workspace_hierarchy",
@@ -1025,7 +1377,7 @@
       "error": null,
       "futureOptionalReadField": "ignored",
       "partialOutcomes": [],
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "board_views",
@@ -1083,7 +1435,7 @@
       "error": null,
       "futureOptionalReadField": "ignored",
       "partialOutcomes": [],
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "board_view",
@@ -1140,7 +1492,7 @@
       "error": null,
       "futureOptionalReadField": "ignored",
       "partialOutcomes": [],
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "board_snapshot",
@@ -1184,7 +1536,7 @@
       "error": null,
       "futureOptionalReadField": "ignored",
       "partialOutcomes": [],
-      "protocolVersion": 3,
+      "protocolVersion": 4,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "subscription_accepted",
@@ -1217,7 +1569,7 @@
       "error": null,
       "futureOptionalReadField": "ignored",
       "partialOutcomes": [],
-      "protocolVersion": 4,
+      "protocolVersion": 5,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "command_accepted",
@@ -1250,7 +1602,7 @@
         "diagnostics": [],
         "error": null,
         "partialOutcomes": [],
-        "protocolVersion": 3,
+        "protocolVersion": 4,
         "requestId": "10000000-0000-0000-0000-000000000001",
         "result": {
           "type": "workspace_summary",
@@ -1346,7 +1698,7 @@
             }
           }
         },
-        "protocolVersion": 3,
+        "protocolVersion": 4,
         "sequence": 42,
         "workspaceId": "20000000-0000-0000-0000-000000000001"
       }

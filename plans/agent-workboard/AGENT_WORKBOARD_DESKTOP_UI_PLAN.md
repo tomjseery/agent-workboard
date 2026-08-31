@@ -364,7 +364,7 @@ Fall back to scoped refreshed queries or explicit incompatible/read-only state. 
 
 ### 6. Deliver repository, checkout, worktree, and session observability
 
-- Status: [ ]
+- Status: [x]
 - Slug: `deliver-repository-checkout-and-session-observability`
 - Dependencies: item 4
 - Delivery type: authoritative read-only operational detail

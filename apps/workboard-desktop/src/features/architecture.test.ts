@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-const featureSources = import.meta.glob("./{workspace,hierarchy,saved-views,board}/**/*.{ts,tsx}", {
+const featureSources = import.meta.glob("./{workspace,hierarchy,saved-views,board,repository,checkout,session}/**/*.{ts,tsx}", {
   eager: true,
   import: "default",
   query: "?raw",
@@ -19,11 +19,19 @@ const savedViewSources = import.meta.glob("./saved-views/**/*.{ts,tsx}", {
 }) as Record<string, string>;
 
 const boardStoreSources = import.meta.glob("./board/store/**/*.{ts,tsx}", { eager: true, import: "default", query: "?raw" }) as Record<string, string>;
+const operationalSources = import.meta.glob("./{repository,checkout,session}/**/*.{ts,tsx}", { eager: true, import: "default", query: "?raw" }) as Record<string, string>;
 
 describe("feature authority boundaries", () => {
   it("keeps feature slices behind generated contracts and the daemon facade", () => {
     for (const source of Object.values(featureSources)) {
       expect(source).not.toMatch(/@tauri-apps\/api|\binvoke\s*\(|\bChannel\b|rusqlite|planning[_-]store|workboard-application/);
+    }
+  });
+
+  it("keeps native repository session and recovery evidence behind the Rust boundary", () => {
+    for (const source of Object.values(operationalSources)) {
+      expect(source).not.toMatch(/@tauri-apps\/api|\binvoke\s*\(|\bChannel\b|window\.__TAURI__|node:fs|child_process|\bDeno\b|\bBun\b|\bWebSocket\b|\bfetch\s*\(|process\.(?:cwd|env|pid)|transcript|credential|accessToken|refreshToken/);
+      expect(source).not.toMatch(/zustand|createStore|useStore/);
     }
   });
 

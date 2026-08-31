@@ -24,6 +24,10 @@ const { fakeDaemon } = vi.hoisted(() => {
     boardView: async () => response(null) as never,
     board: async () => response({ type: "board", value: { lanes: [], cards: [], nextCursor: null, totalCount: 0, revision: 4 } }) as never,
     attention: async () => response({ type: "attention", value: { entries: [], nextCursor: null, totalCount: 0, revision: 4 } }) as never,
+    repositoryObservability: async () => response(null) as never,
+    checkoutObservability: async () => response(null) as never,
+    sessionObservability: async () => response(null) as never,
+    recoveryPreview: async () => response(null) as never,
     execute: async () => response(null) as never,
     subscribe: async () => ({ cancel: async () => undefined }),
   } as DaemonFacade };

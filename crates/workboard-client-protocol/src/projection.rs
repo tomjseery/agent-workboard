@@ -10,6 +10,204 @@ use crate::{
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+pub struct ObservedDisplayPath {
+    pub display_path: String,
+    pub state: EvidenceState,
+    pub observed_from: String,
+    pub observed_until: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceState {
+    Current,
+    Historical,
+    Stale,
+    Missing,
+    Unknown,
+    Conflict,
+    NotLoaded,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ClassifiedEvidence {
+    pub state: EvidenceState,
+    pub code: String,
+    pub message: String,
+    pub observed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RepositoryObservabilityProjection {
+    pub repository: RepositoryReference,
+    pub display_paths: Vec<ObservedDisplayPath>,
+    pub remote_names: Vec<String>,
+    pub default_branch: Option<String>,
+    pub remote_evidence: ClassifiedEvidence,
+    pub default_branch_evidence: ClassifiedEvidence,
+    pub checkout_ids: Vec<CheckoutId>,
+    pub revision: u64,
+    pub diagnostics: Vec<crate::Diagnostic>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckoutPurpose {
+    FeatureIntegration,
+    WorkItemWrite,
+    WriterSession,
+    ReadOnlyShared,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckoutPurposeSource {
+    Declared,
+    Inherited,
+    Override,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckoutBindingProjection {
+    pub feature_id: FeatureId,
+    pub work_item_id: Option<WorkItemId>,
+    pub purpose_source: CheckoutPurposeSource,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckoutObservabilityProjection {
+    pub id: CheckoutId,
+    pub repository: RepositoryReference,
+    pub purpose: CheckoutPurpose,
+    pub purpose_source: CheckoutPurposeSource,
+    pub branch: Option<String>,
+    pub head: Option<String>,
+    pub isolation_generation: Option<u64>,
+    pub reconciliation_generation: Option<u64>,
+    pub availability: CheckoutAvailability,
+    pub display_paths: Vec<ObservedDisplayPath>,
+    pub replaces_checkout_id: Option<CheckoutId>,
+    pub replaced_by_checkout_id: Option<CheckoutId>,
+    pub bindings: Vec<CheckoutBindingProjection>,
+    pub session_ids: Vec<SessionId>,
+    pub dirty_evidence: ClassifiedEvidence,
+    pub collision_evidence: ClassifiedEvidence,
+    pub reconciliation_evidence: ClassifiedEvidence,
+    pub revision: u64,
+    pub diagnostics: Vec<crate::Diagnostic>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionBindingState {
+    Pending,
+    Current,
+    Stopped,
+    ReconciliationRequired,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionLiveState {
+    Active,
+    Idle,
+    Stopped,
+    Unknown,
+    SystemError,
+    NotLoaded,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionRestoreState {
+    Tracked,
+    Removed,
+    NotTracked,
+    Conflict,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionResumability {
+    Validated,
+    PreflightPassed,
+    Unknown,
+    Missing,
+    Corrupt,
+    Unsupported,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum PrimaryWriterEvidence {
+    ConfirmedPrimary,
+    ConfirmedSecondary,
+    NotApplicable,
+    Unknown,
+    Conflict,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionLivenessProjection {
+    pub state: SessionLiveState,
+    pub stale: bool,
+    pub observed_at: Option<String>,
+    pub expires_at: Option<String>,
+    pub evidence: ClassifiedEvidence,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionObservabilityProjection {
+    pub id: SessionId,
+    pub provider: Provider,
+    pub role: ManagedSessionRole,
+    pub owner: OwnerProjection,
+    pub authoritative_profile: Option<String>,
+    pub authoritative_model: Option<String>,
+    pub profile_evidence: ClassifiedEvidence,
+    pub binding_state: SessionBindingState,
+    pub liveness: SessionLivenessProjection,
+    pub restore_state: SessionRestoreState,
+    pub last_activity_at: Option<String>,
+    pub checkout_id: Option<CheckoutId>,
+    pub resumability: SessionResumability,
+    pub primary_writer: PrimaryWriterEvidence,
+    pub revision: u64,
+    pub diagnostics: Vec<crate::Diagnostic>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum RecoveryDispositionProjection {
+    ReadyPresent,
+    ReadyRecreate,
+    AlreadyLive,
+    Conflict,
+    Unresumable,
+    NotLoaded,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RecoveryPreviewProjection {
+    pub session_id: SessionId,
+    pub disposition: RecoveryDispositionProjection,
+    pub conflicts: Vec<crate::Diagnostic>,
+    pub observed_at: String,
+    pub stale: bool,
+    pub revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkspaceReference {
     pub id: WorkspaceId,
     pub slug: String,
@@ -163,6 +361,8 @@ pub struct BoardCardProjection {
     pub parallel_readiness: ParallelReadiness,
     pub repositories: Vec<RepositoryReference>,
     pub session_summary: SessionSummary,
+    pub checkout_ids: Vec<CheckoutId>,
+    pub session_ids: Vec<SessionId>,
     pub attention_reasons: Vec<AttentionReason>,
     pub revision: u64,
     pub available_actions: Vec<AvailableAction>,

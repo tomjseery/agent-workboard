@@ -4,10 +4,13 @@ import current from "./generated/conformance-current.json";
 import previous from "./generated/conformance-previous.json";
 import type {
   CheckoutAvailability,
+  CheckoutPurpose,
+  CheckoutPurposeSource,
   CommandCode,
   CommandOperation,
   EntityRef,
   ErrorSeverity,
+  EvidenceState,
   EventKind,
   EventPayload,
   HierarchyNode,
@@ -15,14 +18,20 @@ import type {
   ManagedSessionRole,
   Operation,
   OwnerProjection,
+  PrimaryWriterEvidence,
   Provider,
   QueryRequest,
   ReadQuery,
   ReadQueryCode,
+  RecoveryDispositionProjection,
   ResponseEnvelope,
   ResponseResult,
   ResyncReason,
   ServerMessage,
+  SessionBindingState,
+  SessionLiveState,
+  SessionRestoreState,
+  SessionResumability,
   SubscribeRequest,
   WorkflowState,
   WorkItemStatus,
@@ -99,6 +108,10 @@ describe("generated protocol conformance", () => {
       "board_view",
       "board",
       "attention",
+      "repository_observability",
+      "checkout_observability",
+      "session_observability",
+      "recovery_preview",
       "board_snapshot",
     ] satisfies Array<ReadQuery["type"]>;
     const responseResults = [
@@ -110,6 +123,10 @@ describe("generated protocol conformance", () => {
       "board_view",
       "board",
       "attention",
+      "repository_observability",
+      "checkout_observability",
+      "session_observability",
+      "recovery_preview",
       "board_snapshot",
       "subscription_accepted",
       "command_accepted",
@@ -125,6 +142,8 @@ describe("generated protocol conformance", () => {
       "board_view_saved",
       "native_sessions_refreshed",
       "partial_outcome_recorded",
+      "checkout_changed",
+      "session_liveness_changed",
     ] satisfies EventKind[];
     const eventPayloads = [
       "projection_changed",
@@ -132,6 +151,8 @@ describe("generated protocol conformance", () => {
       "native_sessions_refreshed",
       "partial_outcome",
       "board_card_changed",
+      "checkout_changed",
+      "session_liveness_changed",
     ] satisfies Array<EventPayload["type"]>;
     const resyncReasons = [
       "gap",
@@ -154,6 +175,10 @@ describe("generated protocol conformance", () => {
       "board_view",
       "board",
       "attention",
+      "repository_observability",
+      "checkout_observability",
+      "session_observability",
+      "recovery_preview",
       "board_snapshot",
     ] satisfies ReadQueryCode[];
     const providers = ["claude", "codex"] satisfies Provider[];
@@ -196,6 +221,15 @@ describe("generated protocol conformance", () => {
       "debugging",
       "review",
     ] satisfies ManagedSessionRole[];
+    const evidenceStates = ["current", "historical", "stale", "missing", "unknown", "conflict", "not_loaded"] satisfies EvidenceState[];
+    const checkoutPurposes = ["feature_integration", "work_item_write", "writer_session", "read_only_shared", "unknown"] satisfies CheckoutPurpose[];
+    const checkoutPurposeSources = ["declared", "inherited", "override", "unknown"] satisfies CheckoutPurposeSource[];
+    const sessionBindingStates = ["pending", "current", "stopped", "reconciliation_required"] satisfies SessionBindingState[];
+    const sessionLiveStates = ["active", "idle", "stopped", "unknown", "system_error", "not_loaded"] satisfies SessionLiveState[];
+    const sessionRestoreStates = ["tracked", "removed", "not_tracked", "conflict"] satisfies SessionRestoreState[];
+    const sessionResumabilities = ["validated", "preflight_passed", "unknown", "missing", "corrupt", "unsupported"] satisfies SessionResumability[];
+    const primaryWriterEvidence = ["confirmed_primary", "confirmed_secondary", "not_applicable", "unknown", "conflict"] satisfies PrimaryWriterEvidence[];
+    const recoveryDispositions = ["ready_present", "ready_recreate", "already_live", "conflict", "unresumable", "not_loaded"] satisfies RecoveryDispositionProjection[];
     const commandOperations = current.incompatibleCommands.map(
       ({ operation }) => operation.value,
     ) as CommandOperation[];
@@ -222,6 +256,15 @@ describe("generated protocol conformance", () => {
     expect(current.discriminants.managedSessionRoles).toEqual(
       managedSessionRoles,
     );
+    expect(current.discriminants.evidenceStates).toEqual(evidenceStates);
+    expect(current.discriminants.checkoutPurposes).toEqual(checkoutPurposes);
+    expect(current.discriminants.checkoutPurposeSources).toEqual(checkoutPurposeSources);
+    expect(current.discriminants.sessionBindingStates).toEqual(sessionBindingStates);
+    expect(current.discriminants.sessionLiveStates).toEqual(sessionLiveStates);
+    expect(current.discriminants.sessionRestoreStates).toEqual(sessionRestoreStates);
+    expect(current.discriminants.sessionResumabilities).toEqual(sessionResumabilities);
+    expect(current.discriminants.primaryWriterEvidence).toEqual(primaryWriterEvidence);
+    expect(current.discriminants.recoveryDispositions).toEqual(recoveryDispositions);
 
     deserialize<HierarchyRef[]>(current.discriminants.hierarchyRefs);
     deserialize<EntityRef[]>(current.discriminants.entityRefs);
@@ -244,7 +287,7 @@ describe("generated protocol conformance", () => {
       succeeded: false,
       reconciliationRequired: true,
     });
-    expect(previous.protocolVersion).toBe(3);
-    expect(current.protocolVersion).toBe(4);
+    expect(previous.protocolVersion).toBe(4);
+    expect(current.protocolVersion).toBe(5);
   });
 });

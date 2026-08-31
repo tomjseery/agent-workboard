@@ -16,9 +16,10 @@ use workboard_application::projection::{ReplayResult, core_workspace_id};
 use workboard_application::workspace::WorkboardApplication;
 use workboard_client_protocol::{
     AvailableAction, CURRENT_PROTOCOL_VERSION, CommandCapability, CommandCode, DaemonInstanceId,
-    EventCursor, HandshakeResponse, Heartbeat, MAX_COLLECTION_ITEMS, MAX_FRAME_BYTES, Operation,
-    PREVIOUS_PROTOCOL_VERSION, ProtocolError, ReadQuery, RequestEnvelope as ClientRequestEnvelope,
-    RequestId, ResponseEnvelope as ClientResponseEnvelope, ResponseResult, SUPPORTED_READ_VERSIONS,
+    EventCursor, HandshakeResponse, Heartbeat, MAX_COLLECTION_ITEMS, MAX_DIAGNOSTICS,
+    MAX_FRAME_BYTES, Operation, PREVIOUS_PROTOCOL_VERSION, ProtocolError, ReadQuery,
+    RequestEnvelope as ClientRequestEnvelope, RequestId,
+    ResponseEnvelope as ClientResponseEnvelope, ResponseResult, SUPPORTED_READ_VERSIONS,
     ServerMessage, UnavailableReason, WorkspaceId,
 };
 use workboard_core::Tool;
@@ -236,8 +237,25 @@ fn execute_protocol(
                 );
             };
             let core_id = core_workspace_id(workspace_id);
+            let operational_query = matches!(
+                query,
+                ReadQuery::RepositoryObservability { .. }
+                    | ReadQuery::CheckoutObservability { .. }
+                    | ReadQuery::SessionObservability { .. }
+                    | ReadQuery::RecoveryPreview { .. }
+            );
             let revision = match application.projection_revision(core_id) {
                 Ok(revision) => revision,
+                Err(_) if operational_query => {
+                    return ClientResponseEnvelope::failure(
+                        request.protocol_version,
+                        request,
+                        ProtocolError::new(
+                            "projection_unavailable",
+                            "The requested Workboard evidence is unavailable.",
+                        ),
+                    );
+                }
                 Err(error) => return application_failure(request.protocol_version, request, error),
             };
             let result = match query {
@@ -256,21 +274,56 @@ fn execute_protocol(
                 ReadQuery::BoardView { view_id } => application
                     .client_board_view(core_id, *view_id)
                     .map(ResponseResult::BoardView),
-                ReadQuery::Board { query }
+                ReadQuery::Board { query } => application
+                    .client_board(core_id, query.clone())
+                    .map(ResponseResult::Board),
+                ReadQuery::Attention { query } => application
+                    .client_attention(core_id, query.clone())
+                    .map(ResponseResult::Attention),
+                ReadQuery::RepositoryObservability { repository_id }
                     if request.protocol_version == CURRENT_PROTOCOL_VERSION =>
                 {
                     application
-                        .client_board(core_id, query.clone())
-                        .map(ResponseResult::Board)
+                        .client_repository_observability(
+                            core_id,
+                            workboard_core::RepositoryId::from_uuid(*repository_id.as_uuid()),
+                        )
+                        .map(ResponseResult::RepositoryObservability)
                 }
-                ReadQuery::Attention { query }
+                ReadQuery::CheckoutObservability { checkout_id }
                     if request.protocol_version == CURRENT_PROTOCOL_VERSION =>
                 {
                     application
-                        .client_attention(core_id, query.clone())
-                        .map(ResponseResult::Attention)
+                        .client_checkout_observability(
+                            core_id,
+                            workboard_core::CheckoutId::from_uuid(*checkout_id.as_uuid()),
+                        )
+                        .map(ResponseResult::CheckoutObservability)
                 }
-                ReadQuery::Board { .. } | ReadQuery::Attention { .. } => Err(AppError::External {
+                ReadQuery::SessionObservability { session_id }
+                    if request.protocol_version == CURRENT_PROTOCOL_VERSION =>
+                {
+                    application
+                        .client_session_observability(
+                            core_id,
+                            workboard_core::ConversationId::from_uuid(*session_id.as_uuid()),
+                        )
+                        .map(ResponseResult::SessionObservability)
+                }
+                ReadQuery::RecoveryPreview { session_id }
+                    if request.protocol_version == CURRENT_PROTOCOL_VERSION =>
+                {
+                    application
+                        .client_recovery_preview(
+                            core_id,
+                            workboard_core::ConversationId::from_uuid(*session_id.as_uuid()),
+                        )
+                        .map(ResponseResult::RecoveryPreview)
+                }
+                ReadQuery::RepositoryObservability { .. }
+                | ReadQuery::CheckoutObservability { .. }
+                | ReadQuery::SessionObservability { .. }
+                | ReadQuery::RecoveryPreview { .. } => Err(AppError::External {
                     code: "projection_version_unavailable".to_owned(),
                     message:
                         "the requested projection is unavailable for the negotiated read version"
@@ -296,6 +349,18 @@ fn execute_protocol(
                         "the authoritative projection exceeds the collection bound",
                     ),
                 ),
+                Err(error)
+                    if operational_query && error.code() != "projection_version_unavailable" =>
+                {
+                    ClientResponseEnvelope::failure(
+                        request.protocol_version,
+                        request,
+                        ProtocolError::new(
+                            "projection_unavailable",
+                            "The requested Workboard evidence is unavailable.",
+                        ),
+                    )
+                }
                 Err(error) => application_failure(request.protocol_version, request, error),
             }
         }
@@ -392,6 +457,17 @@ fn response_within_limits(result: &ResponseResult) -> bool {
             value.lanes.len() <= MAX_COLLECTION_ITEMS && value.cards.len() <= MAX_COLLECTION_ITEMS
         }
         ResponseResult::Attention(value) => value.entries.len() <= MAX_COLLECTION_ITEMS,
+        ResponseResult::RepositoryObservability(value) => {
+            value.display_paths.len() <= MAX_COLLECTION_ITEMS
+                && value.checkout_ids.len() <= MAX_COLLECTION_ITEMS
+        }
+        ResponseResult::CheckoutObservability(value) => {
+            value.display_paths.len() <= MAX_COLLECTION_ITEMS
+                && value.bindings.len() <= MAX_COLLECTION_ITEMS
+                && value.session_ids.len() <= MAX_COLLECTION_ITEMS
+        }
+        ResponseResult::SessionObservability(value) => value.diagnostics.len() <= MAX_DIAGNOSTICS,
+        ResponseResult::RecoveryPreview(value) => value.conflicts.len() <= MAX_DIAGNOSTICS,
         ResponseResult::BoardSnapshot(value) => {
             value.repositories.len() <= MAX_COLLECTION_ITEMS
                 && value.epics.len() <= MAX_COLLECTION_ITEMS

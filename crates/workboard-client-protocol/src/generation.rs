@@ -7,18 +7,24 @@ use crate::{
     BoardLaneProjection, BoardPage, BoardQuery, BoardViewDefinition, BoardViewDensity,
     BoardViewFilters, BoardViewGrouping, BoardViewGroupingKind, BoardViewId,
     BoardViewLaneDefinition, BoardViewSort, BoardViewSortDirection, BoardViewSortField,
-    CURRENT_PROTOCOL_VERSION, CheckoutAvailability, CheckoutId, CheckoutPathId, CommandCapability,
-    CommandCode, CommandOperation, DaemonInstanceId, DependencyReadiness, Diagnostic, DocumentId,
-    EffectiveCheckoutProjection, EntityRef, EpicId, EpicReference, ErrorSeverity, EventCursor,
-    EventEnvelope, EventId, EventKind, EventPayload, FeatureId, FeatureReference, HandshakeRequest,
-    HandshakeResponse, Heartbeat, HierarchyChildren, HierarchyEpic, HierarchyFeature,
-    HierarchyNode, HierarchyRef, HierarchyWorkItem, InvalidationScope, ManagedSessionRole,
-    Operation, OwnerProjection, PREVIOUS_PROTOCOL_VERSION, ParallelReadiness, PartialOutcome,
-    ProtocolError, Provider, ReadQuery, ReadQueryCode, RepositoryId, RepositoryPathId,
-    RepositoryReference, RequestEnvelope, RequestId, ResponseEnvelope, ResponseResult,
-    ResyncReason, ResyncRequirement, ServerMessage, SessionId, SessionSummary, SubscriptionRequest,
-    UnavailableReason, ValidationField, WorkItemId, WorkItemReference, WorkItemStatus,
-    WorkflowState, WorkspaceHierarchy, WorkspaceId, WorkspaceReference, WorkspaceSummary,
+    CURRENT_PROTOCOL_VERSION, CheckoutAvailability, CheckoutBindingProjection, CheckoutId,
+    CheckoutObservabilityProjection, CheckoutPathId, CheckoutPurpose, CheckoutPurposeSource,
+    ClassifiedEvidence, CommandCapability, CommandCode, CommandOperation, DaemonInstanceId,
+    DependencyReadiness, Diagnostic, DocumentId, EffectiveCheckoutProjection, EntityRef, EpicId,
+    EpicReference, ErrorSeverity, EventCursor, EventEnvelope, EventId, EventKind, EventPayload,
+    EvidenceState, FeatureId, FeatureReference, HandshakeRequest, HandshakeResponse, Heartbeat,
+    HierarchyChildren, HierarchyEpic, HierarchyFeature, HierarchyNode, HierarchyRef,
+    HierarchyWorkItem, InvalidationScope, ManagedSessionRole, ObservedDisplayPath, Operation,
+    OwnerProjection, PREVIOUS_PROTOCOL_VERSION, ParallelReadiness, PartialOutcome,
+    PrimaryWriterEvidence, ProtocolError, Provider, ReadQuery, ReadQueryCode,
+    RecoveryDispositionProjection, RecoveryPreviewProjection, RepositoryId,
+    RepositoryObservabilityProjection, RepositoryPathId, RepositoryReference, RequestEnvelope,
+    RequestId, ResponseEnvelope, ResponseResult, ResyncReason, ResyncRequirement, ServerMessage,
+    SessionBindingState, SessionId, SessionLiveState, SessionLivenessProjection,
+    SessionObservabilityProjection, SessionRestoreState, SessionResumability, SessionSummary,
+    SubscriptionRequest, UnavailableReason, ValidationField, WorkItemId, WorkItemReference,
+    WorkItemStatus, WorkflowState, WorkspaceHierarchy, WorkspaceId, WorkspaceReference,
+    WorkspaceSummary,
 };
 
 const REQUEST_ID: &str = "10000000-0000-0000-0000-000000000001";
@@ -29,6 +35,7 @@ const EPIC_ID: &str = "40000000-0000-0000-0000-000000000001";
 const FEATURE_ID: &str = "50000000-0000-0000-0000-000000000001";
 const WORK_ITEM_ID: &str = "60000000-0000-0000-0000-000000000001";
 const SESSION_ID: &str = "70000000-0000-0000-0000-000000000001";
+const CHECKOUT_ID: &str = "b0000000-0000-0000-0000-000000000001";
 const DAEMON_ID: &str = "80000000-0000-0000-0000-000000000001";
 const EVENT_ID: &str = "90000000-0000-0000-0000-000000000001";
 const BOARD_VIEW_ID: &str = "a0000000-0000-0000-0000-000000000001";
@@ -78,9 +85,67 @@ fn board_card() -> Value {
         "parallelReadiness": { "groupKey": "fixture-ready", "readyCount": 1, "waitingCount": 0 },
         "repositories": [{ "id": REPOSITORY_ID, "workspaceId": WORKSPACE_ID, "slug": "fixture-repository", "title": "Fixture Repository" }],
         "sessionSummary": { "total": 1, "active": 1, "idle": 0, "unknown": 0, "providers": ["codex"] },
+        "checkoutIds": [CHECKOUT_ID],
+        "sessionIds": [SESSION_ID],
         "attentionReasons": [{ "code": "checkpoint_due", "rank": 5, "message": "Checkpoint evidence is due" }],
         "revision": 3,
         "availableActions": []
+    })
+}
+
+fn classified(state: &str, code: &str, message: &str) -> Value {
+    json!({ "state": state, "code": code, "message": message, "observedAt": "2026-08-30T12:00:00Z" })
+}
+
+fn repository_observability() -> Value {
+    json!({
+        "repository": { "id": REPOSITORY_ID, "workspaceId": WORKSPACE_ID, "slug": "fixture-repository", "title": "Fixture Repository" },
+        "displayPaths": [{ "displayPath": "repos/fixture", "state": "current", "observedFrom": "2026-08-30T12:00:00Z", "observedUntil": null }],
+        "remoteNames": ["origin"], "defaultBranch": "main",
+        "remoteEvidence": classified("current", "remote_names_observed", "Remote names were observed by Workboard."),
+        "defaultBranchEvidence": classified("current", "default_branch_observed", "The default branch was observed by Workboard."),
+        "checkoutIds": [CHECKOUT_ID], "revision": 41, "diagnostics": []
+    })
+}
+
+fn checkout_observability() -> Value {
+    json!({
+        "id": CHECKOUT_ID,
+        "repository": { "id": REPOSITORY_ID, "workspaceId": WORKSPACE_ID, "slug": "fixture-repository", "title": "Fixture Repository" },
+        "purpose": "work_item_write", "purposeSource": "override", "branch": "feature/fixture", "head": "0123456789abcdef",
+        "isolationGeneration": 2, "reconciliationGeneration": 3, "availability": "available",
+        "displayPaths": [{ "displayPath": "worktrees/fixture", "state": "current", "observedFrom": "2026-08-30T12:00:00Z", "observedUntil": null }],
+        "replacesCheckoutId": null, "replacedByCheckoutId": null,
+        "bindings": [{ "featureId": FEATURE_ID, "workItemId": WORK_ITEM_ID, "purposeSource": "override" }],
+        "sessionIds": [SESSION_ID],
+        "dirtyEvidence": classified("not_loaded", "dirty_evidence_not_loaded", "No authoritative dirty-state observation is loaded."),
+        "collisionEvidence": classified("unknown", "collision_evidence_unknown", "No authoritative collision scan is loaded."),
+        "reconciliationEvidence": classified("current", "checkout_reconciled", "The latest recorded checkout generation is available."),
+        "revision": 41, "diagnostics": []
+    })
+}
+
+fn session_observability() -> Value {
+    json!({
+        "id": SESSION_ID, "provider": "codex", "role": "work_item_execution",
+        "owner": { "kind": "work_item", "id": WORK_ITEM_ID },
+        "authoritativeProfile": "reviewed", "authoritativeModel": "fixture-model",
+        "profileEvidence": classified("current", "profile_observed", "The profile was observed by Workboard."),
+        "bindingState": "current",
+        "liveness": {
+            "state": "active", "stale": false, "observedAt": "2026-08-30T12:00:00Z", "expiresAt": "2026-08-30T12:05:00Z",
+            "evidence": classified("current", "liveness_observed", "The liveness state is backed by current Workboard evidence.")
+        },
+        "restoreState": "tracked", "lastActivityAt": "2026-08-30T12:00:00Z",
+        "checkoutId": CHECKOUT_ID, "resumability": "validated", "primaryWriter": "confirmed_primary",
+        "revision": 41, "diagnostics": []
+    })
+}
+
+fn recovery_preview() -> Value {
+    json!({
+        "sessionId": SESSION_ID, "disposition": "already_live", "conflicts": [],
+        "observedAt": "2026-08-30T12:00:00Z", "stale": false, "revision": 41
     })
 }
 
@@ -154,6 +219,23 @@ pub fn typescript_declarations() -> String {
     declaration!(WorkflowState);
     declaration!(CheckoutAvailability);
     declaration!(ManagedSessionRole);
+    declaration!(ObservedDisplayPath);
+    declaration!(EvidenceState);
+    declaration!(ClassifiedEvidence);
+    declaration!(RepositoryObservabilityProjection);
+    declaration!(CheckoutPurpose);
+    declaration!(CheckoutPurposeSource);
+    declaration!(CheckoutBindingProjection);
+    declaration!(CheckoutObservabilityProjection);
+    declaration!(SessionBindingState);
+    declaration!(SessionLiveState);
+    declaration!(SessionRestoreState);
+    declaration!(SessionResumability);
+    declaration!(PrimaryWriterEvidence);
+    declaration!(SessionLivenessProjection);
+    declaration!(SessionObservabilityProjection);
+    declaration!(RecoveryDispositionProjection);
+    declaration!(RecoveryPreviewProjection);
     declaration!(HandshakeRequest);
     declaration!(HandshakeResponse);
     declaration!(RequestEnvelope);
@@ -221,6 +303,10 @@ pub fn conformance_fixture(protocol_version: u32) -> Value {
             })),
             "board": query_request(json!({ "type": "board", "value": { "query": board_query() } })),
             "attention": query_request(json!({ "type": "attention", "value": { "query": { "cursor": null, "limit": 100, "repositoryIds": [], "reasonCodes": [] } } })),
+            "repositoryObservability": query_request(json!({ "type": "repository_observability", "value": { "repositoryId": REPOSITORY_ID } })),
+            "checkoutObservability": query_request(json!({ "type": "checkout_observability", "value": { "checkoutId": CHECKOUT_ID } })),
+            "sessionObservability": query_request(json!({ "type": "session_observability", "value": { "sessionId": SESSION_ID } })),
+            "recoveryPreview": query_request(json!({ "type": "recovery_preview", "value": { "sessionId": SESSION_ID } })),
             "execute": execute_request(),
             "subscribe": {
                 "type": "start",
@@ -323,6 +409,10 @@ fn read_requests(protocol_version: u32) -> Vec<Value> {
     if protocol_version == CURRENT_PROTOCOL_VERSION {
         requests.insert(6, request(json!({ "type": "query", "value": { "type": "board", "value": { "query": board_query() } } }), protocol_version, Some(WORKSPACE_ID)));
         requests.insert(7, request(json!({ "type": "query", "value": { "type": "attention", "value": { "query": { "cursor": null, "limit": 100, "repositoryIds": [], "reasonCodes": [] } } } }), protocol_version, Some(WORKSPACE_ID)));
+        requests.insert(8, request(json!({ "type": "query", "value": { "type": "repository_observability", "value": { "repositoryId": REPOSITORY_ID } } }), protocol_version, Some(WORKSPACE_ID)));
+        requests.insert(9, request(json!({ "type": "query", "value": { "type": "checkout_observability", "value": { "checkoutId": CHECKOUT_ID } } }), protocol_version, Some(WORKSPACE_ID)));
+        requests.insert(10, request(json!({ "type": "query", "value": { "type": "session_observability", "value": { "sessionId": SESSION_ID } } }), protocol_version, Some(WORKSPACE_ID)));
+        requests.insert(11, request(json!({ "type": "query", "value": { "type": "recovery_preview", "value": { "sessionId": SESSION_ID } } }), protocol_version, Some(WORKSPACE_ID)));
     }
     requests
 }
@@ -565,6 +655,34 @@ fn response_results(protocol_version: u32) -> Vec<Value> {
                 "revision": 41
             }
         })));
+        results.insert(
+            8,
+            response_envelope(
+                protocol_version,
+                json!({ "type": "repository_observability", "value": repository_observability() }),
+            ),
+        );
+        results.insert(
+            9,
+            response_envelope(
+                protocol_version,
+                json!({ "type": "checkout_observability", "value": checkout_observability() }),
+            ),
+        );
+        results.insert(
+            10,
+            response_envelope(
+                protocol_version,
+                json!({ "type": "session_observability", "value": session_observability() }),
+            ),
+        );
+        results.insert(
+            11,
+            response_envelope(
+                protocol_version,
+                json!({ "type": "recovery_preview", "value": recovery_preview() }),
+            ),
+        );
     }
     results
 }
@@ -684,7 +802,7 @@ fn server_messages(protocol_version: u32) -> Vec<Value> {
 fn discriminants() -> Value {
     json!({
         "operations": ["handshake", "query", "command", "subscribe"],
-        "readQueries": ["workspace_summary", "hierarchy_children", "workspace_hierarchy", "board_views", "board_view", "board", "attention", "board_snapshot"],
+        "readQueries": ["workspace_summary", "hierarchy_children", "workspace_hierarchy", "board_views", "board_view", "board", "attention", "repository_observability", "checkout_observability", "session_observability", "recovery_preview", "board_snapshot"],
         "responseResults": [
             "handshake",
             "workspace_summary",
@@ -694,6 +812,10 @@ fn discriminants() -> Value {
             "board_view",
             "board",
             "attention",
+            "repository_observability",
+            "checkout_observability",
+            "session_observability",
+            "recovery_preview",
             "board_snapshot",
             "subscription_accepted",
             "command_accepted"
@@ -715,7 +837,9 @@ fn discriminants() -> Value {
             "projection_changed",
             "board_view_saved",
             "native_sessions_refreshed",
-            "partial_outcome_recorded"
+            "partial_outcome_recorded",
+            "checkout_changed",
+            "session_liveness_changed"
         ],
         "eventPayloads": [
             { "type": "projection_changed", "value": {
@@ -725,6 +849,8 @@ fn discriminants() -> Value {
             { "type": "native_sessions_refreshed", "value": { "sessionCount": 1 }},
             { "type": "partial_outcome", "value": { "outcome": partial_outcome() }}
             ,{ "type": "board_card_changed", "value": { "card": board_card() }}
+            ,{ "type": "checkout_changed", "value": { "checkout": checkout_observability(), "cards": [board_card()] }}
+            ,{ "type": "session_liveness_changed", "value": { "session": session_observability(), "recovery": recovery_preview(), "cards": [board_card()] }}
         ],
         "resyncReasons": [
             "gap",
@@ -734,7 +860,7 @@ fn discriminants() -> Value {
             "heartbeat_lost"
         ],
         "errorSeverities": ["info", "warning", "error", "fatal"],
-        "readQueryCodes": ["workspace_summary", "hierarchy_children", "workspace_hierarchy", "board_views", "board_view", "board", "attention", "board_snapshot"],
+        "readQueryCodes": ["workspace_summary", "hierarchy_children", "workspace_hierarchy", "board_views", "board_view", "board", "attention", "repository_observability", "checkout_observability", "session_observability", "recovery_preview", "board_snapshot"],
         "hierarchyRefs": [
             { "kind": "workspace", "id": WORKSPACE_ID },
             { "kind": "epic", "id": EPIC_ID },
@@ -809,13 +935,177 @@ fn discriminants() -> Value {
             "work_item_execution",
             "debugging",
             "review"
-        ]
+        ],
+        "evidenceStates": ["current", "historical", "stale", "missing", "unknown", "conflict", "not_loaded"],
+        "checkoutPurposes": ["feature_integration", "work_item_write", "writer_session", "read_only_shared", "unknown"],
+        "checkoutPurposeSources": ["declared", "inherited", "override", "unknown"],
+        "sessionBindingStates": ["pending", "current", "stopped", "reconciliation_required"],
+        "sessionLiveStates": ["active", "idle", "stopped", "unknown", "system_error", "not_loaded"],
+        "sessionRestoreStates": ["tracked", "removed", "not_tracked", "conflict"],
+        "sessionResumabilities": ["validated", "preflight_passed", "unknown", "missing", "corrupt", "unsupported"],
+        "primaryWriterEvidence": ["confirmed_primary", "confirmed_secondary", "not_applicable", "unknown", "conflict"],
+        "recoveryDispositions": ["ready_present", "ready_recreate", "already_live", "conflict", "unresumable", "not_loaded"]
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deterministic_operational_fixtures_cover_scale_history_cardinality_and_uncertainty() {
+        let repository =
+            serde_json::from_value::<RepositoryObservabilityProjection>(repository_observability())
+                .expect("repository projection");
+        let repositories = (1..=100)
+            .map(|index| {
+                let mut projection = repository.clone();
+                projection.repository.id = format!("30000000-0000-0000-0000-{index:012}")
+                    .parse()
+                    .expect("repository ID");
+                projection.repository.slug = format!("service-{index:03}");
+                projection.repository.title = format!("Service {index:03}");
+                projection
+            })
+            .collect::<Vec<_>>();
+
+        let current =
+            serde_json::from_value::<CheckoutObservabilityProjection>(checkout_observability())
+                .expect("checkout projection");
+        let mut historical = current.clone();
+        historical.display_paths.insert(
+            0,
+            ObservedDisplayPath {
+                display_path: "worktrees/previous".to_owned(),
+                state: EvidenceState::Historical,
+                observed_from: "2026-08-29T12:00:00Z".to_owned(),
+                observed_until: Some("2026-08-30T12:00:00Z".to_owned()),
+            },
+        );
+        let mut missing = current.clone();
+        missing.id = "b0000000-0000-0000-0000-000000000002"
+            .parse()
+            .expect("missing checkout ID");
+        missing.availability = CheckoutAvailability::Missing;
+        missing.reconciliation_evidence.state = EvidenceState::Conflict;
+        let mut replaced = current.clone();
+        replaced.id = "b0000000-0000-0000-0000-000000000003"
+            .parse()
+            .expect("replaced checkout ID");
+        replaced.availability = CheckoutAvailability::Replaced;
+        replaced.collision_evidence.state = EvidenceState::Conflict;
+        let checkouts = [current, historical, missing, replaced];
+
+        let base =
+            serde_json::from_value::<SessionObservabilityProjection>(session_observability())
+                .expect("session projection");
+        let live_states = [
+            SessionLiveState::Active,
+            SessionLiveState::Idle,
+            SessionLiveState::Stopped,
+            SessionLiveState::Unknown,
+            SessionLiveState::SystemError,
+            SessionLiveState::NotLoaded,
+        ];
+        let roles = [
+            ManagedSessionRole::EpicNavigation,
+            ManagedSessionRole::FeaturePlanning,
+            ManagedSessionRole::WorkItemExecution,
+            ManagedSessionRole::Debugging,
+            ManagedSessionRole::Review,
+        ];
+        let many_sessions = live_states
+            .into_iter()
+            .enumerate()
+            .map(|(index, state)| {
+                let mut session = base.clone();
+                session.id = format!("70000000-0000-0000-0000-{:012}", index + 1)
+                    .parse()
+                    .expect("session ID");
+                session.provider = if index % 2 == 0 {
+                    Provider::Claude
+                } else {
+                    Provider::Codex
+                };
+                session.role = roles[index % roles.len()];
+                session.liveness.state = state;
+                session.liveness.stale = state == SessionLiveState::Unknown;
+                if index % 3 == 0 {
+                    session.authoritative_profile = None;
+                    session.authoritative_model = None;
+                    session.profile_evidence.state = EvidenceState::NotLoaded;
+                }
+                if state == SessionLiveState::NotLoaded {
+                    session.resumability = SessionResumability::Missing;
+                }
+                session
+            })
+            .collect::<Vec<_>>();
+        let session_cardinalities = [Vec::new(), vec![base], many_sessions];
+
+        let already_live = serde_json::from_value::<RecoveryPreviewProjection>(recovery_preview())
+            .expect("recovery projection");
+        let mut unresumable = already_live.clone();
+        unresumable.disposition = RecoveryDispositionProjection::Unresumable;
+        let mut conflict = already_live.clone();
+        conflict.disposition = RecoveryDispositionProjection::Conflict;
+        conflict.conflicts.push(Diagnostic {
+            code: "checkout_collision".to_owned(),
+            severity: ErrorSeverity::Warning,
+            message: "Checkout recovery evidence conflicts.".to_owned(),
+            owner: None,
+        });
+        let recovery = [already_live, unresumable, conflict];
+
+        assert_eq!(repositories.len(), 100);
+        assert!(checkouts.iter().any(|checkout| {
+            checkout
+                .display_paths
+                .iter()
+                .any(|path| path.state == EvidenceState::Historical)
+        }));
+        assert_eq!(
+            checkouts
+                .iter()
+                .map(|checkout| checkout.availability)
+                .collect::<Vec<_>>(),
+            vec![
+                CheckoutAvailability::Available,
+                CheckoutAvailability::Available,
+                CheckoutAvailability::Missing,
+                CheckoutAvailability::Replaced,
+            ]
+        );
+        assert_eq!(
+            session_cardinalities
+                .iter()
+                .map(Vec::len)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 6]
+        );
+        assert!(
+            session_cardinalities[2]
+                .iter()
+                .any(|session| session.liveness.stale)
+        );
+        assert!(
+            session_cardinalities[2]
+                .iter()
+                .any(|session| session.resumability == SessionResumability::Missing)
+        );
+        assert_eq!(
+            recovery
+                .iter()
+                .map(|preview| preview.disposition)
+                .collect::<Vec<_>>(),
+            vec![
+                RecoveryDispositionProjection::AlreadyLive,
+                RecoveryDispositionProjection::Unresumable,
+                RecoveryDispositionProjection::Conflict,
+            ]
+        );
+        assert_eq!(recovery[2].conflicts.len(), 1);
+    }
 
     #[test]
     fn current_and_previous_fixtures_round_trip_through_rust() {

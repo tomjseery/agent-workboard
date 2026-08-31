@@ -1,9 +1,12 @@
 import { memo } from "react";
+import { Link } from "@tanstack/react-router";
 
-import type { BoardCardProjection } from "../../../core/generated";
+import type { BoardCardProjection, WorkspaceId } from "../../../core/generated";
 
 interface BoardCardProps {
   card: BoardCardProjection;
+  workspaceId: WorkspaceId;
+  evidenceLinks: boolean;
   selected: boolean;
   focused: boolean;
   onSelect(): void;
@@ -12,7 +15,7 @@ interface BoardCardProps {
   onKeyDown(event: React.KeyboardEvent<HTMLButtonElement>): void;
 }
 
-export const BoardCard = memo(function BoardCard({ card, selected, focused, onSelect, onFocus, onOpen, onKeyDown }: BoardCardProps) {
+export const BoardCard = memo(function BoardCard({ card, workspaceId, evidenceLinks, selected, focused, onSelect, onFocus, onOpen, onKeyDown }: BoardCardProps) {
   return (
     <article role="listitem" aria-posinset={card.lanePosition} aria-setsize={card.laneCount} className="px-2 py-1">
       <button
@@ -39,6 +42,10 @@ export const BoardCard = memo(function BoardCard({ card, selected, focused, onSe
         <span className="mt-1 block text-xs">Sessions: {card.sessionSummary.total}</span>
         {card.attentionReasons.length > 0 && <span className="mt-2 block text-xs font-semibold text-[var(--warning)]">{card.attentionReasons.map((reason) => reason.message).join(" · ")}</span>}
       </button>
+      {evidenceLinks && (card.checkoutIds.length > 0 || card.sessionIds.length > 0) && <nav aria-label={`Evidence for ${card.workItem.key}`} className="mt-1 flex flex-wrap gap-2 px-1 text-xs">
+        {card.checkoutIds.map((checkoutId) => <Link key={checkoutId} to="/workspaces/$workspaceId/checkouts/$checkoutId" params={{ workspaceId, checkoutId }} className="rounded border border-[var(--border)] px-2 py-1">Checkout {checkoutId.slice(0, 8)}</Link>)}
+        {card.sessionIds.map((sessionId) => <Link key={sessionId} to="/workspaces/$workspaceId/sessions/$sessionId" params={{ workspaceId, sessionId }} className="rounded border border-[var(--border)] px-2 py-1">Session {sessionId.slice(0, 8)}</Link>)}
+      </nav>}
     </article>
   );
 });
