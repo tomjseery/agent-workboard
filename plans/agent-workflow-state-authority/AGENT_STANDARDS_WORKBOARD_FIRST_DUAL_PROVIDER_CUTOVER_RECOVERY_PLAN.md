@@ -282,6 +282,29 @@ PowerShell tests, and a clean generated-copy check.
 
 Workboard item: `prove-dual-provider-recovery-matrix`.
 
+Status: complete on 2026-08-31 in Agent Standards commit `f921572`
+(`test(workflow): prove dual-provider recovery matrix`).
+
+The versioned offline matrix runs the repository and Workboard providers through shared interruption and
+resume scenarios under both Claude and Codex identities. It pins the unmanaged state baseline and proves
+that managed read, resolve, bind, and checkpoint operations leave Git status and both staged and unstaged
+plan diffs clean. Restart creates a fresh provider over the same repository or authenticated hierarchy and
+recovers the same state and continuation identity; the managed checkpoint remains solely in the in-memory
+typed operation log.
+
+The reconciliation catalogue covers 34 token, operation, read, schema, hierarchy, ownership, relationship,
+document, checkout, Git-identity, and session-binding failures for each host. Every one of the 68 executions
+runs with a valid repository plan and ledger present while traps assert that `RepositoryStateProvider` is
+never constructed and its ledger resolver is never called. Skill-route assertions cover the eight cutover
+skills across canonical, Claude, shared plugin, and Codex mirrors. The Concertable-only `continue-roadmap`
+entry remains explicitly excluded and unchanged. Canonical runtime, hook, fixture, host-hook, and generated
+mirror parity is also asserted without a live Workboard database, executable, or network.
+
+Workflow verification reports contract v2, two providers, two hosts, ten examples, and five schemas. The
+complete Windows PowerShell hook suite reports 446 tests passing with the one pre-existing POSIX-only skip
+and no new skips. Generated-copy verification reports 304 files current, including 73 skills and 29 docs.
+The Agent Standards implementation checkout is clean at `f921572`.
+
 Create deterministic offline fixtures for both provider contracts, every token/read outcome, no-fallback,
 no-incidental-plan-mutation, interruption, restart, resume, skill routing, host hook parity, generated mirrors,
 and the pinned unmanaged baseline. Every reconciliation-required case must prove the repository provider was
@@ -301,10 +324,13 @@ and generated Claude/Codex skills, hooks, workflows, and manifests match their s
 
 ## Current delivery state
 
-Phases 1 through 5 are complete and separately committed. The immutable recovery evidence is recorded above;
+Phases 1 through 6 are complete and separately committed. The immutable recovery evidence is recorded above;
 Workflow v2 selects deterministic repository, Workboard, or reconciliation-required authority; the eight
 in-scope planning and execution skills follow that selection identically under Claude and Codex; and hooks,
 worktree close, generators, manifests, mirrors, and README reachability now enforce the same routes. The
+offline recovery matrix proves both provider contracts and host identities, fail-closed reconciliation,
+interruption and restart recovery, the pinned unmanaged baseline, and Git-observed managed plan cleanliness.
+This delivery plan is complete. The
 unresolved upstream ownership gap for a structured atomic replacement of the current opaque `work_checkpoint`
-payload remains explicit; managed checkpointing must not fill it with repository state or a second planning
-record. Phase 6 has not started and is the next delivery gate.
+payload remains explicit; managed checkpointing did not fill it with repository state or a second planning
+record. Migration and compatibility work remains separately gated and has not started here.

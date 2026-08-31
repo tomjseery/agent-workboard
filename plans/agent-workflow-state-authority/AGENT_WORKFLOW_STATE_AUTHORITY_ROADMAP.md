@@ -13,7 +13,7 @@ Repositories use ordinary `_PLAN.md` files for human-readable planning.
 
 ## Roadmap
 
-- [ ] `agent-workflow-state-authority/agent-standards-workboard-first-dual-provider-cutover-recovery` — add
+- [x] `agent-workflow-state-authority/agent-standards-workboard-first-dual-provider-cutover-recovery` — add
   deterministic managed, unmanaged, and reconciliation-required routing to Agent Standards, including its
   contracts, skills, hooks, worktree tooling, generated mirrors, and offline recovery matrix.
 - [ ] `agent-workflow-state-authority/frictionless-managed-work-item-launch-and-recovery` — make `workboard
