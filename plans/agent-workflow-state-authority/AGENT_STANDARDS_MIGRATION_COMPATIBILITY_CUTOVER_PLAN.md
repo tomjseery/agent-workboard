@@ -48,6 +48,15 @@ known limitations, rollback point, and a pass/fail result for every row.
 
 Workboard item: `capture-legacy-compatibility-and-rollback-baseline`.
 
+Status: blocked before implementation on 2026-08-31. The Agent Standards dual-provider foundation is
+accepted at `f921572`, with its recovery matrix and generated-copy verification recorded as complete. The
+frictionless managed-lifecycle foundation is not accepted at Workboard plan commit `6742677`: its committed
+plan records all nine phases only as a local candidate, with review and PR publication still outstanding,
+and records final Agent Standards dogfood as gated on a newly launched scoped-credential session rather than
+the legacy pre-feature session. Phase 1 inventory, backup/restore rehearsal, baseline commands, and Agent
+Standards evidence must not begin until that foundation records accepted evidence. No implementation or
+rollback artifact was changed while recording this blocker.
+
 Inventory the Agent Standards legacy migration corpus, blocked plan-state work, prerequisite acceptance,
 roadmap references, plan-aware skills, hooks, worktree/delivery tooling, Workflow v2 repository contracts,
 generated mirrors, and deterministic tests. Classify every live legacy plan as finished, migrated, or still
@@ -116,6 +125,10 @@ available until every legacy plan is finished or migrated.
 
 ## Current delivery state
 
-Planning is published and its five Work items are ready. It begins only after the Workboard managed-lifecycle
-and Agent Standards dual-provider foundations are accepted. Concertable cleanup remains separately gated on
-Tommy's explicit durable approval after parity evidence is accepted.
+Planning is published and its five Work items are ready. The Agent Standards dual-provider foundation is
+accepted at `f921572`; the frictionless managed-lifecycle foundation remains unaccepted at Workboard plan
+commit `6742677` because review and PR publication are outstanding and final Agent Standards dogfood still
+requires a newly launched scoped-credential session. Phase 1 is blocked before implementation, so no legacy
+inventory, backup/restore rehearsal, live dogfood, routing change, cleanup, migration, or deletion has begun.
+The next delivery gate is durable acceptance of that foundation. Concertable cleanup remains separately
+gated on Tommy's explicit durable approval after parity evidence is accepted.
