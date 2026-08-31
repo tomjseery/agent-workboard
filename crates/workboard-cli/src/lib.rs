@@ -23,6 +23,7 @@ use workboard_application::concertable_import::{
 use workboard_application::feature_integration::{
     ConfirmFeatureIntegration, IntegrateFeatureBranches,
 };
+use workboard_application::feature_work_item_planning::work_item_planner_prompt;
 use workboard_application::follow_up::{SendSessionFollowUp, SystemFollowUpExecutor};
 use workboard_application::hooks::{HookIngestionMutation, MAX_HOOK_INPUT_BYTES};
 use workboard_application::integration::{
@@ -254,6 +255,31 @@ struct WorkArgs {
 
 #[derive(Debug, Subcommand)]
 enum WorkCommand {
+    Create {
+        request: String,
+        #[arg(long)]
+        feature: Option<String>,
+        #[arg(long)]
+        repository: Option<String>,
+        #[arg(long, value_enum, default_value = "claude")]
+        tool: ToolArg,
+        #[arg(long)]
+        terminal: Option<PathBuf>,
+        #[arg(long)]
+        native: Option<PathBuf>,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    Proposals {
+        #[arg(long)]
+        feature: Option<String>,
+    },
+    Approve {
+        proposal: String,
+    },
+    Reject {
+        proposal: String,
+    },
     Open {
         work_item: Option<String>,
     },
@@ -1067,6 +1093,125 @@ fn execute(cli: Cli) -> Result<String, AppError> {
                 &outcome,
                 cli.json,
                 format!("Published {} in commit {}", feature.title, outcome.commit),
+            )
+        }
+        Some(Command::Work(WorkArgs {
+            command:
+                WorkCommand::Create {
+                    request,
+                    feature,
+                    repository,
+                    tool,
+                    terminal,
+                    native,
+                    idempotency_key,
+                },
+        })) => {
+            let workspace_id = resolve_workspace(&application, cli.workspace)?;
+            let snapshot = application.snapshot(workspace_id)?;
+            let feature = select_feature(&snapshot, feature.as_deref(), cli.json)?.clone();
+            let repository = select_repository(&snapshot, repository.as_deref(), cli.json)?.clone();
+            let tool = Tool::from(tool);
+            let now = time::OffsetDateTime::now_utc();
+            preflight_capability_injection(&mut application, tool, now)?;
+            let capability = capability_inputs(&application, tool, repository.slug.as_str())?;
+            let checkout = application.feature_checkout(feature.id, repository.id)?;
+            application
+                .checkout_service()
+                .reconcile_registered_checkout(checkout.checkout_id, now)?;
+            let prepared = application
+                .session_launch()
+                .begin(BeginManagedSessionLaunch {
+                    owner: HierarchyOwner::Feature(feature.id),
+                    role: ManagedSessionRole::FeaturePlanning,
+                    tool,
+                    mode: ManagedLaunchMode::New,
+                    checkout_id: checkout.checkout_id,
+                    working_directory: checkout.path,
+                    title: format!("{} — add Work item", feature.title),
+                    terminal_window: Some(format!("workboard-feature-{}", feature.id)),
+                    terminal_executable: terminal.unwrap_or_else(default_terminal_executable),
+                    native_executable: native.unwrap_or_else(|| default_native_executable(tool)),
+                    idempotency_key: idempotency_key.unwrap_or_else(new_idempotency_key),
+                    created_at: now,
+                    expires_at: now + time::Duration::minutes(2),
+                    resume_context: None,
+                    profile: workboard_core::LaunchProfile::suggested(
+                        tool,
+                        ManagedSessionRole::FeaturePlanning,
+                    ),
+                    initial_prompt: Some(work_item_planner_prompt(feature.id, &request)),
+                    capability,
+                })?;
+            application
+                .session_launch()
+                .execute(&prepared, &SystemLaunchExecutor)?;
+            let binding = await_binding(&mut application, prepared.intent_id)?;
+            output(
+                &binding,
+                cli.json,
+                format!(
+                    "Launched and bound {} planner for {}. Approve its proposal with: workboard work approve <proposal>",
+                    tool_title(tool),
+                    feature.title
+                ),
+            )
+        }
+        Some(Command::Work(WorkArgs {
+            command: WorkCommand::Proposals { feature },
+        })) => {
+            let workspace_id = resolve_workspace(&application, cli.workspace)?;
+            let snapshot = application.snapshot(workspace_id)?;
+            let feature_id = feature
+                .as_deref()
+                .map(|query| select_feature(&snapshot, Some(query), cli.json).map(|item| item.id))
+                .transpose()?;
+            let proposals = application
+                .feature_work_item_planning()
+                .list(workspace_id, feature_id)?;
+            output(
+                &proposals,
+                cli.json,
+                proposals
+                    .iter()
+                    .map(|proposal| {
+                        format!(
+                            "{} {} — {} item(s)",
+                            proposal.id,
+                            proposal.status,
+                            proposal.work_items.len()
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            )
+        }
+        Some(Command::Work(WorkArgs {
+            command: WorkCommand::Approve { proposal },
+        })) => {
+            let outcome = application
+                .feature_work_item_planning()
+                .approve(&proposal, time::OffsetDateTime::now_utc())?;
+            output(
+                &outcome,
+                cli.json,
+                format!(
+                    "Created {} Work item(s) in planning commit {}",
+                    outcome.work_item_ids.len(),
+                    outcome.commit
+                ),
+            )
+        }
+        Some(Command::Work(WorkArgs {
+            command: WorkCommand::Reject { proposal },
+        })) => {
+            let outcome = application
+                .feature_work_item_planning()
+                .reject(&proposal, time::OffsetDateTime::now_utc())?;
+            output(
+                &outcome,
+                cli.json,
+                format!("Rejected proposal {}", outcome.id),
             )
         }
         Some(Command::Work(WorkArgs {
@@ -3936,6 +4081,34 @@ mod tests {
     fn derives_safe_slugs() {
         assert_eq!(slugify("Venue Availability API"), "venue-availability-api");
         assert_eq!(slugify("  Mixed___punctuation  "), "mixed-punctuation");
+    }
+
+    #[test]
+    fn work_create_defaults_to_claude_and_accepts_a_feature_request() {
+        let cli = Cli::try_parse_from([
+            "workboard",
+            "work",
+            "create",
+            "Add audit logging",
+            "--feature",
+            "availability",
+        ])
+        .expect("parse Work-item planning launch");
+        let Some(CliCommand::Work(work)) = cli.command else {
+            panic!("expected Work command");
+        };
+        let WorkCommand::Create {
+            request,
+            feature,
+            tool,
+            ..
+        } = work.command
+        else {
+            panic!("expected create command");
+        };
+        assert_eq!(request, "Add audit logging");
+        assert_eq!(feature.as_deref(), Some("availability"));
+        assert!(matches!(tool, super::ToolArg::Claude));
     }
 
     #[cfg(windows)]
