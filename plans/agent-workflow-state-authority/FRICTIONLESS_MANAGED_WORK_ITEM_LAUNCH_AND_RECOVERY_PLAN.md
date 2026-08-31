@@ -13,6 +13,9 @@ human-readable planning authority for their combined design and acceptance contr
 ## Outcome
 
 Make installed `workboard` the provider-neutral control plane for the complete managed Work-item lifecycle.
+From an existing Feature, `workboard work create` launches a managed planning conversation, lets the user and
+Claude or Codex refine one or more proposed Work items, and materializes them in Workboard only after explicit
+approval. Planning sessions belong to the Feature; newly created Work items have no execution CLI assigned.
 `workboard work start <selector>` and `workboard work continue <selector>` accept a UUID, unique short ID,
 key, or interactive search; open an actionable TUI; show exact associated sessions and new Claude/Codex
 choices; preselect suitable persisted provider, model, effort, role, and checkout defaults; and launch or
@@ -29,6 +32,10 @@ Every returned command or TUI result presents valid next actions derived from du
 authorization, dependency readiness, bindings, checkout isolation, and provider capability. In
 `awaiting_approval`, `Approve and publish`, `Request revision`, and `Reject` are primary actions. Hook failures
 remain secondary warnings and never hide those choices.
+
+Opening a CLI changes session activity, not Work-item status. The first substantive managed checkpoint moves
+the Work item to `in_progress`; blocked and review checkpoints move it to `blocked` and `review`; successful
+integration into the Feature checkout atomically moves it to `done` and recalculates dependant readiness.
 
 ## Retained baseline and boundaries
 
@@ -91,6 +98,21 @@ Workboard and require typed assigned-context reads before implementation.
 Follow-ups accept Workboard owner/session, text, binding generation, and idempotency only. Workboard resolves
 native delivery internally, preserves FIFO pending/delivered/failed state, correlates receipts, and reconciles
 before retry so restart cannot blindly duplicate delivery.
+
+### Planning and recovery ownership
+
+Feature creation and later Work-item creation use the same managed planning boundary: Workboard launches a
+Feature-associated planner with scoped planning capabilities, the user refines the proposal in the native
+conversation, and typed approval publishes the documents and records. Work-item creation against an existing
+Feature must preserve the Feature identity and document, validate dependencies and unique slugs, and create no
+execution session or checkout assignment until the user later starts a selected item.
+
+Recovery means the last managed CLIs still open in the saved working set. A clean native `SessionEnd` retires
+the session's managed ownership and restore membership automatically. Stop/idle observations do not retire it.
+Terminal loss, provider crash, Workboard failure, or computer restart without a clean end leaves the session
+recoverable. `workboard recover` restores the saved open set; `--since yesterday` filters that set by recent
+activity. Recovery remains previewed and confirmed, skips already-live sessions, groups one Feature per window,
+and never revives a deliberately closed session.
 
 ## Delivery phases
 
@@ -167,19 +189,22 @@ Define action mappings for Draft, WorktreePending, PlanningLaunchPending, Planni
 AwaitingApproval, Publishing, Planned, WorkItemLaunchPending, WorkItemActive, ReconciliationRequired, Blocked,
 Paused, Completed, and Cancelled. Split revision from rejection. Make approval and publication distinct durable
 transitions inside the selected composite, with publication failure returning reconcile/retry without false
-success. Cover stable ordering, authorization, disabled reasons, commands, JSON, hook diagnostics, and the
-complete zero/one/many session behavior including explicit isolated additional writers.
+success. Opening a CLI must not change Work-item status. Checkpoints own `in_progress`, `blocked`, and `review`;
+successful integration owns `done` and dependant-readiness recalculation in the same durable boundary. Cover
+stable ordering, authorization, disabled reasons, commands, JSON, hook diagnostics, and the complete
+zero/one/many session behavior including explicit isolated additional writers.
 
 ### Phase 8 — Deliver the actionable TUI and short commands
 
 Workboard item: `deliver-actionable-workboard-tui`.
 
-Make no-subcommand TUI, `work start`, and `work continue` consume the typed projection. Show workflow state
-and primary actions before diagnostics; provide searchable UUID/short-ID/key selection; render complete
-session evidence; compose Start another from role/access/provider/profile; revalidate every selected action;
-and support graph, batch, integration, cleanup, follow-up, recovery, narrow terminals, and no-color output.
-Human and JSON CLI use the same data. Add deterministic Ratatui, CLI golden, fake terminal, and installed
-provider smoke coverage.
+Make no-subcommand TUI, `work create`, `work start`, and `work continue` consume the typed projection. `work
+create` selects an existing Feature, launches a Feature-associated planner, supports proposal revision and
+approval, and materializes new Work items without assigning execution CLIs. Show workflow state and primary
+actions before diagnostics; provide searchable UUID/short-ID/key selection; render complete session evidence;
+compose Start another from role/access/provider/profile; revalidate every selected action; and support graph,
+batch, integration, cleanup, follow-up, recovery, narrow terminals, and no-color output. Human and JSON CLI use
+the same data. Add deterministic Ratatui, CLI golden, fake terminal, and installed provider smoke coverage.
 
 ### Phase 9 — Accept the zero-friction lifecycle
 
@@ -190,6 +215,13 @@ cardinalities. Prove approval/revision/rejection, Stop-hook warning behavior, ex
 second writers, parallel and cross-repository work, safe read sharing, profiles, fan-out partial recovery,
 integration conflicts and cleanup, follow-up FIFO/receipts, identity failures, and truthful actions.
 
+Run the complete user journey from an existing Feature: launch a planning CLI, refine and approve a new Work
+item, prove it has no execution CLI, start it with a chosen provider, checkpoint substantive work to
+`in_progress`, checkpoint review readiness to `review`, integrate it to `done`, and prove newly satisfied
+dependants become launchable. Cleanly close one managed CLI and prove it is absent from recovery; interrupt
+other Claude and Codex sessions without `SessionEnd`, preview `recover --since yesterday`, and restore the
+selected exact conversations in their Feature-grouped terminal layout.
+
 After all upstream gates, dogfood the blocked Agent Standards Work item in its isolated checkout, ask for the
 final Start/Resume/Start another choice, bind exact cwd before first turn, prove scoped context and one default
 primary writer, send a follow-up, checkpoint through Workboard, and retain integration and rollback evidence.
@@ -197,15 +229,17 @@ Only this accepted evidence may authorize the downstream Work item.
 
 ## Current delivery state
 
-All nine implementation phases are present in the local committed candidate. It includes managed checkout
-reconciliation and isolation, scoped assigned context and per-session capability injection, exact lifecycle
-binding, launch profiles, ordered follow-ups, dependency-aware batch fan-out and integration, action
-projection, actionable start/continue TUI flows, unique short selectors, and real-provider smoke coverage.
+Phases 7 through 9 were reopened on 2026-08-31 after owner review of the complete user journey. The committed
+candidate already provides managed checkout reconciliation and isolation, scoped context and capabilities,
+exact lifecycle binding, launch profiles, follow-ups, dependency-aware fan-out and integration, action
+projection, start/continue TUI flows, recovery, and clean `SessionEnd` retirement. Two product gaps remain
+before live acceptance: planning a new Work item inside an existing published Feature, and atomically moving a
+reviewed Work item to `done` after successful integration while recalculating dependant readiness.
 
-The merged candidate passes `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D
-warnings`, and `cargo test --workspace` (208 tests). Both explicit authenticated provider smokes passed.
-The remaining delivery gate is review and PR publication; final Agent Standards dogfood remains gated on a
-newly launched scoped-credential session rather than the legacy pre-feature session.
+The next delivery gate is implementation and deterministic verification of those gaps, followed by the full
+live creation, execution, status, integration, clean-close exclusion, and `recover --since yesterday` journey
+under Claude and Codex. Review and PR publication follow that evidence. Agent Standards migration compatibility
+work remains blocked until this foundation is accepted.
 
 ## Verification and acceptance
 
