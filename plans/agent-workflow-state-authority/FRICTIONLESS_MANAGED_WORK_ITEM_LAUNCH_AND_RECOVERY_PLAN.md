@@ -240,10 +240,20 @@ to `done` only after every repository integration for that item is complete; dep
 that durable state. Clean `SessionEnd` retirement and interrupted-session recovery were already implemented and
 remain covered by deterministic tests.
 
-Phase 9 remains open. The next delivery gate is the full installed live creation, execution, status,
-integration, clean-close exclusion, and `recover --since yesterday` journey under Claude and Codex. Review and
-PR publication follow that accepted evidence. Agent Standards migration compatibility work remains blocked
-until this foundation is accepted.
+Phase 9 remains open. The first live attempt on 2026-08-31 preserved the existing recoverable Codex Feature
+planner and execution session, then exposed that new Feature planners incorrectly competed for the checkout's
+exclusive writer slot. Commit `11865de` corrected the rule: Feature planning is read-only and may share the
+Feature checkout, while execution and debugging writers remain exclusive; the focused exclusivity test passed.
+The retry launched Claude process `22356` under durable intent `8b9e9a70-51ba-4776-ad6c-128099a08923`, with the
+exact scoped bundle, skills, startup/end hooks, database, Feature checkout, and prompt, but no `SessionStart`
+hook or managed transcript arrived before the binding timeout. The process remains at pre-session native UI
+and Workboard has correctly created no managed association or recovery entry. Live acceptance must resume after
+the user clears or reports that native startup state; do not retire the existing recovery set to bypass it.
+
+The remaining delivery gate is the full installed live creation, execution, status, integration, clean-close
+exclusion, and `recover --since yesterday` journey under Claude and Codex. Review and PR publication follow
+that accepted evidence. Agent Standards migration compatibility work remains blocked until this foundation is
+accepted.
 
 ## Verification and acceptance
 
