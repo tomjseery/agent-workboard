@@ -4,8 +4,11 @@ use ts_rs::TS;
 
 use crate::{
     AttentionPage, AttentionQuery, BoardCardProjection, BoardPage, BoardQuery, BoardSnapshot,
-    BoardViewDefinition, BoardViewId, DaemonInstanceId, EntityRef, EventId, HierarchyChildren,
-    HierarchyRef, RequestId, WorkspaceHierarchy, WorkspaceId, WorkspaceReference, WorkspaceSummary,
+    BoardViewDefinition, BoardViewId, CheckoutId, CheckoutObservabilityProjection,
+    DaemonInstanceId, EntityRef, EventId, HierarchyChildren, HierarchyRef,
+    RecoveryPreviewProjection, RepositoryId, RepositoryObservabilityProjection, RequestId,
+    SessionId, SessionObservabilityProjection, WorkspaceHierarchy, WorkspaceId, WorkspaceReference,
+    WorkspaceSummary,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -200,6 +203,10 @@ pub enum ReadQuery {
     BoardView { view_id: BoardViewId },
     Board { query: BoardQuery },
     Attention { query: AttentionQuery },
+    RepositoryObservability { repository_id: RepositoryId },
+    CheckoutObservability { checkout_id: CheckoutId },
+    SessionObservability { session_id: SessionId },
+    RecoveryPreview { session_id: SessionId },
     BoardSnapshot,
 }
 
@@ -357,6 +364,10 @@ pub enum ResponseResult {
     BoardView(BoardViewDefinition),
     Board(BoardPage),
     Attention(AttentionPage),
+    RepositoryObservability(RepositoryObservabilityProjection),
+    CheckoutObservability(CheckoutObservabilityProjection),
+    SessionObservability(SessionObservabilityProjection),
+    RecoveryPreview(RecoveryPreviewProjection),
     BoardSnapshot(#[ts(type = "unknown")] BoardSnapshot),
     SubscriptionAccepted { cursor: EventCursor },
     CommandAccepted { code: CommandCode },
@@ -493,6 +504,8 @@ pub enum EventKind {
     BoardViewSaved,
     NativeSessionsRefreshed,
     PartialOutcomeRecorded,
+    CheckoutChanged,
+    SessionLivenessChanged,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -503,11 +516,30 @@ pub enum EventKind {
     rename_all_fields = "camelCase"
 )]
 pub enum EventPayload {
-    ProjectionChanged { entity: EntityRef },
-    BoardViewSaved { view: BoardViewDefinition },
-    NativeSessionsRefreshed { session_count: usize },
-    PartialOutcome { outcome: PartialOutcome },
-    BoardCardChanged { card: Box<BoardCardProjection> },
+    ProjectionChanged {
+        entity: EntityRef,
+    },
+    BoardViewSaved {
+        view: BoardViewDefinition,
+    },
+    NativeSessionsRefreshed {
+        session_count: usize,
+    },
+    PartialOutcome {
+        outcome: PartialOutcome,
+    },
+    BoardCardChanged {
+        card: Box<BoardCardProjection>,
+    },
+    CheckoutChanged {
+        checkout: Box<CheckoutObservabilityProjection>,
+        cards: Vec<BoardCardProjection>,
+    },
+    SessionLivenessChanged {
+        session: Box<SessionObservabilityProjection>,
+        recovery: Box<RecoveryPreviewProjection>,
+        cards: Vec<BoardCardProjection>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -527,6 +559,10 @@ pub enum ReadQueryCode {
     BoardView,
     Board,
     Attention,
+    RepositoryObservability,
+    CheckoutObservability,
+    SessionObservability,
+    RecoveryPreview,
     BoardSnapshot,
 }
 

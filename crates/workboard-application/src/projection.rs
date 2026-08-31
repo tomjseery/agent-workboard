@@ -404,6 +404,10 @@ impl WorkboardApplication {
                 protocol::ReadQueryCode::BoardView,
                 protocol::ReadQueryCode::Board,
                 protocol::ReadQueryCode::Attention,
+                protocol::ReadQueryCode::RepositoryObservability,
+                protocol::ReadQueryCode::CheckoutObservability,
+                protocol::ReadQueryCode::SessionObservability,
+                protocol::ReadQueryCode::RecoveryPreview,
                 protocol::ReadQueryCode::BoardSnapshot,
             ],
         };

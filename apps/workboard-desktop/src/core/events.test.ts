@@ -2,11 +2,15 @@ import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 
 import type { BoardViewDefinition, EventEnvelope, ResponseEnvelope } from "./generated";
+import current from "./generated/conformance-current.json";
 import { applyWorkspaceEvent } from "./events";
+import { checkoutQueryKeys } from "../features/checkout/api/checkoutQueryKeys";
 import { hierarchyQueryKeys } from "../features/hierarchy/api/hierarchyQueryKeys";
 import { savedViewQueryKeys } from "../features/saved-views/api/savedViewQueryKeys";
 import { workspaceQueryKeys } from "../features/workspace/api/workspaceQueryKeys";
 import { boardQueryKeys } from "../features/board/api/boardQueryKeys";
+import { repositoryQueryKeys } from "../features/repository/api/repositoryQueryKeys";
+import { sessionQueryKeys } from "../features/session/api/sessionQueryKeys";
 import { createLargeBoardFixture } from "../features/board/fixtures/largeBoardFixture";
 
 const workspaceId = "20000000-0000-0000-0000-000000000001";
@@ -15,11 +19,11 @@ const requestId = "10000000-0000-0000-0000-000000000001";
 const view: BoardViewDefinition = { id: viewId, workspaceId, title: "Service", filters: { query: null, repositoryIds: [], statuses: [] }, grouping: { kind: "hierarchy", lanes: [] }, sort: { field: "title", direction: "ascending" }, density: "comfortable", revision: 2 };
 
 function envelope(result: ResponseEnvelope["result"]): ResponseEnvelope {
-  return { protocolVersion: 4, requestId, correlationId: requestId, workspaceId, authoritativeRevision: 1, serverTimestamp: "2026-08-30T12:00:00Z", result, error: null, diagnostics: [], availableActions: [], partialOutcomes: [] };
+  return { protocolVersion: 5, requestId, correlationId: requestId, workspaceId, authoritativeRevision: 1, serverTimestamp: "2026-08-30T12:00:00Z", result, error: null, diagnostics: [], availableActions: [], partialOutcomes: [] };
 }
 
 function event(queries: EventEnvelope["invalidationScope"] extends infer Scope ? Scope extends { queries: infer Queries } ? Queries : never : never): EventEnvelope {
-  return { protocolVersion: 4, eventVersion: 1, workspaceId, sequence: 2, eventId: "90000000-0000-0000-0000-000000000001", occurredAt: "2026-08-30T12:00:01Z", owner: { kind: "workspace", id: workspaceId }, entityRevision: 2, kind: "board_view_saved", payload: { type: "board_view_saved", value: { view } }, invalidationScope: { queries, owners: [{ kind: "workspace", id: workspaceId }] }, operationCorrelationId: requestId, partialOutcomes: [] };
+  return { protocolVersion: 5, eventVersion: 1, workspaceId, sequence: 2, eventId: "90000000-0000-0000-0000-000000000001", occurredAt: "2026-08-30T12:00:01Z", owner: { kind: "workspace", id: workspaceId }, entityRevision: 2, kind: "board_view_saved", payload: { type: "board_view_saved", value: { view } }, invalidationScope: { queries, owners: [{ kind: "workspace", id: workspaceId }] }, operationCorrelationId: requestId, partialOutcomes: [] };
 }
 
 describe("ordered event cache updates", () => {
@@ -72,5 +76,52 @@ describe("ordered event cache updates", () => {
     expect(queryClient.getQueryData(unrelatedKey)).toBe(unrelated);
     expect(queryClient.getQueryState(boardKey)?.isInvalidated).toBe(false);
     expect(queryClient.getQueryState(attentionKey)?.isInvalidated).toBe(true);
+  });
+
+  it("patches only an affected checkout repository and canonical cards", () => {
+    const queryClient = new QueryClient();
+    const payload = current.discriminants.eventPayloads.find(({ type }) => type === "checkout_changed") as unknown as Extract<NonNullable<EventEnvelope["payload"]>, { type: "checkout_changed" }>;
+    const checkout = payload.value.checkout;
+    const unrelatedRepositoryId = "30000000-0000-0000-0000-000000000099";
+    const unrelatedCheckoutId = "b0000000-0000-0000-0000-000000000099";
+    const affectedRepository = envelope(null);
+    const unrelatedRepository = envelope(null);
+    const unrelatedCheckout = envelope(null);
+    queryClient.setQueryData(checkoutQueryKeys.detail(workspaceId, checkout.id), envelope(null));
+    queryClient.setQueryData(checkoutQueryKeys.detail(workspaceId, unrelatedCheckoutId), unrelatedCheckout);
+    queryClient.setQueryData(repositoryQueryKeys.detail(workspaceId, checkout.repository.id), affectedRepository);
+    queryClient.setQueryData(repositoryQueryKeys.detail(workspaceId, unrelatedRepositoryId), unrelatedRepository);
+    const fixture = createLargeBoardFixture();
+    const parameters = { limit: 200, query: null, repositoryIds: [], statuses: [], laneKeys: [], sort: { field: "key" as const, direction: "ascending" as const } };
+    const first = fixture.cards[0]!;
+    const untouched = fixture.cards[1]!;
+    const boardKey = boardQueryKeys.board(workspaceId, parameters);
+    queryClient.setQueryData(boardKey, { pages: [envelope({ type: "board", value: { lanes: fixture.lanes, cards: [first, untouched], nextCursor: null, totalCount: 2, revision: 1 } })], pageParams: [null] });
+    applyWorkspaceEvent(queryClient, { ...event(["checkout_observability", "repository_observability", "board"]), kind: "checkout_changed", payload, owner: { kind: "repository", id: checkout.repository.id } });
+    expect(queryClient.getQueryData<ResponseEnvelope>(checkoutQueryKeys.detail(workspaceId, checkout.id))?.result).toEqual({ type: "checkout_observability", value: checkout });
+    expect(queryClient.getQueryData(checkoutQueryKeys.detail(workspaceId, unrelatedCheckoutId))).toBe(unrelatedCheckout);
+    expect(queryClient.getQueryState(repositoryQueryKeys.detail(workspaceId, checkout.repository.id))?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryData(repositoryQueryKeys.detail(workspaceId, unrelatedRepositoryId))).toBe(unrelatedRepository);
+    const result = queryClient.getQueryData<{ pages: ResponseEnvelope[] }>(boardKey)!.pages[0]!.result;
+    if (result?.type !== "board") throw new Error("board projection missing");
+    expect(result.value.cards[0]).toEqual(payload.value.cards[0]);
+    expect(result.value.cards[1]).toBe(untouched);
+  });
+
+  it("patches one session and its recovery preview without touching unrelated panels", () => {
+    const queryClient = new QueryClient();
+    const payload = current.discriminants.eventPayloads.find(({ type }) => type === "session_liveness_changed") as unknown as Extract<NonNullable<EventEnvelope["payload"]>, { type: "session_liveness_changed" }>;
+    const unrelatedSessionId = "70000000-0000-0000-0000-000000000099";
+    const unrelatedSession = envelope(null);
+    const unrelatedRecovery = envelope(null);
+    queryClient.setQueryData(sessionQueryKeys.detail(workspaceId, payload.value.session.id), envelope(null));
+    queryClient.setQueryData(sessionQueryKeys.recovery(workspaceId, payload.value.session.id), envelope(null));
+    queryClient.setQueryData(sessionQueryKeys.detail(workspaceId, unrelatedSessionId), unrelatedSession);
+    queryClient.setQueryData(sessionQueryKeys.recovery(workspaceId, unrelatedSessionId), unrelatedRecovery);
+    applyWorkspaceEvent(queryClient, { ...event(["session_observability", "recovery_preview", "board"]), kind: "session_liveness_changed", payload, owner: { kind: "session", id: payload.value.session.id } });
+    expect(queryClient.getQueryData<ResponseEnvelope>(sessionQueryKeys.detail(workspaceId, payload.value.session.id))?.result).toEqual({ type: "session_observability", value: payload.value.session });
+    expect(queryClient.getQueryData<ResponseEnvelope>(sessionQueryKeys.recovery(workspaceId, payload.value.session.id))?.result).toEqual({ type: "recovery_preview", value: payload.value.recovery });
+    expect(queryClient.getQueryData(sessionQueryKeys.detail(workspaceId, unrelatedSessionId))).toBe(unrelatedSession);
+    expect(queryClient.getQueryData(sessionQueryKeys.recovery(workspaceId, unrelatedSessionId))).toBe(unrelatedRecovery);
   });
 });

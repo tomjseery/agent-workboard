@@ -222,6 +222,15 @@ impl WorkboardApplication {
                 &sessions,
                 evidence,
             );
+            let mut card_session_ids = session_ids.get(&item.id).cloned().unwrap_or_default();
+            card_session_ids.sort_by_key(ToString::to_string);
+            let mut checkout_ids = snapshot
+                .effective_checkouts
+                .iter()
+                .filter(|checkout| checkout.work_item_id == Some(item.id))
+                .map(|checkout| checkout_id(checkout.checkout_id))
+                .collect::<Vec<_>>();
+            checkout_ids.sort_by_key(ToString::to_string);
             let mut reasons =
                 work_item_attention_reasons(item, dependency_readiness, &session_summary, evidence);
             reasons.sort_by_key(|reason| reason.rank);
@@ -260,6 +269,8 @@ impl WorkboardApplication {
                     },
                     repositories: repository_scope,
                     session_summary,
+                    checkout_ids,
+                    session_ids: card_session_ids.into_iter().map(session_id).collect(),
                     attention_reasons: reasons,
                     revision: evidence
                         .revisions
@@ -797,6 +808,14 @@ fn workspace_id(id: core::WorkspaceId) -> protocol::WorkspaceId {
 fn repository_id(id: core::RepositoryId) -> protocol::RepositoryId {
     protocol::RepositoryId::from_uuid(*id.as_uuid())
 }
+
+fn checkout_id(id: core::CheckoutId) -> protocol::CheckoutId {
+    protocol::CheckoutId::from_uuid(*id.as_uuid())
+}
+
+fn session_id(id: core::ConversationId) -> protocol::SessionId {
+    protocol::SessionId::from_uuid(*id.as_uuid())
+}
 fn epic_id(id: core::EpicId) -> protocol::EpicId {
     protocol::EpicId::from_uuid(*id.as_uuid())
 }
@@ -891,6 +910,8 @@ mod tests {
                         protocol::Provider::Codex
                     }],
                 },
+                checkout_ids: vec![wire_id(7, index, protocol::CheckoutId::from_uuid)],
+                session_ids: vec![wire_id(8, index, protocol::SessionId::from_uuid)],
                 attention_reasons: vec![attention_reason(match index % 8 {
                     0 => protocol::AttentionReasonCode::ApprovalRequired,
                     1 => protocol::AttentionReasonCode::RevisionRequested,

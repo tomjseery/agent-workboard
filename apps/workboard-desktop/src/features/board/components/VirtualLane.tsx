@@ -1,11 +1,13 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useRef } from "react";
 
-import type { BoardCardProjection, BoardLaneProjection, WorkItemId } from "../../../core/generated";
+import type { BoardCardProjection, BoardLaneProjection, WorkItemId, WorkspaceId } from "../../../core/generated";
 import { BoardCard } from "./BoardCard";
 
 interface VirtualLaneProps {
   lane: BoardLaneProjection;
+  workspaceId: WorkspaceId;
+  evidenceLinks: boolean;
   cards: BoardCardProjection[];
   selectedWorkItemId?: WorkItemId;
   focusedWorkItemId?: WorkItemId;
@@ -15,7 +17,7 @@ interface VirtualLaneProps {
   onMove(card: BoardCardProjection, key: string): void;
 }
 
-export function VirtualLane({ lane, cards, selectedWorkItemId, focusedWorkItemId, onSelect, onFocus, onOpen, onMove }: VirtualLaneProps) {
+export function VirtualLane({ lane, workspaceId, evidenceLinks, cards, selectedWorkItemId, focusedWorkItemId, onSelect, onFocus, onOpen, onMove }: VirtualLaneProps) {
   const scrollElement = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({ count: cards.length, getScrollElement: () => scrollElement.current, estimateSize: () => 210, initialRect: { width: 320, height: 800 }, overscan: 4, getItemKey: (index) => cards[index]?.workItem.id ?? index });
   const focusedIndex = cards.findIndex((card) => card.workItem.id === focusedWorkItemId);
@@ -33,7 +35,7 @@ export function VirtualLane({ lane, cards, selectedWorkItemId, focusedWorkItemId
           {virtualizer.getVirtualItems().map((item) => {
             const card = cards[item.index];
             if (card === undefined) return null;
-            return <div key={card.workItem.id} ref={virtualizer.measureElement} data-index={item.index} className="absolute left-0 top-0 w-full" style={{ transform: `translateY(${item.start}px)` }}><BoardCard card={card} selected={selectedWorkItemId === card.workItem.id} focused={focusedWorkItemId === card.workItem.id || (focusedWorkItemId === undefined && item.index === 0 && lane.position === 1)} onSelect={() => onSelect(card)} onFocus={() => onFocus(card)} onOpen={() => onOpen(card)} onKeyDown={(event) => { if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown", "Enter", " "].includes(event.key)) { event.preventDefault(); if (event.key === "Enter") onOpen(card); else if (event.key === " ") onSelect(card); else onMove(card, event.key); } }} /></div>;
+            return <div key={card.workItem.id} ref={virtualizer.measureElement} data-index={item.index} className="absolute left-0 top-0 w-full" style={{ transform: `translateY(${item.start}px)` }}><BoardCard card={card} workspaceId={workspaceId} evidenceLinks={evidenceLinks} selected={selectedWorkItemId === card.workItem.id} focused={focusedWorkItemId === card.workItem.id || (focusedWorkItemId === undefined && item.index === 0 && lane.position === 1)} onSelect={() => onSelect(card)} onFocus={() => onFocus(card)} onOpen={() => onOpen(card)} onKeyDown={(event) => { if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown", "Enter", " "].includes(event.key)) { event.preventDefault(); if (event.key === "Enter") onOpen(card); else if (event.key === " ") onSelect(card); else onMove(card, event.key); } }} /></div>;
           })}
         </div>
       </div>

@@ -13,12 +13,33 @@ use workboard_client::{EndpointDescriptor, endpoint_path};
 use workboard_client_protocol::{
     BoardSnapshot, BoardViewDefinition, BoardViewDensity, BoardViewFilters, BoardViewGrouping,
     BoardViewGroupingKind, BoardViewSort, BoardViewSortDirection, BoardViewSortField,
-    CURRENT_PROTOCOL_VERSION, CommandCapability, CommandCode, DaemonInstanceId, EntityRef,
-    EventCursor, EventEnvelope, EventId, EventKind, EventPayload, HandshakeResponse, Heartbeat,
-    HierarchyChildren, Operation, PartialOutcome, ReadQuery, RequestEnvelope, ResponseEnvelope,
-    ResponseResult, ResyncReason, ResyncRequirement, ServerMessage, UnavailableReason,
-    WorkspaceHierarchy, WorkspaceId, WorkspaceProjection, WorkspaceReference, WorkspaceSummary,
+    CURRENT_PROTOCOL_VERSION, CheckoutAvailability, CheckoutObservabilityProjection,
+    CheckoutPurpose, CheckoutPurposeSource, ClassifiedEvidence, CommandCapability, CommandCode,
+    DaemonInstanceId, EntityRef, EventCursor, EventEnvelope, EventId, EventKind, EventPayload,
+    EvidenceState, HandshakeResponse, Heartbeat, HierarchyChildren, ManagedSessionRole, Operation,
+    OwnerProjection, PartialOutcome, PrimaryWriterEvidence, Provider, ReadQuery,
+    RecoveryDispositionProjection, RecoveryPreviewProjection, RepositoryObservabilityProjection,
+    RepositoryReference, RequestEnvelope, ResponseEnvelope, ResponseResult, ResyncReason,
+    ResyncRequirement, ServerMessage, SessionBindingState, SessionLiveState,
+    SessionLivenessProjection, SessionObservabilityProjection, SessionRestoreState,
+    SessionResumability, UnavailableReason, WorkItemId, WorkspaceHierarchy, WorkspaceId,
+    WorkspaceProjection, WorkspaceReference, WorkspaceSummary,
 };
+
+fn not_loaded_evidence() -> ClassifiedEvidence {
+    ClassifiedEvidence {
+        state: EvidenceState::NotLoaded,
+        code: "not_loaded".to_owned(),
+        message: "Evidence is not loaded in this deterministic daemon fixture.".to_owned(),
+        observed_at: None,
+    }
+}
+
+fn test_work_item_id() -> WorkItemId {
+    "60000000-0000-0000-0000-000000000001"
+        .parse()
+        .expect("test Work-item ID")
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -317,6 +338,83 @@ impl FakeServer {
                     revision: 0,
                 })
             }
+            ReadQuery::RepositoryObservability { repository_id } => {
+                ResponseResult::RepositoryObservability(RepositoryObservabilityProjection {
+                    repository: RepositoryReference {
+                        id: *repository_id,
+                        workspace_id: self.workspace_id,
+                        slug: "test-repository".to_owned(),
+                        title: "Test repository".to_owned(),
+                    },
+                    display_paths: Vec::new(),
+                    remote_names: Vec::new(),
+                    default_branch: None,
+                    remote_evidence: not_loaded_evidence(),
+                    default_branch_evidence: not_loaded_evidence(),
+                    checkout_ids: Vec::new(),
+                    revision: self.revision(),
+                    diagnostics: Vec::new(),
+                })
+            }
+            ReadQuery::CheckoutObservability { checkout_id } => {
+                ResponseResult::CheckoutObservability(CheckoutObservabilityProjection {
+                    id: *checkout_id,
+                    repository: self.test_repository(),
+                    purpose: CheckoutPurpose::Unknown,
+                    purpose_source: CheckoutPurposeSource::Unknown,
+                    branch: None,
+                    head: None,
+                    isolation_generation: None,
+                    reconciliation_generation: None,
+                    availability: CheckoutAvailability::Missing,
+                    display_paths: Vec::new(),
+                    replaces_checkout_id: None,
+                    replaced_by_checkout_id: None,
+                    bindings: Vec::new(),
+                    session_ids: Vec::new(),
+                    dirty_evidence: not_loaded_evidence(),
+                    collision_evidence: not_loaded_evidence(),
+                    reconciliation_evidence: not_loaded_evidence(),
+                    revision: self.revision(),
+                    diagnostics: Vec::new(),
+                })
+            }
+            ReadQuery::SessionObservability { session_id } => {
+                ResponseResult::SessionObservability(SessionObservabilityProjection {
+                    id: *session_id,
+                    provider: Provider::Codex,
+                    role: ManagedSessionRole::WorkItemExecution,
+                    owner: OwnerProjection::WorkItem(test_work_item_id()),
+                    authoritative_profile: None,
+                    authoritative_model: None,
+                    profile_evidence: not_loaded_evidence(),
+                    binding_state: SessionBindingState::Pending,
+                    liveness: SessionLivenessProjection {
+                        state: SessionLiveState::NotLoaded,
+                        stale: false,
+                        observed_at: None,
+                        expires_at: None,
+                        evidence: not_loaded_evidence(),
+                    },
+                    restore_state: SessionRestoreState::NotTracked,
+                    last_activity_at: None,
+                    checkout_id: None,
+                    resumability: SessionResumability::Unknown,
+                    primary_writer: PrimaryWriterEvidence::Unknown,
+                    revision: self.revision(),
+                    diagnostics: Vec::new(),
+                })
+            }
+            ReadQuery::RecoveryPreview { session_id } => {
+                ResponseResult::RecoveryPreview(RecoveryPreviewProjection {
+                    session_id: *session_id,
+                    disposition: RecoveryDispositionProjection::NotLoaded,
+                    conflicts: Vec::new(),
+                    observed_at: "2026-08-31T12:00:00Z".to_owned(),
+                    stale: false,
+                    revision: self.revision(),
+                })
+            }
         };
         write_message(
             stream,
@@ -328,6 +426,17 @@ impl FakeServer {
                 Vec::new(),
             ))),
         );
+    }
+
+    fn test_repository(&self) -> RepositoryReference {
+        RepositoryReference {
+            id: "30000000-0000-0000-0000-000000000001"
+                .parse()
+                .expect("test repository ID"),
+            workspace_id: self.workspace_id,
+            slug: "test-repository".to_owned(),
+            title: "Test repository".to_owned(),
+        }
     }
 
     fn subscription(

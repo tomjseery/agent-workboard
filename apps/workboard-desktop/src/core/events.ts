@@ -1,10 +1,13 @@
 import type { InfiniteData, QueryClient } from "@tanstack/react-query";
 
-import type { BoardViewDefinition, EventEnvelope, ReadQueryCode, ResponseEnvelope, WorkspaceId } from "./generated";
+import type { BoardCardProjection, BoardViewDefinition, EventEnvelope, ReadQueryCode, ResponseEnvelope, WorkspaceId } from "./generated";
 import { boardQueryKeys } from "../features/board/api/boardQueryKeys";
 import type { BoardResponse } from "../features/board/types/board";
+import { checkoutQueryKeys } from "../features/checkout/api/checkoutQueryKeys";
 import { hierarchyQueryKeys } from "../features/hierarchy/api/hierarchyQueryKeys";
+import { repositoryQueryKeys } from "../features/repository/api/repositoryQueryKeys";
 import { savedViewQueryKeys } from "../features/saved-views/api/savedViewQueryKeys";
+import { sessionQueryKeys } from "../features/session/api/sessionQueryKeys";
 import { workspaceQueryKeys } from "../features/workspace/api/workspaceQueryKeys";
 
 type Invalidator = (queryClient: QueryClient, workspaceId: WorkspaceId) => void;
@@ -17,6 +20,10 @@ export const readQueryInvalidators: Record<ReadQueryCode, Invalidator> = {
   board_view: (queryClient, workspaceId) => { void queryClient.invalidateQueries({ queryKey: savedViewQueryKeys.details(workspaceId) }); },
   board: (queryClient, workspaceId) => { void queryClient.invalidateQueries({ queryKey: boardQueryKeys.boards(workspaceId) }); },
   attention: (queryClient, workspaceId) => { void queryClient.invalidateQueries({ queryKey: boardQueryKeys.attention(workspaceId) }); },
+  repository_observability: (queryClient, workspaceId) => { void queryClient.invalidateQueries({ queryKey: repositoryQueryKeys.workspace(workspaceId) }); },
+  checkout_observability: (queryClient, workspaceId) => { void queryClient.invalidateQueries({ queryKey: checkoutQueryKeys.workspace(workspaceId) }); },
+  session_observability: (queryClient, workspaceId) => { void queryClient.invalidateQueries({ queryKey: sessionQueryKeys.all(workspaceId) }); },
+  recovery_preview: (queryClient, workspaceId) => { void queryClient.invalidateQueries({ queryKey: ["recovery-previews", workspaceId] }); },
   board_snapshot: () => undefined,
 };
 
@@ -31,21 +38,22 @@ function patchSavedView(queryClient: QueryClient, workspaceId: WorkspaceId, sequ
   });
 }
 
-function patchBoardCard(queryClient: QueryClient, event: EventEnvelope & { payload: Extract<NonNullable<EventEnvelope["payload"]>, { type: "board_card_changed" }> }) {
-  const card = event.payload.value.card;
-  queryClient.setQueriesData<InfiniteData<BoardResponse>>({ queryKey: boardQueryKeys.boards(event.workspaceId) }, (current) => {
+function patchBoardCards(queryClient: QueryClient, workspaceId: WorkspaceId, sequence: number, changedCards: BoardCardProjection[]) {
+  const cardsByWorkItem = new Map(changedCards.map((card) => [card.workItem.id, card]));
+  queryClient.setQueriesData<InfiniteData<BoardResponse>>({ queryKey: boardQueryKeys.boards(workspaceId) }, (current) => {
     if (current === undefined) return current;
     let changed = false;
     const pages = current.pages.map((page) => {
       if (page.result?.type !== "board") return page;
       let pageChanged = false;
       const cards = page.result.value.cards.map((candidate) => {
-        if (candidate.workItem.id !== card.workItem.id) return candidate;
+        const replacement = cardsByWorkItem.get(candidate.workItem.id);
+        if (replacement === undefined) return candidate;
         changed = true;
         pageChanged = true;
-        return card;
+        return replacement;
       });
-      return pageChanged ? { ...page, authoritativeRevision: Math.max(page.authoritativeRevision ?? 0, event.sequence), result: { type: "board" as const, value: { ...page.result.value, cards } } } : page;
+      return pageChanged ? { ...page, authoritativeRevision: Math.max(page.authoritativeRevision ?? 0, sequence), result: { type: "board" as const, value: { ...page.result.value, cards } } } : page;
     });
     return changed ? { ...current, pages } : current;
   });
@@ -56,11 +64,25 @@ export function applyWorkspaceEvent(queryClient: QueryClient, event: EventEnvelo
     patchSavedView(queryClient, event.workspaceId, event.sequence, event.payload.value.view);
   }
   if (event.payload?.type === "board_card_changed") {
-    patchBoardCard(queryClient, event as EventEnvelope & { payload: Extract<NonNullable<EventEnvelope["payload"]>, { type: "board_card_changed" }> });
+    patchBoardCards(queryClient, event.workspaceId, event.sequence, [event.payload.value.card]);
+  }
+  if (event.payload?.type === "checkout_changed") {
+    const { checkout, cards } = event.payload.value;
+    queryClient.setQueryData<ResponseEnvelope>(checkoutQueryKeys.detail(event.workspaceId, checkout.id), (current) => current === undefined ? current : { ...current, authoritativeRevision: Math.max(current.authoritativeRevision ?? 0, event.sequence), result: { type: "checkout_observability", value: checkout } });
+    void queryClient.invalidateQueries({ queryKey: repositoryQueryKeys.detail(event.workspaceId, checkout.repository.id) });
+    patchBoardCards(queryClient, event.workspaceId, event.sequence, cards);
+  }
+  if (event.payload?.type === "session_liveness_changed") {
+    const { session, recovery, cards } = event.payload.value;
+    queryClient.setQueryData<ResponseEnvelope>(sessionQueryKeys.detail(event.workspaceId, session.id), (current) => current === undefined ? current : { ...current, authoritativeRevision: Math.max(current.authoritativeRevision ?? 0, event.sequence), result: { type: "session_observability", value: session } });
+    queryClient.setQueryData<ResponseEnvelope>(sessionQueryKeys.recovery(event.workspaceId, session.id), (current) => current === undefined ? current : { ...current, authoritativeRevision: Math.max(current.authoritativeRevision ?? 0, event.sequence), result: { type: "recovery_preview", value: recovery } });
+    patchBoardCards(queryClient, event.workspaceId, event.sequence, cards);
   }
   for (const query of event.invalidationScope?.queries ?? []) {
     if (event.payload?.type === "board_view_saved" && (query === "board_views" || query === "board_view")) continue;
     if (event.payload?.type === "board_card_changed" && query === "board") continue;
+    if (event.payload?.type === "checkout_changed" && (query === "checkout_observability" || query === "repository_observability" || query === "board")) continue;
+    if (event.payload?.type === "session_liveness_changed" && (query === "session_observability" || query === "recovery_preview" || query === "board")) continue;
     readQueryInvalidators[query](queryClient, event.workspaceId);
   }
 }

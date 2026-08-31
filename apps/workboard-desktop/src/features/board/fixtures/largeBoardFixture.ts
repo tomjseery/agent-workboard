@@ -36,6 +36,8 @@ export function createLargeBoardFixture() {
       parallelReadiness: { groupKey: `feature-${featureIndex}-group-${itemInFeature % 3}`, readyCount: itemInFeature === 0 ? 4 : 0, waitingCount: itemInFeature === 0 ? 0 : 3 },
       repositories: repositoryScope,
       sessionSummary: { total: 1, active: index % 5 === 0 ? 1 : 0, idle: index % 5 === 1 ? 1 : 0, unknown: index % 5 > 1 ? 1 : 0, providers: [provider] },
+      checkoutIds: [identity("7", index + 1)],
+      sessionIds: [identity("8", index + 1)],
       attentionReasons: index % 3 === 0 ? [{ code: attentionCode, rank: (index % attentionCodes.length) + 1, message: `Authoritative ${attentionCode.replaceAll("_", " ")}` }] : [],
       revision: index + 1,
       availableActions: [],

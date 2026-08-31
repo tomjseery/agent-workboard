@@ -12,6 +12,7 @@ pub mod integration_service;
 pub mod legacy_import;
 pub mod native_launch;
 pub mod native_sources;
+pub mod operational_projection;
 pub mod planning_store;
 pub mod planning_workflow;
 pub mod projection;

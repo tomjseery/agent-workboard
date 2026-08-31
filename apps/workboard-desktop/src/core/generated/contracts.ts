@@ -14,7 +14,7 @@ export type AvailableAction = { code: CommandCode, available: boolean, unavailab
 
 export type BlockedByEvidence = { workItem: WorkItemReference, status: WorkItemStatus, };
 
-export type BoardCardProjection = { workItem: WorkItemReference, feature: FeatureReference, status: WorkItemStatus, laneKey: string, lanePosition: number, laneCount: number, dependencyReadiness: DependencyReadiness, blockedBy: Array<BlockedByEvidence>, parallelReadiness: ParallelReadiness, repositories: Array<RepositoryReference>, sessionSummary: SessionSummary, attentionReasons: Array<AttentionReason>, revision: number, availableActions: Array<AvailableAction>, };
+export type BoardCardProjection = { workItem: WorkItemReference, feature: FeatureReference, status: WorkItemStatus, laneKey: string, lanePosition: number, laneCount: number, dependencyReadiness: DependencyReadiness, blockedBy: Array<BlockedByEvidence>, parallelReadiness: ParallelReadiness, repositories: Array<RepositoryReference>, sessionSummary: SessionSummary, checkoutIds: Array<CheckoutId>, sessionIds: Array<SessionId>, attentionReasons: Array<AttentionReason>, revision: number, availableActions: Array<AvailableAction>, };
 
 export type BoardLaneProjection = { key: string, title: string, position: number, totalCount: number, };
 
@@ -44,9 +44,19 @@ export type BoardViewSortField = "title" | "key";
 
 export type CheckoutAvailability = "available" | "missing" | "deleted" | "replaced";
 
+export type CheckoutBindingProjection = { featureId: FeatureId, workItemId: WorkItemId | null, purposeSource: CheckoutPurposeSource, };
+
 export type CheckoutId = string;
 
+export type CheckoutObservabilityProjection = { id: CheckoutId, repository: RepositoryReference, purpose: CheckoutPurpose, purposeSource: CheckoutPurposeSource, branch: string | null, head: string | null, isolationGeneration: number | null, reconciliationGeneration: number | null, availability: CheckoutAvailability, displayPaths: Array<ObservedDisplayPath>, replacesCheckoutId: CheckoutId | null, replacedByCheckoutId: CheckoutId | null, bindings: Array<CheckoutBindingProjection>, sessionIds: Array<SessionId>, dirtyEvidence: ClassifiedEvidence, collisionEvidence: ClassifiedEvidence, reconciliationEvidence: ClassifiedEvidence, revision: number, diagnostics: Array<Diagnostic>, };
+
 export type CheckoutPathId = string;
+
+export type CheckoutPurpose = "feature_integration" | "work_item_write" | "writer_session" | "read_only_shared" | "unknown";
+
+export type CheckoutPurposeSource = "declared" | "inherited" | "override" | "unknown";
+
+export type ClassifiedEvidence = { state: EvidenceState, code: string, message: string, observedAt: string | null, };
 
 export type CommandCapability = { code: CommandCode, available: boolean, compatibleVersions: Array<number>, unavailableReason: UnavailableReason | null, };
 
@@ -78,9 +88,11 @@ export type EventEnvelope = { protocolVersion: number, eventVersion: number, wor
 
 export type EventId = string;
 
-export type EventKind = "projection_changed" | "board_view_saved" | "native_sessions_refreshed" | "partial_outcome_recorded";
+export type EventKind = "projection_changed" | "board_view_saved" | "native_sessions_refreshed" | "partial_outcome_recorded" | "checkout_changed" | "session_liveness_changed";
 
-export type EventPayload = { "type": "projection_changed", "value": { entity: EntityRef, } } | { "type": "board_view_saved", "value": { view: BoardViewDefinition, } } | { "type": "native_sessions_refreshed", "value": { sessionCount: number, } } | { "type": "partial_outcome", "value": { outcome: PartialOutcome, } } | { "type": "board_card_changed", "value": { card: BoardCardProjection, } };
+export type EventPayload = { "type": "projection_changed", "value": { entity: EntityRef, } } | { "type": "board_view_saved", "value": { view: BoardViewDefinition, } } | { "type": "native_sessions_refreshed", "value": { sessionCount: number, } } | { "type": "partial_outcome", "value": { outcome: PartialOutcome, } } | { "type": "board_card_changed", "value": { card: BoardCardProjection, } } | { "type": "checkout_changed", "value": { checkout: CheckoutObservabilityProjection, cards: Array<BoardCardProjection>, } } | { "type": "session_liveness_changed", "value": { session: SessionObservabilityProjection, recovery: RecoveryPreviewProjection, cards: Array<BoardCardProjection>, } };
+
+export type EvidenceState = "current" | "historical" | "stale" | "missing" | "unknown" | "conflict" | "not_loaded";
 
 export type FeatureId = string;
 
@@ -108,6 +120,8 @@ export type InvalidationScope = { queries: Array<ReadQueryCode>, owners: Array<E
 
 export type ManagedSessionRole = "epic_navigation" | "feature_planning" | "work_item_execution" | "debugging" | "review";
 
+export type ObservedDisplayPath = { displayPath: string, state: EvidenceState, observedFrom: string, observedUntil: string | null, };
+
 export type Operation = { "type": "handshake", "value": HandshakeRequest } | { "type": "query", "value": ReadQuery } | { "type": "command", "value": CommandOperation } | { "type": "subscribe", "value": SubscriptionRequest };
 
 export type OwnerProjection = { "kind": "epic", "id": EpicId } | { "kind": "feature", "id": FeatureId } | { "kind": "work_item", "id": WorkItemId };
@@ -116,15 +130,23 @@ export type ParallelReadiness = { groupKey: string, readyCount: number, waitingC
 
 export type PartialOutcome = { owner: EntityRef | null, code: string, succeeded: boolean, message: string, reconciliationRequired: boolean, evidence: Array<Diagnostic>, };
 
+export type PrimaryWriterEvidence = "confirmed_primary" | "confirmed_secondary" | "not_applicable" | "unknown" | "conflict";
+
 export type ProtocolError = { code: string, message: string, severity: ErrorSeverity, retryable: boolean, validationFields: Array<ValidationField>, staleRevision: number | null, currentRevision: number | null, reconciliationOwner: EntityRef | null, correlationId: RequestId | null, resync: ResyncRequirement | null, };
 
 export type Provider = "claude" | "codex";
 
-export type ReadQuery = { "type": "workspace_summary" } | { "type": "hierarchy_children", "value": { parent: HierarchyRef, } } | { "type": "workspace_hierarchy" } | { "type": "board_views" } | { "type": "board_view", "value": { viewId: BoardViewId, } } | { "type": "board", "value": { query: BoardQuery, } } | { "type": "attention", "value": { query: AttentionQuery, } } | { "type": "board_snapshot" };
+export type ReadQuery = { "type": "workspace_summary" } | { "type": "hierarchy_children", "value": { parent: HierarchyRef, } } | { "type": "workspace_hierarchy" } | { "type": "board_views" } | { "type": "board_view", "value": { viewId: BoardViewId, } } | { "type": "board", "value": { query: BoardQuery, } } | { "type": "attention", "value": { query: AttentionQuery, } } | { "type": "repository_observability", "value": { repositoryId: RepositoryId, } } | { "type": "checkout_observability", "value": { checkoutId: CheckoutId, } } | { "type": "session_observability", "value": { sessionId: SessionId, } } | { "type": "recovery_preview", "value": { sessionId: SessionId, } } | { "type": "board_snapshot" };
 
-export type ReadQueryCode = "workspace_summary" | "hierarchy_children" | "workspace_hierarchy" | "board_views" | "board_view" | "board" | "attention" | "board_snapshot";
+export type ReadQueryCode = "workspace_summary" | "hierarchy_children" | "workspace_hierarchy" | "board_views" | "board_view" | "board" | "attention" | "repository_observability" | "checkout_observability" | "session_observability" | "recovery_preview" | "board_snapshot";
+
+export type RecoveryDispositionProjection = "ready_present" | "ready_recreate" | "already_live" | "conflict" | "unresumable" | "not_loaded";
+
+export type RecoveryPreviewProjection = { sessionId: SessionId, disposition: RecoveryDispositionProjection, conflicts: Array<Diagnostic>, observedAt: string, stale: boolean, revision: number, };
 
 export type RepositoryId = string;
+
+export type RepositoryObservabilityProjection = { repository: RepositoryReference, displayPaths: Array<ObservedDisplayPath>, remoteNames: Array<string>, defaultBranch: string | null, remoteEvidence: ClassifiedEvidence, defaultBranchEvidence: ClassifiedEvidence, checkoutIds: Array<CheckoutId>, revision: number, diagnostics: Array<Diagnostic>, };
 
 export type RepositoryPathId = string;
 
@@ -136,7 +158,7 @@ export type RequestId = string;
 
 export type ResponseEnvelope = { protocolVersion: number, requestId: RequestId, correlationId: RequestId, workspaceId: WorkspaceId | null, authoritativeRevision: number | null, serverTimestamp: string, result: ResponseResult | null, error: ProtocolError | null, diagnostics: Array<Diagnostic>, availableActions: Array<AvailableAction>, partialOutcomes: Array<PartialOutcome>, };
 
-export type ResponseResult = { "type": "handshake", "value": HandshakeResponse } | { "type": "workspace_summary", "value": WorkspaceSummary } | { "type": "hierarchy_children", "value": HierarchyChildren } | { "type": "workspace_hierarchy", "value": WorkspaceHierarchy } | { "type": "board_views", "value": Array<BoardViewDefinition> } | { "type": "board_view", "value": BoardViewDefinition } | { "type": "board", "value": BoardPage } | { "type": "attention", "value": AttentionPage } | { "type": "board_snapshot", "value": unknown } | { "type": "subscription_accepted", "value": { cursor: EventCursor, } } | { "type": "command_accepted", "value": { code: CommandCode, } };
+export type ResponseResult = { "type": "handshake", "value": HandshakeResponse } | { "type": "workspace_summary", "value": WorkspaceSummary } | { "type": "hierarchy_children", "value": HierarchyChildren } | { "type": "workspace_hierarchy", "value": WorkspaceHierarchy } | { "type": "board_views", "value": Array<BoardViewDefinition> } | { "type": "board_view", "value": BoardViewDefinition } | { "type": "board", "value": BoardPage } | { "type": "attention", "value": AttentionPage } | { "type": "repository_observability", "value": RepositoryObservabilityProjection } | { "type": "checkout_observability", "value": CheckoutObservabilityProjection } | { "type": "session_observability", "value": SessionObservabilityProjection } | { "type": "recovery_preview", "value": RecoveryPreviewProjection } | { "type": "board_snapshot", "value": unknown } | { "type": "subscription_accepted", "value": { cursor: EventCursor, } } | { "type": "command_accepted", "value": { code: CommandCode, } };
 
 export type ResyncReason = "gap" | "cursor_expired" | "daemon_restarted" | "incompatible_event" | "heartbeat_lost";
 
@@ -144,7 +166,19 @@ export type ResyncRequirement = { reason: ResyncReason, workspaceId: WorkspaceId
 
 export type ServerMessage = { "type": "response", "value": ResponseEnvelope } | { "type": "event", "value": EventEnvelope } | { "type": "heartbeat", "value": Heartbeat } | { "type": "resync_required", "value": ResyncRequirement };
 
+export type SessionBindingState = "pending" | "current" | "stopped" | "reconciliation_required";
+
 export type SessionId = string;
+
+export type SessionLiveState = "active" | "idle" | "stopped" | "unknown" | "system_error" | "not_loaded";
+
+export type SessionLivenessProjection = { state: SessionLiveState, stale: boolean, observedAt: string | null, expiresAt: string | null, evidence: ClassifiedEvidence, };
+
+export type SessionObservabilityProjection = { id: SessionId, provider: Provider, role: ManagedSessionRole, owner: OwnerProjection, authoritativeProfile: string | null, authoritativeModel: string | null, profileEvidence: ClassifiedEvidence, bindingState: SessionBindingState, liveness: SessionLivenessProjection, restoreState: SessionRestoreState, lastActivityAt: string | null, checkoutId: CheckoutId | null, resumability: SessionResumability, primaryWriter: PrimaryWriterEvidence, revision: number, diagnostics: Array<Diagnostic>, };
+
+export type SessionRestoreState = "tracked" | "removed" | "not_tracked" | "conflict";
+
+export type SessionResumability = "validated" | "preflight_passed" | "unknown" | "missing" | "corrupt" | "unsupported";
 
 export type SessionSummary = { total: number, active: number, idle: number, unknown: number, providers: Array<Provider>, };
 
