@@ -51,6 +51,7 @@ define_id!(RepositoryPathId);
 define_id!(EpicId);
 define_id!(FeatureId);
 define_id!(WorkItemId);
+define_id!(WorkItemCheckpointId);
 define_id!(SessionId);
 define_id!(CheckoutId);
 define_id!(CheckoutPathId);

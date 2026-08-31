@@ -3,9 +3,9 @@ use time::OffsetDateTime;
 use ts_rs::TS;
 
 use crate::{
-    AssociationId, AvailableAction, BoardViewId, CheckoutId, CheckoutPathId, DocumentId, EntityRef,
-    EpicId, FeatureId, HierarchyRef, RepositoryId, RepositoryPathId, SessionId, WorkItemId,
-    WorkspaceId,
+    AssociationId, AvailableAction, BoardViewId, CheckoutId, CheckoutPathId, Diagnostic,
+    DocumentId, EntityRef, EpicId, FeatureId, HierarchyRef, RepositoryId, RepositoryPathId,
+    SessionId, WorkItemId, WorkspaceId,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -356,6 +356,82 @@ pub struct FeatureProposalProjection {
     pub diagnostics: Vec<crate::Diagnostic>,
     pub workflow_state: WorkflowState,
     pub available_actions: Vec<AvailableAction>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkItemDetailProjection {
+    pub work_item: WorkItemReference,
+    pub feature: FeatureReference,
+    pub outcome_design_summary: String,
+    pub current_state: DurableWorkItemSection,
+    pub dependency_readiness: DependencyReadiness,
+    pub blockers: Vec<WorkItemBlockerProjection>,
+    pub decisions: DurableWorkItemSection,
+    pub verification: DurableWorkItemSection,
+    pub next_action: Option<WorkItemNextActionProjection>,
+    pub review_delivery_state: ReviewDeliveryState,
+    pub workflow_state: WorkflowState,
+    pub status: WorkItemStatus,
+    pub repositories: Vec<RepositoryReference>,
+    pub checkouts: Vec<CheckoutObservabilityProjection>,
+    pub revision: u64,
+    pub content_revision: u64,
+    pub content_hash: String,
+    pub checkpoint_history: Vec<WorkItemCheckpointProjection>,
+    pub sessions: Vec<SessionObservabilityProjection>,
+    pub diagnostics: Vec<Diagnostic>,
+    pub available_actions: Vec<AvailableAction>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct DurableWorkItemSection {
+    pub entries: Vec<String>,
+    pub evidence: ClassifiedEvidence,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkItemBlockerProjection {
+    pub code: String,
+    pub message: String,
+    pub prerequisite: Option<WorkItemReference>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkItemNextActionKind {
+    Actionable,
+    Blocked,
+    Paused,
+    Review,
+    Delivery,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkItemNextActionProjection {
+    pub kind: WorkItemNextActionKind,
+    pub recorded_at: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewDeliveryState {
+    NotRequested,
+    ReviewRequested,
+    DeliveryRequested,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkItemCheckpointProjection {
+    pub id: crate::WorkItemCheckpointId,
+    pub session_id: SessionId,
+    pub next_action: WorkItemNextActionKind,
+    pub summary: String,
+    pub recorded_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

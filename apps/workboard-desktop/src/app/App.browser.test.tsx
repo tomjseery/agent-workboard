@@ -26,6 +26,7 @@ const { fakeDaemon } = vi.hoisted(() => {
     attention: async () => response({ type: "attention", value: { entries: [], nextCursor: null, totalCount: 0, revision: 4 } }) as never,
     approvalQueue: async () => response({ type: "approval_queue", value: { entries: [], revision: 4 } }) as never,
     featureProposal: async () => response(null) as never,
+    workItemDetail: async () => response(null) as never,
     repositoryObservability: async () => response(null) as never,
     checkoutObservability: async () => response(null) as never,
     sessionObservability: async () => response(null) as never,

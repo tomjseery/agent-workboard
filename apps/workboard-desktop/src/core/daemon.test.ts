@@ -34,6 +34,7 @@ class FakeTransport implements DaemonTransport {
 
 const workspaceId = "20000000-0000-0000-0000-000000000001";
 const featureId = "50000000-0000-0000-0000-000000000001";
+const workItemId = "60000000-0000-0000-0000-000000000001";
 
 describe("daemon facade", () => {
   it("is the typed boundary around all four IPC families", async () => {
@@ -45,7 +46,7 @@ describe("daemon facade", () => {
     };
     const response = { result: null } as ResponseEnvelope;
     const receipt: SubscriptionReceipt = { subscriptionId: 7 };
-    transport.responses.push(handshake, response, response, response, response, response, receipt, receipt);
+    transport.responses.push(handshake, response, response, response, response, response, response, receipt, receipt);
 
     await facade.handshake();
     await facade.workspaceSummary(workspaceId);
@@ -55,6 +56,7 @@ describe("daemon facade", () => {
     });
     await facade.board(workspaceId, { cursor: null, limit: 200, query: null, repositoryIds: [], statuses: [], laneKeys: [], sort: { field: "key", direction: "ascending" } });
     await facade.attention(workspaceId, { cursor: null, limit: 200, repositoryIds: [], reasonCodes: [] });
+    await facade.workItemDetail(workspaceId, workItemId);
     await facade.execute({
       workspaceId,
       expectedRevision: 41,
@@ -77,6 +79,7 @@ describe("daemon facade", () => {
       "workboard_query",
       "workboard_query",
       "workboard_query",
+      "workboard_query",
       "workboard_execute",
       "workboard_subscribe",
       "workboard_subscribe",
@@ -89,11 +92,12 @@ describe("daemon facade", () => {
     });
     expect(transport.invocations[3]?.args?.request).toMatchObject({ workspaceId, query: { type: "board" } });
     expect(transport.invocations[4]?.args?.request).toMatchObject({ workspaceId, query: { type: "attention" } });
-    expect(transport.invocations[6]?.args?.request).toEqual({
+    expect(transport.invocations[5]?.args?.request).toEqual({ workspaceId, query: { type: "work_item_detail", value: { workItemId } } });
+    expect(transport.invocations[7]?.args?.request).toEqual({
       type: "start",
       value: { workspaceId, cursor: null },
     });
-    expect(transport.invocations[7]?.args?.request).toEqual({
+    expect(transport.invocations[8]?.args?.request).toEqual({
       type: "cancel",
       value: { subscriptionId: 7 },
     });

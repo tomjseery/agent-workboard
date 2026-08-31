@@ -14,6 +14,7 @@ import type {
   ResponseResult,
   RepositoryId,
   SessionId,
+  WorkItemId,
   SubscriptionMessage,
   SubscriptionTarget,
   WorkspaceId,
@@ -56,6 +57,7 @@ export interface DaemonFacade {
   attention(workspaceId: WorkspaceId, request: AttentionQuery): Promise<QueryResponse<"attention">>;
   approvalQueue(workspaceId: WorkspaceId): Promise<QueryResponse<"approval_queue">>;
   featureProposal(workspaceId: WorkspaceId, featureId: FeatureId): Promise<QueryResponse<"feature_proposal">>;
+  workItemDetail(workspaceId: WorkspaceId, workItemId: WorkItemId): Promise<QueryResponse<"work_item_detail">>;
   repositoryObservability(workspaceId: WorkspaceId, repositoryId: RepositoryId): Promise<QueryResponse<"repository_observability">>;
   checkoutObservability(workspaceId: WorkspaceId, checkoutId: CheckoutId): Promise<QueryResponse<"checkout_observability">>;
   sessionObservability(workspaceId: WorkspaceId, sessionId: SessionId): Promise<QueryResponse<"session_observability">>;
@@ -102,6 +104,8 @@ export function createDaemonFacade(transport: DaemonTransport): DaemonFacade {
     approvalQueue: (workspaceId) => query(workspaceId, { type: "approval_queue" }),
     featureProposal: (workspaceId, featureId) =>
       query(workspaceId, { type: "feature_proposal", value: { featureId } }),
+    workItemDetail: (workspaceId, workItemId) =>
+      query(workspaceId, { type: "work_item_detail", value: { workItemId } }),
     repositoryObservability: (workspaceId, repositoryId) =>
       query(workspaceId, { type: "repository_observability", value: { repositoryId } }),
     checkoutObservability: (workspaceId, checkoutId) =>

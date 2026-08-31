@@ -70,7 +70,8 @@
       "partial_outcome_recorded",
       "checkout_changed",
       "session_liveness_changed",
-      "proposal_changed"
+      "proposal_changed",
+      "work_item_changed"
     ],
     "eventPayloads": [
       {
@@ -557,6 +558,272 @@
             "workflowState": "awaiting_approval"
           }
         }
+      },
+      {
+        "type": "work_item_changed",
+        "value": {
+          "card": {
+            "attentionReasons": [
+              {
+                "code": "checkpoint_due",
+                "message": "Checkpoint evidence is due",
+                "rank": 5
+              }
+            ],
+            "availableActions": [],
+            "blockedBy": [],
+            "checkoutIds": [
+              "b0000000-0000-0000-0000-000000000001"
+            ],
+            "dependencyReadiness": "ready",
+            "feature": {
+              "epicId": "40000000-0000-0000-0000-000000000001",
+              "id": "50000000-0000-0000-0000-000000000001",
+              "slug": "fixture-feature",
+              "title": "Fixture Feature"
+            },
+            "laneCount": 1,
+            "laneKey": "in_progress",
+            "lanePosition": 1,
+            "parallelReadiness": {
+              "groupKey": "fixture-ready",
+              "readyCount": 1,
+              "waitingCount": 0
+            },
+            "repositories": [
+              {
+                "id": "30000000-0000-0000-0000-000000000001",
+                "slug": "fixture-repository",
+                "title": "Fixture Repository",
+                "workspaceId": "20000000-0000-0000-0000-000000000001"
+              }
+            ],
+            "revision": 3,
+            "sessionIds": [
+              "70000000-0000-0000-0000-000000000001"
+            ],
+            "sessionSummary": {
+              "active": 1,
+              "idle": 0,
+              "providers": [
+                "codex"
+              ],
+              "total": 1,
+              "unknown": 0
+            },
+            "status": "in_progress",
+            "workItem": {
+              "featureId": "50000000-0000-0000-0000-000000000001",
+              "id": "60000000-0000-0000-0000-000000000001",
+              "key": "WI-1",
+              "slug": "fixture-work-item",
+              "title": "Fixture Work item"
+            }
+          },
+          "detail": {
+            "availableActions": [
+              {
+                "available": false,
+                "code": "checkpoint_work_item",
+                "expectedRevision": 41,
+                "unavailableReason": {
+                  "code": "structured_checkpoint_unavailable",
+                  "message": "Structured checkpoint editing is unavailable."
+                }
+              }
+            ],
+            "blockers": [
+              {
+                "code": "dependency_incomplete",
+                "message": "Prerequisite is in progress.",
+                "prerequisite": {
+                  "featureId": "50000000-0000-0000-0000-000000000001",
+                  "id": "60000000-0000-0000-0000-000000000002",
+                  "key": "WI-0",
+                  "slug": "prerequisite",
+                  "title": "Prerequisite"
+                }
+              }
+            ],
+            "checkouts": [
+              {
+                "availability": "available",
+                "bindings": [
+                  {
+                    "featureId": "50000000-0000-0000-0000-000000000001",
+                    "purposeSource": "override",
+                    "workItemId": "60000000-0000-0000-0000-000000000001"
+                  }
+                ],
+                "branch": "feature/fixture",
+                "collisionEvidence": {
+                  "code": "collision_evidence_unknown",
+                  "message": "No authoritative collision scan is loaded.",
+                  "observedAt": "2026-08-30T12:00:00Z",
+                  "state": "unknown"
+                },
+                "diagnostics": [],
+                "dirtyEvidence": {
+                  "code": "dirty_evidence_not_loaded",
+                  "message": "No authoritative dirty-state observation is loaded.",
+                  "observedAt": "2026-08-30T12:00:00Z",
+                  "state": "not_loaded"
+                },
+                "displayPaths": [
+                  {
+                    "displayPath": "worktrees/fixture",
+                    "observedFrom": "2026-08-30T12:00:00Z",
+                    "observedUntil": null,
+                    "state": "current"
+                  }
+                ],
+                "head": "0123456789abcdef",
+                "id": "b0000000-0000-0000-0000-000000000001",
+                "isolationGeneration": 2,
+                "purpose": "work_item_write",
+                "purposeSource": "override",
+                "reconciliationEvidence": {
+                  "code": "checkout_reconciled",
+                  "message": "The latest recorded checkout generation is available.",
+                  "observedAt": "2026-08-30T12:00:00Z",
+                  "state": "current"
+                },
+                "reconciliationGeneration": 3,
+                "replacedByCheckoutId": null,
+                "replacesCheckoutId": null,
+                "repository": {
+                  "id": "30000000-0000-0000-0000-000000000001",
+                  "slug": "fixture-repository",
+                  "title": "Fixture Repository",
+                  "workspaceId": "20000000-0000-0000-0000-000000000001"
+                },
+                "revision": 41,
+                "sessionIds": [
+                  "70000000-0000-0000-0000-000000000001"
+                ]
+              }
+            ],
+            "checkpointHistory": [
+              {
+                "id": "c0000000-0000-0000-0000-000000000001",
+                "nextAction": "review",
+                "recordedAt": "2026-08-30T12:00:00Z",
+                "sessionId": "70000000-0000-0000-0000-000000000001",
+                "summary": "Opaque checkpoint summary <img src=x onerror=alert(1)>"
+              }
+            ],
+            "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "contentRevision": 3,
+            "currentState": {
+              "entries": [],
+              "evidence": {
+                "code": "structured_checkpoint_unavailable",
+                "message": "Structured current-state evidence is unavailable.",
+                "observedAt": "2026-08-30T12:00:00Z",
+                "state": "not_loaded"
+              }
+            },
+            "decisions": {
+              "entries": [],
+              "evidence": {
+                "code": "structured_checkpoint_unavailable",
+                "message": "Structured decision evidence is unavailable.",
+                "observedAt": "2026-08-30T12:00:00Z",
+                "state": "not_loaded"
+              }
+            },
+            "dependencyReadiness": "waiting",
+            "diagnostics": [
+              {
+                "code": "work_item_reconciliation_required",
+                "message": "This Work item requires authoritative reconciliation outside Desktop.",
+                "owner": {
+                  "id": "60000000-0000-0000-0000-000000000001",
+                  "kind": "work_item"
+                },
+                "severity": "error"
+              }
+            ],
+            "feature": {
+              "epicId": "40000000-0000-0000-0000-000000000001",
+              "id": "50000000-0000-0000-0000-000000000001",
+              "slug": "fixture-feature",
+              "title": "Fixture Feature"
+            },
+            "nextAction": {
+              "kind": "review",
+              "recordedAt": "2026-08-30T12:00:00Z"
+            },
+            "outcomeDesignSummary": "Long hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\n",
+            "repositories": [
+              {
+                "id": "30000000-0000-0000-0000-000000000001",
+                "slug": "fixture-repository",
+                "title": "Fixture Repository",
+                "workspaceId": "20000000-0000-0000-0000-000000000001"
+              }
+            ],
+            "reviewDeliveryState": "review_requested",
+            "revision": 41,
+            "sessions": [
+              {
+                "authoritativeModel": "fixture-model",
+                "authoritativeProfile": "reviewed",
+                "bindingState": "current",
+                "checkoutId": "b0000000-0000-0000-0000-000000000001",
+                "diagnostics": [],
+                "id": "70000000-0000-0000-0000-000000000001",
+                "lastActivityAt": "2026-08-30T12:00:00Z",
+                "liveness": {
+                  "evidence": {
+                    "code": "liveness_observed",
+                    "message": "The liveness state is backed by current Workboard evidence.",
+                    "observedAt": "2026-08-30T12:00:00Z",
+                    "state": "current"
+                  },
+                  "expiresAt": "2026-08-30T12:05:00Z",
+                  "observedAt": "2026-08-30T12:00:00Z",
+                  "stale": false,
+                  "state": "active"
+                },
+                "owner": {
+                  "id": "60000000-0000-0000-0000-000000000001",
+                  "kind": "work_item"
+                },
+                "primaryWriter": "confirmed_primary",
+                "profileEvidence": {
+                  "code": "profile_observed",
+                  "message": "The profile was observed by Workboard.",
+                  "observedAt": "2026-08-30T12:00:00Z",
+                  "state": "current"
+                },
+                "provider": "codex",
+                "restoreState": "tracked",
+                "resumability": "validated",
+                "revision": 41,
+                "role": "work_item_execution"
+              }
+            ],
+            "status": "review",
+            "verification": {
+              "entries": [],
+              "evidence": {
+                "code": "structured_checkpoint_unavailable",
+                "message": "Structured verification evidence is unavailable.",
+                "observedAt": "2026-08-30T12:00:00Z",
+                "state": "not_loaded"
+              }
+            },
+            "workItem": {
+              "featureId": "50000000-0000-0000-0000-000000000001",
+              "id": "60000000-0000-0000-0000-000000000001",
+              "key": "WI-1",
+              "slug": "fixture-work-item",
+              "title": "Fixture Work item"
+            },
+            "workflowState": "reconciliation_required"
+          }
+        }
       }
     ],
     "evidenceStates": [
@@ -673,6 +940,7 @@
       "attention",
       "approval_queue",
       "feature_proposal",
+      "work_item_detail",
       "repository_observability",
       "checkout_observability",
       "session_observability",
@@ -689,6 +957,7 @@
       "attention",
       "approval_queue",
       "feature_proposal",
+      "work_item_detail",
       "repository_observability",
       "checkout_observability",
       "session_observability",
@@ -714,6 +983,7 @@
       "attention",
       "approval_queue",
       "feature_proposal",
+      "work_item_detail",
       "repository_observability",
       "checkout_observability",
       "session_observability",
@@ -918,6 +1188,15 @@
         "workspaceId": "20000000-0000-0000-0000-000000000001"
       }
     },
+    "workItemDetail": {
+      "query": {
+        "type": "work_item_detail",
+        "value": {
+          "workItemId": "60000000-0000-0000-0000-000000000001"
+        }
+      },
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    },
     "workspaceSummary": {
       "query": {
         "type": "workspace_summary"
@@ -967,7 +1246,7 @@
           }
         }
       },
-      "protocolVersion": 5,
+      "protocolVersion": 6,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -983,7 +1262,7 @@
           }
         }
       },
-      "protocolVersion": 5,
+      "protocolVersion": 6,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -999,7 +1278,7 @@
           }
         }
       },
-      "protocolVersion": 5,
+      "protocolVersion": 6,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1015,7 +1294,7 @@
           }
         }
       },
-      "protocolVersion": 5,
+      "protocolVersion": 6,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1031,7 +1310,7 @@
           }
         }
       },
-      "protocolVersion": 5,
+      "protocolVersion": 6,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1047,7 +1326,7 @@
           }
         }
       },
-      "protocolVersion": 5,
+      "protocolVersion": 6,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1063,7 +1342,7 @@
           }
         }
       },
-      "protocolVersion": 5,
+      "protocolVersion": 6,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1079,7 +1358,7 @@
           }
         }
       },
-      "protocolVersion": 5,
+      "protocolVersion": 6,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1095,7 +1374,7 @@
           }
         }
       },
-      "protocolVersion": 5,
+      "protocolVersion": 6,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1111,7 +1390,7 @@
           }
         }
       },
-      "protocolVersion": 5,
+      "protocolVersion": 6,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     }
@@ -1137,7 +1416,7 @@
     "reconciliationRequired": true,
     "succeeded": false
   },
-  "protocolVersion": 6,
+  "protocolVersion": 7,
   "readRequests": [
     {
       "expectedRevision": null,
@@ -1146,15 +1425,15 @@
         "type": "handshake",
         "value": {
           "supportedCommandVersions": [
-            6
+            7
           ],
           "supportedReadVersions": [
-            6,
-            5
+            7,
+            6
           ]
         }
       },
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": null
     },
@@ -1167,7 +1446,7 @@
           "type": "workspace_summary"
         }
       },
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1186,7 +1465,7 @@
           }
         }
       },
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1199,7 +1478,7 @@
           "type": "workspace_hierarchy"
         }
       },
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1212,7 +1491,7 @@
           "type": "board_views"
         }
       },
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1228,7 +1507,7 @@
           }
         }
       },
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1263,7 +1542,7 @@
           }
         }
       },
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1284,7 +1563,7 @@
           }
         }
       },
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1297,7 +1576,7 @@
           "type": "approval_queue"
         }
       },
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1313,7 +1592,23 @@
           }
         }
       },
-      "protocolVersion": 6,
+      "protocolVersion": 7,
+      "requestId": "10000000-0000-0000-0000-000000000001",
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    },
+    {
+      "expectedRevision": null,
+      "idempotencyKey": null,
+      "operation": {
+        "type": "query",
+        "value": {
+          "type": "work_item_detail",
+          "value": {
+            "workItemId": "60000000-0000-0000-0000-000000000001"
+          }
+        }
+      },
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1329,7 +1624,7 @@
           }
         }
       },
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1345,7 +1640,7 @@
           }
         }
       },
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1361,7 +1656,7 @@
           }
         }
       },
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1377,7 +1672,7 @@
           }
         }
       },
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1390,7 +1685,7 @@
           "type": "board_snapshot"
         }
       },
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1406,7 +1701,7 @@
           }
         }
       },
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     }
@@ -1429,7 +1724,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "handshake",
@@ -1439,7 +1734,7 @@
               "available": false,
               "code": "save_board_view",
               "compatibleVersions": [
-                6
+                7
               ],
               "unavailableReason": {
                 "code": "not_accepted",
@@ -1448,13 +1743,13 @@
             }
           ],
           "compatibleCommandVersions": [
-            6
+            7
           ],
           "daemonInstanceId": "80000000-0000-0000-0000-000000000001",
           "eventVersion": 1,
           "heartbeatIntervalMs": 1000,
           "maxFrameBytes": 8388608,
-          "negotiatedReadVersion": 6,
+          "negotiatedReadVersion": 7,
           "workspaces": [
             {
               "id": "20000000-0000-0000-0000-000000000001",
@@ -1484,7 +1779,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "workspace_summary",
@@ -1521,7 +1816,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "hierarchy_children",
@@ -1563,7 +1858,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "workspace_hierarchy",
@@ -1654,7 +1949,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "board_views",
@@ -1711,7 +2006,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "board_view",
@@ -1766,7 +2061,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "board",
@@ -1864,7 +2159,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "attention",
@@ -1981,7 +2276,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "approval_queue",
@@ -2048,7 +2343,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "feature_proposal",
@@ -2146,7 +2441,235 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 6,
+      "protocolVersion": 7,
+      "requestId": "10000000-0000-0000-0000-000000000001",
+      "result": {
+        "type": "work_item_detail",
+        "value": {
+          "availableActions": [
+            {
+              "available": false,
+              "code": "checkpoint_work_item",
+              "expectedRevision": 41,
+              "unavailableReason": {
+                "code": "structured_checkpoint_unavailable",
+                "message": "Structured checkpoint editing is unavailable."
+              }
+            }
+          ],
+          "blockers": [
+            {
+              "code": "dependency_incomplete",
+              "message": "Prerequisite is in progress.",
+              "prerequisite": {
+                "featureId": "50000000-0000-0000-0000-000000000001",
+                "id": "60000000-0000-0000-0000-000000000002",
+                "key": "WI-0",
+                "slug": "prerequisite",
+                "title": "Prerequisite"
+              }
+            }
+          ],
+          "checkouts": [
+            {
+              "availability": "available",
+              "bindings": [
+                {
+                  "featureId": "50000000-0000-0000-0000-000000000001",
+                  "purposeSource": "override",
+                  "workItemId": "60000000-0000-0000-0000-000000000001"
+                }
+              ],
+              "branch": "feature/fixture",
+              "collisionEvidence": {
+                "code": "collision_evidence_unknown",
+                "message": "No authoritative collision scan is loaded.",
+                "observedAt": "2026-08-30T12:00:00Z",
+                "state": "unknown"
+              },
+              "diagnostics": [],
+              "dirtyEvidence": {
+                "code": "dirty_evidence_not_loaded",
+                "message": "No authoritative dirty-state observation is loaded.",
+                "observedAt": "2026-08-30T12:00:00Z",
+                "state": "not_loaded"
+              },
+              "displayPaths": [
+                {
+                  "displayPath": "worktrees/fixture",
+                  "observedFrom": "2026-08-30T12:00:00Z",
+                  "observedUntil": null,
+                  "state": "current"
+                }
+              ],
+              "head": "0123456789abcdef",
+              "id": "b0000000-0000-0000-0000-000000000001",
+              "isolationGeneration": 2,
+              "purpose": "work_item_write",
+              "purposeSource": "override",
+              "reconciliationEvidence": {
+                "code": "checkout_reconciled",
+                "message": "The latest recorded checkout generation is available.",
+                "observedAt": "2026-08-30T12:00:00Z",
+                "state": "current"
+              },
+              "reconciliationGeneration": 3,
+              "replacedByCheckoutId": null,
+              "replacesCheckoutId": null,
+              "repository": {
+                "id": "30000000-0000-0000-0000-000000000001",
+                "slug": "fixture-repository",
+                "title": "Fixture Repository",
+                "workspaceId": "20000000-0000-0000-0000-000000000001"
+              },
+              "revision": 41,
+              "sessionIds": [
+                "70000000-0000-0000-0000-000000000001"
+              ]
+            }
+          ],
+          "checkpointHistory": [
+            {
+              "id": "c0000000-0000-0000-0000-000000000001",
+              "nextAction": "review",
+              "recordedAt": "2026-08-30T12:00:00Z",
+              "sessionId": "70000000-0000-0000-0000-000000000001",
+              "summary": "Opaque checkpoint summary <img src=x onerror=alert(1)>"
+            }
+          ],
+          "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "contentRevision": 3,
+          "currentState": {
+            "entries": [],
+            "evidence": {
+              "code": "structured_checkpoint_unavailable",
+              "message": "Structured current-state evidence is unavailable.",
+              "observedAt": "2026-08-30T12:00:00Z",
+              "state": "not_loaded"
+            }
+          },
+          "decisions": {
+            "entries": [],
+            "evidence": {
+              "code": "structured_checkpoint_unavailable",
+              "message": "Structured decision evidence is unavailable.",
+              "observedAt": "2026-08-30T12:00:00Z",
+              "state": "not_loaded"
+            }
+          },
+          "dependencyReadiness": "waiting",
+          "diagnostics": [
+            {
+              "code": "work_item_reconciliation_required",
+              "message": "This Work item requires authoritative reconciliation outside Desktop.",
+              "owner": {
+                "id": "60000000-0000-0000-0000-000000000001",
+                "kind": "work_item"
+              },
+              "severity": "error"
+            }
+          ],
+          "feature": {
+            "epicId": "40000000-0000-0000-0000-000000000001",
+            "id": "50000000-0000-0000-0000-000000000001",
+            "slug": "fixture-feature",
+            "title": "Fixture Feature"
+          },
+          "nextAction": {
+            "kind": "review",
+            "recordedAt": "2026-08-30T12:00:00Z"
+          },
+          "outcomeDesignSummary": "Long hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\nLong hostile content remains plain text: <script>alert('no')</script>\n",
+          "repositories": [
+            {
+              "id": "30000000-0000-0000-0000-000000000001",
+              "slug": "fixture-repository",
+              "title": "Fixture Repository",
+              "workspaceId": "20000000-0000-0000-0000-000000000001"
+            }
+          ],
+          "reviewDeliveryState": "review_requested",
+          "revision": 41,
+          "sessions": [
+            {
+              "authoritativeModel": "fixture-model",
+              "authoritativeProfile": "reviewed",
+              "bindingState": "current",
+              "checkoutId": "b0000000-0000-0000-0000-000000000001",
+              "diagnostics": [],
+              "id": "70000000-0000-0000-0000-000000000001",
+              "lastActivityAt": "2026-08-30T12:00:00Z",
+              "liveness": {
+                "evidence": {
+                  "code": "liveness_observed",
+                  "message": "The liveness state is backed by current Workboard evidence.",
+                  "observedAt": "2026-08-30T12:00:00Z",
+                  "state": "current"
+                },
+                "expiresAt": "2026-08-30T12:05:00Z",
+                "observedAt": "2026-08-30T12:00:00Z",
+                "stale": false,
+                "state": "active"
+              },
+              "owner": {
+                "id": "60000000-0000-0000-0000-000000000001",
+                "kind": "work_item"
+              },
+              "primaryWriter": "confirmed_primary",
+              "profileEvidence": {
+                "code": "profile_observed",
+                "message": "The profile was observed by Workboard.",
+                "observedAt": "2026-08-30T12:00:00Z",
+                "state": "current"
+              },
+              "provider": "codex",
+              "restoreState": "tracked",
+              "resumability": "validated",
+              "revision": 41,
+              "role": "work_item_execution"
+            }
+          ],
+          "status": "review",
+          "verification": {
+            "entries": [],
+            "evidence": {
+              "code": "structured_checkpoint_unavailable",
+              "message": "Structured verification evidence is unavailable.",
+              "observedAt": "2026-08-30T12:00:00Z",
+              "state": "not_loaded"
+            }
+          },
+          "workItem": {
+            "featureId": "50000000-0000-0000-0000-000000000001",
+            "id": "60000000-0000-0000-0000-000000000001",
+            "key": "WI-1",
+            "slug": "fixture-work-item",
+            "title": "Fixture Work item"
+          },
+          "workflowState": "reconciliation_required"
+        }
+      },
+      "serverTimestamp": "2026-08-30T12:00:00Z",
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    },
+    {
+      "authoritativeRevision": 41,
+      "availableActions": [
+        {
+          "available": false,
+          "code": "approve_feature",
+          "expectedRevision": 41,
+          "unavailableReason": {
+            "code": "not_accepted",
+            "message": "The capability is not accepted."
+          }
+        }
+      ],
+      "correlationId": "10000000-0000-0000-0000-000000000002",
+      "diagnostics": [],
+      "error": null,
+      "partialOutcomes": [],
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "repository_observability",
@@ -2208,7 +2731,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "checkout_observability",
@@ -2289,7 +2812,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "session_observability",
@@ -2351,7 +2874,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "recovery_preview",
@@ -2384,7 +2907,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "board_snapshot",
@@ -2426,7 +2949,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "subscription_accepted",
@@ -2457,7 +2980,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "command_accepted",
@@ -2489,7 +3012,7 @@
         "diagnostics": [],
         "error": null,
         "partialOutcomes": [],
-        "protocolVersion": 6,
+        "protocolVersion": 7,
         "requestId": "10000000-0000-0000-0000-000000000001",
         "result": {
           "type": "workspace_summary",
@@ -2585,7 +3108,7 @@
             }
           }
         },
-        "protocolVersion": 6,
+        "protocolVersion": 7,
         "sequence": 42,
         "workspaceId": "20000000-0000-0000-0000-000000000001"
       }

@@ -8,8 +8,8 @@ use crate::{
     CheckoutId, CheckoutObservabilityProjection, DaemonInstanceId, EntityRef, EventId,
     FeatureProposalProjection, HierarchyChildren, HierarchyRef, RecoveryPreviewProjection,
     RepositoryId, RepositoryObservabilityProjection, RequestId, SessionId,
-    SessionObservabilityProjection, WorkspaceHierarchy, WorkspaceId, WorkspaceReference,
-    WorkspaceSummary,
+    SessionObservabilityProjection, WorkItemDetailProjection, WorkspaceHierarchy, WorkspaceId,
+    WorkspaceReference, WorkspaceSummary,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -206,6 +206,7 @@ pub enum ReadQuery {
     Attention { query: AttentionQuery },
     ApprovalQueue,
     FeatureProposal { feature_id: crate::FeatureId },
+    WorkItemDetail { work_item_id: crate::WorkItemId },
     RepositoryObservability { repository_id: RepositoryId },
     CheckoutObservability { checkout_id: CheckoutId },
     SessionObservability { session_id: SessionId },
@@ -369,6 +370,7 @@ pub enum ResponseResult {
     Attention(AttentionPage),
     ApprovalQueue(ApprovalQueueProjection),
     FeatureProposal(FeatureProposalProjection),
+    WorkItemDetail(Box<WorkItemDetailProjection>),
     RepositoryObservability(RepositoryObservabilityProjection),
     CheckoutObservability(CheckoutObservabilityProjection),
     SessionObservability(SessionObservabilityProjection),
@@ -512,6 +514,7 @@ pub enum EventKind {
     CheckoutChanged,
     SessionLivenessChanged,
     ProposalChanged,
+    WorkItemChanged,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -550,6 +553,10 @@ pub enum EventPayload {
         proposal: Box<FeatureProposalProjection>,
         queue_item: Option<Box<ApprovalQueueItemProjection>>,
     },
+    WorkItemChanged {
+        detail: Box<WorkItemDetailProjection>,
+        card: Option<Box<BoardCardProjection>>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -571,6 +578,7 @@ pub enum ReadQueryCode {
     Attention,
     ApprovalQueue,
     FeatureProposal,
+    WorkItemDetail,
     RepositoryObservability,
     CheckoutObservability,
     SessionObservability,

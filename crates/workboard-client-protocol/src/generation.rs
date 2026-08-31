@@ -11,22 +11,24 @@ use crate::{
     CheckoutBindingProjection, CheckoutId, CheckoutObservabilityProjection, CheckoutPathId,
     CheckoutPurpose, CheckoutPurposeSource, ClassifiedEvidence, CommandCapability, CommandCode,
     CommandOperation, DaemonInstanceId, DependencyReadiness, Diagnostic, DocumentId,
-    EffectiveCheckoutProjection, EntityRef, EpicId, EpicReference, ErrorSeverity, EventCursor,
-    EventEnvelope, EventId, EventKind, EventPayload, EvidenceState, FeatureId,
-    FeatureProposalProjection, FeatureReference, HandshakeRequest, HandshakeResponse, Heartbeat,
-    HierarchyChildren, HierarchyEpic, HierarchyFeature, HierarchyNode, HierarchyRef,
+    DurableWorkItemSection, EffectiveCheckoutProjection, EntityRef, EpicId, EpicReference,
+    ErrorSeverity, EventCursor, EventEnvelope, EventId, EventKind, EventPayload, EvidenceState,
+    FeatureId, FeatureProposalProjection, FeatureReference, HandshakeRequest, HandshakeResponse,
+    Heartbeat, HierarchyChildren, HierarchyEpic, HierarchyFeature, HierarchyNode, HierarchyRef,
     HierarchyWorkItem, InvalidationScope, ManagedSessionRole, ObservedDisplayPath, Operation,
     OwnerProjection, PREVIOUS_PROTOCOL_VERSION, ParallelReadiness, PartialOutcome,
     PlannerSessionProjection, PrimaryWriterEvidence, ProposalWarningProjection,
     ProposedWorkItemProjection, ProtocolError, Provider, ReadQuery, ReadQueryCode,
     RecoveryDispositionProjection, RecoveryPreviewProjection, RepositoryId,
     RepositoryObservabilityProjection, RepositoryPathId, RepositoryReference, RequestEnvelope,
-    RequestId, ResponseEnvelope, ResponseResult, ResyncReason, ResyncRequirement, ServerMessage,
-    SessionBindingState, SessionId, SessionLiveState, SessionLivenessProjection,
-    SessionObservabilityProjection, SessionRestoreState, SessionResumability, SessionSummary,
-    SubscriptionRequest, UnavailableReason, ValidationField, WorkItemId, WorkItemReference,
-    WorkItemStatus, WorkflowState, WorkspaceHierarchy, WorkspaceId, WorkspaceReference,
-    WorkspaceSummary,
+    RequestId, ResponseEnvelope, ResponseResult, ResyncReason, ResyncRequirement,
+    ReviewDeliveryState, ServerMessage, SessionBindingState, SessionId, SessionLiveState,
+    SessionLivenessProjection, SessionObservabilityProjection, SessionRestoreState,
+    SessionResumability, SessionSummary, SubscriptionRequest, UnavailableReason, ValidationField,
+    WorkItemBlockerProjection, WorkItemCheckpointId, WorkItemCheckpointProjection,
+    WorkItemDetailProjection, WorkItemId, WorkItemNextActionKind, WorkItemNextActionProjection,
+    WorkItemReference, WorkItemStatus, WorkflowState, WorkspaceHierarchy, WorkspaceId,
+    WorkspaceReference, WorkspaceSummary,
 };
 
 const REQUEST_ID: &str = "10000000-0000-0000-0000-000000000001";
@@ -41,6 +43,7 @@ const CHECKOUT_ID: &str = "b0000000-0000-0000-0000-000000000001";
 const DAEMON_ID: &str = "80000000-0000-0000-0000-000000000001";
 const EVENT_ID: &str = "90000000-0000-0000-0000-000000000001";
 const BOARD_VIEW_ID: &str = "a0000000-0000-0000-0000-000000000001";
+const CHECKPOINT_ID: &str = "c0000000-0000-0000-0000-000000000001";
 
 fn board_view(revision: u64) -> Value {
     json!({
@@ -206,6 +209,32 @@ fn approval_queue() -> Value {
     })
 }
 
+fn work_item_detail() -> Value {
+    json!({
+        "workItem": { "id": WORK_ITEM_ID, "featureId": FEATURE_ID, "key": "WI-1", "slug": "fixture-work-item", "title": "Fixture Work item" },
+        "feature": { "id": FEATURE_ID, "epicId": EPIC_ID, "slug": "fixture-feature", "title": "Fixture Feature" },
+        "outcomeDesignSummary": "Long hostile content remains plain text: <script>alert('no')</script>\n".repeat(40),
+        "currentState": { "entries": [], "evidence": classified("not_loaded", "structured_checkpoint_unavailable", "Structured current-state evidence is unavailable.") },
+        "dependencyReadiness": "waiting",
+        "blockers": [{ "code": "dependency_incomplete", "message": "Prerequisite is in progress.", "prerequisite": { "id": "60000000-0000-0000-0000-000000000002", "featureId": FEATURE_ID, "key": "WI-0", "slug": "prerequisite", "title": "Prerequisite" } }],
+        "decisions": { "entries": [], "evidence": classified("not_loaded", "structured_checkpoint_unavailable", "Structured decision evidence is unavailable.") },
+        "verification": { "entries": [], "evidence": classified("not_loaded", "structured_checkpoint_unavailable", "Structured verification evidence is unavailable.") },
+        "nextAction": { "kind": "review", "recordedAt": "2026-08-30T12:00:00Z" },
+        "reviewDeliveryState": "review_requested",
+        "workflowState": "reconciliation_required",
+        "status": "review",
+        "repositories": [{ "id": REPOSITORY_ID, "workspaceId": WORKSPACE_ID, "slug": "fixture-repository", "title": "Fixture Repository" }],
+        "checkouts": [checkout_observability()],
+        "revision": 41,
+        "contentRevision": 3,
+        "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "checkpointHistory": [{ "id": CHECKPOINT_ID, "sessionId": SESSION_ID, "nextAction": "review", "summary": "Opaque checkpoint summary <img src=x onerror=alert(1)>", "recordedAt": "2026-08-30T12:00:00Z" }],
+        "sessions": [session_observability()],
+        "diagnostics": [{ "code": "work_item_reconciliation_required", "severity": "error", "message": "This Work item requires authoritative reconciliation outside Desktop.", "owner": { "kind": "work_item", "id": WORK_ITEM_ID } }],
+        "availableActions": [{ "code": "checkpoint_work_item", "available": false, "unavailableReason": { "code": "structured_checkpoint_unavailable", "message": "Structured checkpoint editing is unavailable." }, "expectedRevision": 41 }]
+    })
+}
+
 pub fn typescript_declarations() -> String {
     let config = Config::default();
     let mut declarations = Vec::new();
@@ -227,6 +256,7 @@ pub fn typescript_declarations() -> String {
     declaration!(EpicId);
     declaration!(FeatureId);
     declaration!(WorkItemId);
+    declaration!(WorkItemCheckpointId);
     declaration!(SessionId);
     declaration!(CheckoutId);
     declaration!(CheckoutPathId);
@@ -252,6 +282,13 @@ pub fn typescript_declarations() -> String {
     declaration!(ApprovalQueueProjection);
     declaration!(ApprovalQueueItemProjection);
     declaration!(FeatureProposalProjection);
+    declaration!(WorkItemDetailProjection);
+    declaration!(DurableWorkItemSection);
+    declaration!(WorkItemBlockerProjection);
+    declaration!(WorkItemNextActionKind);
+    declaration!(WorkItemNextActionProjection);
+    declaration!(ReviewDeliveryState);
+    declaration!(WorkItemCheckpointProjection);
     declaration!(ProposedWorkItemProjection);
     declaration!(ProposalWarningProjection);
     declaration!(PlannerSessionProjection);
@@ -368,6 +405,7 @@ pub fn conformance_fixture(protocol_version: u32) -> Value {
             "attention": query_request(json!({ "type": "attention", "value": { "query": { "cursor": null, "limit": 100, "repositoryIds": [], "reasonCodes": [] } } })),
             "approvalQueue": query_request(json!({ "type": "approval_queue" })),
             "featureProposal": query_request(json!({ "type": "feature_proposal", "value": { "featureId": FEATURE_ID } })),
+            "workItemDetail": query_request(json!({ "type": "work_item_detail", "value": { "workItemId": WORK_ITEM_ID } })),
             "repositoryObservability": query_request(json!({ "type": "repository_observability", "value": { "repositoryId": REPOSITORY_ID } })),
             "checkoutObservability": query_request(json!({ "type": "checkout_observability", "value": { "checkoutId": CHECKOUT_ID } })),
             "sessionObservability": query_request(json!({ "type": "session_observability", "value": { "sessionId": SESSION_ID } })),
@@ -483,10 +521,11 @@ fn read_requests(protocol_version: u32) -> Vec<Value> {
             ),
         );
         requests.insert(9, request(json!({ "type": "query", "value": { "type": "feature_proposal", "value": { "featureId": FEATURE_ID } } }), protocol_version, Some(WORKSPACE_ID)));
-        requests.insert(10, request(json!({ "type": "query", "value": { "type": "repository_observability", "value": { "repositoryId": REPOSITORY_ID } } }), protocol_version, Some(WORKSPACE_ID)));
-        requests.insert(11, request(json!({ "type": "query", "value": { "type": "checkout_observability", "value": { "checkoutId": CHECKOUT_ID } } }), protocol_version, Some(WORKSPACE_ID)));
-        requests.insert(12, request(json!({ "type": "query", "value": { "type": "session_observability", "value": { "sessionId": SESSION_ID } } }), protocol_version, Some(WORKSPACE_ID)));
-        requests.insert(13, request(json!({ "type": "query", "value": { "type": "recovery_preview", "value": { "sessionId": SESSION_ID } } }), protocol_version, Some(WORKSPACE_ID)));
+        requests.insert(10, request(json!({ "type": "query", "value": { "type": "work_item_detail", "value": { "workItemId": WORK_ITEM_ID } } }), protocol_version, Some(WORKSPACE_ID)));
+        requests.insert(11, request(json!({ "type": "query", "value": { "type": "repository_observability", "value": { "repositoryId": REPOSITORY_ID } } }), protocol_version, Some(WORKSPACE_ID)));
+        requests.insert(12, request(json!({ "type": "query", "value": { "type": "checkout_observability", "value": { "checkoutId": CHECKOUT_ID } } }), protocol_version, Some(WORKSPACE_ID)));
+        requests.insert(13, request(json!({ "type": "query", "value": { "type": "session_observability", "value": { "sessionId": SESSION_ID } } }), protocol_version, Some(WORKSPACE_ID)));
+        requests.insert(14, request(json!({ "type": "query", "value": { "type": "recovery_preview", "value": { "sessionId": SESSION_ID } } }), protocol_version, Some(WORKSPACE_ID)));
     }
     requests
 }
@@ -747,25 +786,32 @@ fn response_results(protocol_version: u32) -> Vec<Value> {
             10,
             response_envelope(
                 protocol_version,
-                json!({ "type": "repository_observability", "value": repository_observability() }),
+                json!({ "type": "work_item_detail", "value": work_item_detail() }),
             ),
         );
         results.insert(
             11,
             response_envelope(
                 protocol_version,
-                json!({ "type": "checkout_observability", "value": checkout_observability() }),
+                json!({ "type": "repository_observability", "value": repository_observability() }),
             ),
         );
         results.insert(
             12,
             response_envelope(
                 protocol_version,
-                json!({ "type": "session_observability", "value": session_observability() }),
+                json!({ "type": "checkout_observability", "value": checkout_observability() }),
             ),
         );
         results.insert(
             13,
+            response_envelope(
+                protocol_version,
+                json!({ "type": "session_observability", "value": session_observability() }),
+            ),
+        );
+        results.insert(
+            14,
             response_envelope(
                 protocol_version,
                 json!({ "type": "recovery_preview", "value": recovery_preview() }),
@@ -890,7 +936,7 @@ fn server_messages(protocol_version: u32) -> Vec<Value> {
 fn discriminants() -> Value {
     json!({
         "operations": ["handshake", "query", "command", "subscribe"],
-        "readQueries": ["workspace_summary", "hierarchy_children", "workspace_hierarchy", "board_views", "board_view", "board", "attention", "approval_queue", "feature_proposal", "repository_observability", "checkout_observability", "session_observability", "recovery_preview", "board_snapshot"],
+        "readQueries": ["workspace_summary", "hierarchy_children", "workspace_hierarchy", "board_views", "board_view", "board", "attention", "approval_queue", "feature_proposal", "work_item_detail", "repository_observability", "checkout_observability", "session_observability", "recovery_preview", "board_snapshot"],
         "responseResults": [
             "handshake",
             "workspace_summary",
@@ -902,6 +948,7 @@ fn discriminants() -> Value {
             "attention",
             "approval_queue",
             "feature_proposal",
+            "work_item_detail",
             "repository_observability",
             "checkout_observability",
             "session_observability",
@@ -931,6 +978,7 @@ fn discriminants() -> Value {
             "checkout_changed",
             "session_liveness_changed"
             ,"proposal_changed"
+            ,"work_item_changed"
         ],
         "eventPayloads": [
             { "type": "projection_changed", "value": {
@@ -943,6 +991,7 @@ fn discriminants() -> Value {
             ,{ "type": "checkout_changed", "value": { "checkout": checkout_observability(), "cards": [board_card()] }}
             ,{ "type": "session_liveness_changed", "value": { "session": session_observability(), "recovery": recovery_preview(), "cards": [board_card()] }}
             ,{ "type": "proposal_changed", "value": { "proposal": feature_proposal(), "queueItem": approval_queue()["entries"][0] }}
+            ,{ "type": "work_item_changed", "value": { "detail": work_item_detail(), "card": board_card() }}
         ],
         "resyncReasons": [
             "gap",
@@ -952,7 +1001,7 @@ fn discriminants() -> Value {
             "heartbeat_lost"
         ],
         "errorSeverities": ["info", "warning", "error", "fatal"],
-        "readQueryCodes": ["workspace_summary", "hierarchy_children", "workspace_hierarchy", "board_views", "board_view", "board", "attention", "approval_queue", "feature_proposal", "repository_observability", "checkout_observability", "session_observability", "recovery_preview", "board_snapshot"],
+        "readQueryCodes": ["workspace_summary", "hierarchy_children", "workspace_hierarchy", "board_views", "board_view", "board", "attention", "approval_queue", "feature_proposal", "work_item_detail", "repository_observability", "checkout_observability", "session_observability", "recovery_preview", "board_snapshot"],
         "hierarchyRefs": [
             { "kind": "workspace", "id": WORKSPACE_ID },
             { "kind": "epic", "id": EPIC_ID },
@@ -1043,6 +1092,38 @@ fn discriminants() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn work_item_fixture_covers_durable_read_sections_and_keeps_opaque_checkpoint_mutation_closed()
+    {
+        let detail = serde_json::from_value::<WorkItemDetailProjection>(work_item_detail())
+            .expect("Work-item detail projection");
+        assert_eq!(detail.dependency_readiness, DependencyReadiness::Waiting);
+        assert_eq!(detail.blockers.len(), 1);
+        assert!(detail.decisions.entries.is_empty());
+        assert!(detail.verification.entries.is_empty());
+        assert_eq!(detail.checkpoint_history.len(), 1);
+        assert_eq!(detail.sessions.len(), 1);
+        assert_eq!(detail.checkouts.len(), 1);
+        assert_eq!(
+            detail.available_actions[0].code,
+            CommandCode::CheckpointWorkItem
+        );
+        assert!(!detail.available_actions[0].available);
+        assert_eq!(
+            detail.available_actions[0]
+                .unavailable_reason
+                .as_ref()
+                .map(|reason| reason.code.as_str()),
+            Some("structured_checkpoint_unavailable")
+        );
+        assert!(matches!(
+            CommandOperation::CheckpointWorkItem {
+                work_item_id: WORK_ITEM_ID.parse().expect("Work-item ID")
+            },
+            CommandOperation::CheckpointWorkItem { .. }
+        ));
+    }
 
     #[test]
     fn deterministic_operational_fixtures_cover_scale_history_cardinality_and_uncertainty() {

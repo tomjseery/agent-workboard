@@ -435,7 +435,7 @@ Disable mutation capabilities and retain read-only proposal/queue views. Daemon 
 
 ### 8. Deliver Work-item detail and gated structured checkpoints
 
-- Status: [ ]
+- Status: [x]
 - Slug: `deliver-work-item-detail-and-structured-checkpoints`
 - Dependencies: items 4 and 6
 - Mutation gate: accepted revision-checked atomic structured checkpoint operation

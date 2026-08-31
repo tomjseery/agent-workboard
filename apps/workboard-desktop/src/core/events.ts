@@ -10,6 +10,7 @@ import { proposalQueryKeys } from "../features/proposal/api/proposalQueryKeys";
 import { savedViewQueryKeys } from "../features/saved-views/api/savedViewQueryKeys";
 import { sessionQueryKeys } from "../features/session/api/sessionQueryKeys";
 import { workspaceQueryKeys } from "../features/workspace/api/workspaceQueryKeys";
+import { workItemQueryKeys } from "../features/work-item/api/workItemQueryKeys";
 
 type Invalidator = (queryClient: QueryClient, workspaceId: WorkspaceId) => void;
 
@@ -23,6 +24,7 @@ export const readQueryInvalidators: Record<ReadQueryCode, Invalidator> = {
   attention: (queryClient, workspaceId) => { void queryClient.invalidateQueries({ queryKey: boardQueryKeys.attention(workspaceId) }); },
   approval_queue: (queryClient, workspaceId) => { void queryClient.invalidateQueries({ queryKey: proposalQueryKeys.queue(workspaceId) }); },
   feature_proposal: (queryClient, workspaceId) => { void queryClient.invalidateQueries({ queryKey: proposalQueryKeys.details(workspaceId) }); },
+  work_item_detail: (queryClient, workspaceId) => { void queryClient.invalidateQueries({ queryKey: workItemQueryKeys.workspace(workspaceId) }); },
   repository_observability: (queryClient, workspaceId) => { void queryClient.invalidateQueries({ queryKey: repositoryQueryKeys.workspace(workspaceId) }); },
   checkout_observability: (queryClient, workspaceId) => { void queryClient.invalidateQueries({ queryKey: checkoutQueryKeys.workspace(workspaceId) }); },
   session_observability: (queryClient, workspaceId) => { void queryClient.invalidateQueries({ queryKey: sessionQueryKeys.all(workspaceId) }); },
@@ -92,12 +94,22 @@ export function applyWorkspaceEvent(queryClient: QueryClient, event: EventEnvelo
       return { ...current, authoritativeRevision: Math.max(current.authoritativeRevision ?? 0, event.sequence), result: { type: "approval_queue", value: { ...current.result.value, entries, revision: event.sequence } } };
     });
   }
+  if (event.payload?.type === "work_item_changed") {
+    const { detail, card } = event.payload.value;
+    queryClient.setQueryData<ResponseEnvelope>(workItemQueryKeys.detail(event.workspaceId, detail.workItem.id), (current) => current === undefined ? current : { ...current, authoritativeRevision: Math.max(current.authoritativeRevision ?? 0, event.sequence), result: { type: "work_item_detail", value: detail } });
+    if (card !== null) patchBoardCards(queryClient, event.workspaceId, event.sequence, [card]);
+    void queryClient.invalidateQueries({ queryKey: boardQueryKeys.attention(event.workspaceId) });
+    void queryClient.invalidateQueries({ queryKey: hierarchyQueryKeys.workspace(event.workspaceId) });
+    for (const checkout of detail.checkouts) queryClient.setQueryData<ResponseEnvelope>(checkoutQueryKeys.detail(event.workspaceId, checkout.id), (current) => current === undefined ? current : { ...current, authoritativeRevision: Math.max(current.authoritativeRevision ?? 0, event.sequence), result: { type: "checkout_observability", value: checkout } });
+    for (const session of detail.sessions) queryClient.setQueryData<ResponseEnvelope>(sessionQueryKeys.detail(event.workspaceId, session.id), (current) => current === undefined ? current : { ...current, authoritativeRevision: Math.max(current.authoritativeRevision ?? 0, event.sequence), result: { type: "session_observability", value: session } });
+  }
   for (const query of event.invalidationScope?.queries ?? []) {
     if (event.payload?.type === "board_view_saved" && (query === "board_views" || query === "board_view")) continue;
     if (event.payload?.type === "board_card_changed" && query === "board") continue;
     if (event.payload?.type === "checkout_changed" && (query === "checkout_observability" || query === "repository_observability" || query === "board")) continue;
     if (event.payload?.type === "session_liveness_changed" && (query === "session_observability" || query === "recovery_preview" || query === "board")) continue;
     if (event.payload?.type === "proposal_changed" && (query === "feature_proposal" || query === "approval_queue")) continue;
+    if (event.payload?.type === "work_item_changed" && ["work_item_detail", "board", "attention", "workspace_hierarchy", "checkout_observability", "session_observability"].includes(query)) continue;
     readQueryInvalidators[query](queryClient, event.workspaceId);
   }
 }

@@ -41,6 +41,23 @@ fn test_work_item_id() -> WorkItemId {
         .expect("test Work-item ID")
 }
 
+fn test_work_item_detail() -> workboard_client_protocol::WorkItemDetailProjection {
+    let fixture =
+        workboard_client_protocol::generation::conformance_fixture(CURRENT_PROTOCOL_VERSION);
+    let response = fixture["responses"]
+        .as_array()
+        .expect("fixture responses")
+        .iter()
+        .find(|response| response["result"]["type"] == "work_item_detail")
+        .expect("Work-item detail response");
+    let response: ResponseEnvelope =
+        serde_json::from_value(response.clone()).expect("Work-item detail envelope");
+    match response.result.expect("Work-item detail result") {
+        ResponseResult::WorkItemDetail(detail) => *detail,
+        _ => panic!("unexpected Work-item detail fixture"),
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AuthenticatedRequest {
@@ -370,6 +387,11 @@ impl FakeServer {
                     available_actions: Vec::new(),
                 },
             ),
+            ReadQuery::WorkItemDetail { work_item_id } => {
+                let mut detail = test_work_item_detail();
+                detail.work_item.id = *work_item_id;
+                ResponseResult::WorkItemDetail(Box::new(detail))
+            }
             ReadQuery::RepositoryObservability { repository_id } => {
                 ResponseResult::RepositoryObservability(RepositoryObservabilityProjection {
                     repository: RepositoryReference {
