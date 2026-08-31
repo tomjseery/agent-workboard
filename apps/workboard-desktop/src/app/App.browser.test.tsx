@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { page } from "@vitest/browser/context";
+import { page, userEvent } from "@vitest/browser/context";
 import { expect, it, vi } from "vitest";
 import "vitest-browser-react";
 
@@ -24,6 +24,8 @@ const { fakeDaemon } = vi.hoisted(() => {
     boardView: async () => response(null) as never,
     board: async () => response({ type: "board", value: { lanes: [], cards: [], nextCursor: null, totalCount: 0, revision: 4 } }) as never,
     attention: async () => response({ type: "attention", value: { entries: [], nextCursor: null, totalCount: 0, revision: 4 } }) as never,
+    approvalQueue: async () => response({ type: "approval_queue", value: { entries: [], revision: 4 } }) as never,
+    featureProposal: async () => response(null) as never,
     repositoryObservability: async () => response(null) as never,
     checkoutObservability: async () => response(null) as never,
     sessionObservability: async () => response(null) as never,
@@ -70,4 +72,16 @@ it("announces disconnected and incompatible states through a single landmark", a
     .join("\n");
   expect(css).toContain("(prefers-reduced-motion: reduce)");
   expect(css).toContain("(forced-colors: active)");
+});
+
+it("opens the daemon-owned proposal queue by keyboard and restores route focus", async () => {
+  window.history.replaceState(null, "", "/");
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  page.render(<QueryClientProvider client={queryClient}><App /></QueryClientProvider>);
+  const proposals = page.getByRole("link", { name: "Proposals" });
+  await expect.element(proposals).toBeVisible();
+  (proposals.element() as HTMLElement).focus();
+  await userEvent.keyboard("{Enter}");
+  await expect.element(page.getByText("No Feature proposals currently require review.")).toBeVisible();
+  await vi.waitFor(() => expect(document.activeElement?.id).toBe("main-content"));
 });

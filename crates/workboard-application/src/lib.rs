@@ -16,6 +16,7 @@ pub mod operational_projection;
 pub mod planning_store;
 pub mod planning_workflow;
 pub mod projection;
+pub mod proposal_projection;
 pub mod recovery;
 pub mod session_launch;
 pub mod storage;

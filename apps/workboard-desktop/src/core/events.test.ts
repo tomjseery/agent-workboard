@@ -11,6 +11,7 @@ import { workspaceQueryKeys } from "../features/workspace/api/workspaceQueryKeys
 import { boardQueryKeys } from "../features/board/api/boardQueryKeys";
 import { repositoryQueryKeys } from "../features/repository/api/repositoryQueryKeys";
 import { sessionQueryKeys } from "../features/session/api/sessionQueryKeys";
+import { proposalQueryKeys } from "../features/proposal/api/proposalQueryKeys";
 import { createLargeBoardFixture } from "../features/board/fixtures/largeBoardFixture";
 
 const workspaceId = "20000000-0000-0000-0000-000000000001";
@@ -123,5 +124,29 @@ describe("ordered event cache updates", () => {
     expect(queryClient.getQueryData<ResponseEnvelope>(sessionQueryKeys.recovery(workspaceId, payload.value.session.id))?.result).toEqual({ type: "recovery_preview", value: payload.value.recovery });
     expect(queryClient.getQueryData(sessionQueryKeys.detail(workspaceId, unrelatedSessionId))).toBe(unrelatedSession);
     expect(queryClient.getQueryData(sessionQueryKeys.recovery(workspaceId, unrelatedSessionId))).toBe(unrelatedRecovery);
+  });
+
+  it("patches only the changed proposal and approval queue while invalidating attention", () => {
+    const queryClient = new QueryClient();
+    const payload = current.discriminants.eventPayloads.find(({ type }) => type === "proposal_changed") as unknown as Extract<NonNullable<EventEnvelope["payload"]>, { type: "proposal_changed" }>;
+    const unrelatedFeatureId = "50000000-0000-0000-0000-000000000099";
+    const unrelatedProposal = envelope(null);
+    const unrelatedBoard = envelope(null);
+    queryClient.setQueryData(proposalQueryKeys.detail(workspaceId, payload.value.proposal.feature.id), envelope(null));
+    queryClient.setQueryData(proposalQueryKeys.detail(workspaceId, unrelatedFeatureId), unrelatedProposal);
+    queryClient.setQueryData(proposalQueryKeys.queue(workspaceId), envelope({ type: "approval_queue", value: { entries: [], revision: 1 } }));
+    const attentionKey = boardQueryKeys.attentionList(workspaceId, { limit: 200, repositoryIds: [], reasonCodes: [] });
+    const boardKey = boardQueryKeys.board(workspaceId, { limit: 200, query: null, repositoryIds: [], statuses: [], laneKeys: [], sort: { field: "key", direction: "ascending" } });
+    queryClient.setQueryData(attentionKey, { pages: [envelope(null)], pageParams: [null] });
+    queryClient.setQueryData(boardKey, unrelatedBoard);
+    applyWorkspaceEvent(queryClient, { ...event(["feature_proposal", "approval_queue", "attention"]), kind: "proposal_changed", payload, owner: { kind: "feature", id: payload.value.proposal.feature.id } });
+    expect(queryClient.getQueryData<ResponseEnvelope>(proposalQueryKeys.detail(workspaceId, payload.value.proposal.feature.id))?.result).toEqual({ type: "feature_proposal", value: payload.value.proposal });
+    expect(queryClient.getQueryData(proposalQueryKeys.detail(workspaceId, unrelatedFeatureId))).toBe(unrelatedProposal);
+    const queue = queryClient.getQueryData<ResponseEnvelope>(proposalQueryKeys.queue(workspaceId))?.result;
+    expect(queue?.type).toBe("approval_queue");
+    if (queue?.type !== "approval_queue") throw new Error("approval queue missing");
+    expect(queue.value.entries).toEqual([payload.value.queueItem]);
+    expect(queryClient.getQueryState(attentionKey)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(boardKey)?.isInvalidated).not.toBe(true);
   });
 });

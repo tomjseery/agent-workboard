@@ -6,6 +6,7 @@ import type { BoardResponse } from "../features/board/types/board";
 import { checkoutQueryKeys } from "../features/checkout/api/checkoutQueryKeys";
 import { hierarchyQueryKeys } from "../features/hierarchy/api/hierarchyQueryKeys";
 import { repositoryQueryKeys } from "../features/repository/api/repositoryQueryKeys";
+import { proposalQueryKeys } from "../features/proposal/api/proposalQueryKeys";
 import { savedViewQueryKeys } from "../features/saved-views/api/savedViewQueryKeys";
 import { sessionQueryKeys } from "../features/session/api/sessionQueryKeys";
 import { workspaceQueryKeys } from "../features/workspace/api/workspaceQueryKeys";
@@ -20,6 +21,8 @@ export const readQueryInvalidators: Record<ReadQueryCode, Invalidator> = {
   board_view: (queryClient, workspaceId) => { void queryClient.invalidateQueries({ queryKey: savedViewQueryKeys.details(workspaceId) }); },
   board: (queryClient, workspaceId) => { void queryClient.invalidateQueries({ queryKey: boardQueryKeys.boards(workspaceId) }); },
   attention: (queryClient, workspaceId) => { void queryClient.invalidateQueries({ queryKey: boardQueryKeys.attention(workspaceId) }); },
+  approval_queue: (queryClient, workspaceId) => { void queryClient.invalidateQueries({ queryKey: proposalQueryKeys.queue(workspaceId) }); },
+  feature_proposal: (queryClient, workspaceId) => { void queryClient.invalidateQueries({ queryKey: proposalQueryKeys.details(workspaceId) }); },
   repository_observability: (queryClient, workspaceId) => { void queryClient.invalidateQueries({ queryKey: repositoryQueryKeys.workspace(workspaceId) }); },
   checkout_observability: (queryClient, workspaceId) => { void queryClient.invalidateQueries({ queryKey: checkoutQueryKeys.workspace(workspaceId) }); },
   session_observability: (queryClient, workspaceId) => { void queryClient.invalidateQueries({ queryKey: sessionQueryKeys.all(workspaceId) }); },
@@ -78,11 +81,23 @@ export function applyWorkspaceEvent(queryClient: QueryClient, event: EventEnvelo
     queryClient.setQueryData<ResponseEnvelope>(sessionQueryKeys.recovery(event.workspaceId, session.id), (current) => current === undefined ? current : { ...current, authoritativeRevision: Math.max(current.authoritativeRevision ?? 0, event.sequence), result: { type: "recovery_preview", value: recovery } });
     patchBoardCards(queryClient, event.workspaceId, event.sequence, cards);
   }
+  if (event.payload?.type === "proposal_changed") {
+    const { proposal, queueItem } = event.payload.value;
+    queryClient.setQueryData<ResponseEnvelope>(proposalQueryKeys.detail(event.workspaceId, proposal.feature.id), (current) => current === undefined ? current : { ...current, authoritativeRevision: Math.max(current.authoritativeRevision ?? 0, event.sequence), result: { type: "feature_proposal", value: proposal } });
+    queryClient.setQueryData<ResponseEnvelope>(proposalQueryKeys.queue(event.workspaceId), (current) => {
+      if (current?.result?.type !== "approval_queue") return current;
+      const entries = current.result.value.entries.filter((entry) => entry.feature.id !== proposal.feature.id);
+      if (queueItem !== null) entries.push(queueItem);
+      entries.sort((left, right) => left.position - right.position);
+      return { ...current, authoritativeRevision: Math.max(current.authoritativeRevision ?? 0, event.sequence), result: { type: "approval_queue", value: { ...current.result.value, entries, revision: event.sequence } } };
+    });
+  }
   for (const query of event.invalidationScope?.queries ?? []) {
     if (event.payload?.type === "board_view_saved" && (query === "board_views" || query === "board_view")) continue;
     if (event.payload?.type === "board_card_changed" && query === "board") continue;
     if (event.payload?.type === "checkout_changed" && (query === "checkout_observability" || query === "repository_observability" || query === "board")) continue;
     if (event.payload?.type === "session_liveness_changed" && (query === "session_observability" || query === "recovery_preview" || query === "board")) continue;
+    if (event.payload?.type === "proposal_changed" && (query === "feature_proposal" || query === "approval_queue")) continue;
     readQueryInvalidators[query](queryClient, event.workspaceId);
   }
 }

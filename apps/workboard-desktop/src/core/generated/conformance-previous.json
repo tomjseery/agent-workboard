@@ -69,7 +69,8 @@
       "native_sessions_refreshed",
       "partial_outcome_recorded",
       "checkout_changed",
-      "session_liveness_changed"
+      "session_liveness_changed",
+      "proposal_changed"
     ],
     "eventPayloads": [
       {
@@ -441,6 +442,121 @@
             "role": "work_item_execution"
           }
         }
+      },
+      {
+        "type": "proposal_changed",
+        "value": {
+          "proposal": {
+            "availableActions": [
+              {
+                "available": false,
+                "code": "approve_feature",
+                "expectedRevision": 41,
+                "unavailableReason": {
+                  "code": "publication_policy_unavailable",
+                  "message": "Desktop approval actions are unavailable until the daemon accepts the typed publication policy."
+                }
+              }
+            ],
+            "changedSincePrevious": true,
+            "diagnostics": [],
+            "feature": {
+              "epicId": "40000000-0000-0000-0000-000000000001",
+              "id": "50000000-0000-0000-0000-000000000001",
+              "slug": "fixture-feature",
+              "title": "Fixture Feature"
+            },
+            "featureBody": "# Fixture Feature\n\n<script>not executable</script>\n\n[unsafe](javascript:alert(1))",
+            "generation": 2,
+            "plannerSessions": [
+              {
+                "bindingState": "current",
+                "id": "70000000-0000-0000-0000-000000000001",
+                "lastActivityAt": "2026-08-30T12:00:00Z",
+                "liveState": "active",
+                "provider": "codex",
+                "role": "feature_planning"
+              }
+            ],
+            "proposalHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "repositories": [
+              {
+                "id": "30000000-0000-0000-0000-000000000001",
+                "slug": "fixture-repository",
+                "title": "Fixture Repository",
+                "workspaceId": "20000000-0000-0000-0000-000000000001"
+              }
+            ],
+            "revision": 41,
+            "submittedAt": "2026-08-30T12:00:00Z",
+            "verificationGates": [
+              "The focused verification suite passes."
+            ],
+            "warnings": [
+              {
+                "code": "proposal_changed",
+                "message": "This proposal replaces an earlier submitted generation.",
+                "severity": "warning"
+              }
+            ],
+            "workItems": [
+              {
+                "body": "Review the complete proposal as text.",
+                "dependencies": [],
+                "id": "60000000-0000-0000-0000-000000000001",
+                "position": 1,
+                "repositories": [
+                  {
+                    "id": "30000000-0000-0000-0000-000000000001",
+                    "slug": "fixture-repository",
+                    "title": "Fixture Repository",
+                    "workspaceId": "20000000-0000-0000-0000-000000000001"
+                  }
+                ],
+                "slug": "fixture-work-item",
+                "title": "Fixture Work item"
+              }
+            ],
+            "workflowState": "awaiting_approval"
+          },
+          "queueItem": {
+            "availableActions": [
+              {
+                "available": false,
+                "code": "approve_feature",
+                "expectedRevision": 41,
+                "unavailableReason": {
+                  "code": "publication_policy_unavailable",
+                  "message": "Desktop approval actions are unavailable until the daemon accepts the typed publication policy."
+                }
+              }
+            ],
+            "changedSincePrevious": true,
+            "feature": {
+              "epicId": "40000000-0000-0000-0000-000000000001",
+              "id": "50000000-0000-0000-0000-000000000001",
+              "slug": "fixture-feature",
+              "title": "Fixture Feature"
+            },
+            "generation": 2,
+            "plannerCount": 1,
+            "position": 1,
+            "proposalHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "repositories": [
+              {
+                "id": "30000000-0000-0000-0000-000000000001",
+                "slug": "fixture-repository",
+                "title": "Fixture Repository",
+                "workspaceId": "20000000-0000-0000-0000-000000000001"
+              }
+            ],
+            "revision": 41,
+            "submittedAt": "2026-08-30T12:00:00Z",
+            "totalCount": 1,
+            "warningCount": 1,
+            "workflowState": "awaiting_approval"
+          }
+        }
       }
     ],
     "evidenceStates": [
@@ -555,6 +671,8 @@
       "board_view",
       "board",
       "attention",
+      "approval_queue",
+      "feature_proposal",
       "repository_observability",
       "checkout_observability",
       "session_observability",
@@ -569,6 +687,8 @@
       "board_view",
       "board",
       "attention",
+      "approval_queue",
+      "feature_proposal",
       "repository_observability",
       "checkout_observability",
       "session_observability",
@@ -592,6 +712,8 @@
       "board_view",
       "board",
       "attention",
+      "approval_queue",
+      "feature_proposal",
       "repository_observability",
       "checkout_observability",
       "session_observability",
@@ -670,6 +792,12 @@
   },
   "fixtureVersion": 1,
   "frontendRequests": {
+    "approvalQueue": {
+      "query": {
+        "type": "approval_queue"
+      },
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    },
     "attention": {
       "query": {
         "type": "attention",
@@ -730,6 +858,15 @@
       },
       "expectedRevision": 41,
       "idempotencyKey": "fixture-command-1",
+      "workspaceId": "20000000-0000-0000-0000-000000000001"
+    },
+    "featureProposal": {
+      "query": {
+        "type": "feature_proposal",
+        "value": {
+          "featureId": "50000000-0000-0000-0000-000000000001"
+        }
+      },
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
     "hierarchyChildren": {
@@ -830,7 +967,7 @@
           }
         }
       },
-      "protocolVersion": 4,
+      "protocolVersion": 5,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -846,7 +983,7 @@
           }
         }
       },
-      "protocolVersion": 4,
+      "protocolVersion": 5,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -862,7 +999,7 @@
           }
         }
       },
-      "protocolVersion": 4,
+      "protocolVersion": 5,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -878,7 +1015,7 @@
           }
         }
       },
-      "protocolVersion": 4,
+      "protocolVersion": 5,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -894,7 +1031,7 @@
           }
         }
       },
-      "protocolVersion": 4,
+      "protocolVersion": 5,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -910,7 +1047,7 @@
           }
         }
       },
-      "protocolVersion": 4,
+      "protocolVersion": 5,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -926,7 +1063,7 @@
           }
         }
       },
-      "protocolVersion": 4,
+      "protocolVersion": 5,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -942,7 +1079,7 @@
           }
         }
       },
-      "protocolVersion": 4,
+      "protocolVersion": 5,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -958,7 +1095,7 @@
           }
         }
       },
-      "protocolVersion": 4,
+      "protocolVersion": 5,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -974,7 +1111,7 @@
           }
         }
       },
-      "protocolVersion": 4,
+      "protocolVersion": 5,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     }
@@ -1000,7 +1137,7 @@
     "reconciliationRequired": true,
     "succeeded": false
   },
-  "protocolVersion": 4,
+  "protocolVersion": 5,
   "readRequests": [
     {
       "expectedRevision": null,
@@ -1009,15 +1146,15 @@
         "type": "handshake",
         "value": {
           "supportedCommandVersions": [
-            5
+            6
           ],
           "supportedReadVersions": [
-            5,
-            4
+            6,
+            5
           ]
         }
       },
-      "protocolVersion": 4,
+      "protocolVersion": 5,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": null
     },
@@ -1030,7 +1167,7 @@
           "type": "workspace_summary"
         }
       },
-      "protocolVersion": 4,
+      "protocolVersion": 5,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1049,7 +1186,7 @@
           }
         }
       },
-      "protocolVersion": 4,
+      "protocolVersion": 5,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1062,7 +1199,7 @@
           "type": "workspace_hierarchy"
         }
       },
-      "protocolVersion": 4,
+      "protocolVersion": 5,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1075,7 +1212,7 @@
           "type": "board_views"
         }
       },
-      "protocolVersion": 4,
+      "protocolVersion": 5,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1091,7 +1228,7 @@
           }
         }
       },
-      "protocolVersion": 4,
+      "protocolVersion": 5,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1104,7 +1241,7 @@
           "type": "board_snapshot"
         }
       },
-      "protocolVersion": 4,
+      "protocolVersion": 5,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1120,7 +1257,7 @@
           }
         }
       },
-      "protocolVersion": 4,
+      "protocolVersion": 5,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     }
@@ -1144,7 +1281,7 @@
       "error": null,
       "futureOptionalReadField": "ignored",
       "partialOutcomes": [],
-      "protocolVersion": 4,
+      "protocolVersion": 5,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "handshake",
@@ -1154,7 +1291,7 @@
               "available": false,
               "code": "save_board_view",
               "compatibleVersions": [
-                5
+                6
               ],
               "unavailableReason": {
                 "code": "not_accepted",
@@ -1163,14 +1300,14 @@
             }
           ],
           "compatibleCommandVersions": [
-            5
+            6
           ],
           "daemonInstanceId": "80000000-0000-0000-0000-000000000001",
           "eventVersion": 1,
           "futureOptionalProjectionField": true,
           "heartbeatIntervalMs": 1000,
           "maxFrameBytes": 8388608,
-          "negotiatedReadVersion": 4,
+          "negotiatedReadVersion": 5,
           "workspaces": [
             {
               "id": "20000000-0000-0000-0000-000000000001",
@@ -1201,7 +1338,7 @@
       "error": null,
       "futureOptionalReadField": "ignored",
       "partialOutcomes": [],
-      "protocolVersion": 4,
+      "protocolVersion": 5,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "workspace_summary",
@@ -1240,7 +1377,7 @@
       "error": null,
       "futureOptionalReadField": "ignored",
       "partialOutcomes": [],
-      "protocolVersion": 4,
+      "protocolVersion": 5,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "hierarchy_children",
@@ -1284,7 +1421,7 @@
       "error": null,
       "futureOptionalReadField": "ignored",
       "partialOutcomes": [],
-      "protocolVersion": 4,
+      "protocolVersion": 5,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "workspace_hierarchy",
@@ -1377,7 +1514,7 @@
       "error": null,
       "futureOptionalReadField": "ignored",
       "partialOutcomes": [],
-      "protocolVersion": 4,
+      "protocolVersion": 5,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "board_views",
@@ -1435,7 +1572,7 @@
       "error": null,
       "futureOptionalReadField": "ignored",
       "partialOutcomes": [],
-      "protocolVersion": 4,
+      "protocolVersion": 5,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "board_view",
@@ -1492,7 +1629,7 @@
       "error": null,
       "futureOptionalReadField": "ignored",
       "partialOutcomes": [],
-      "protocolVersion": 4,
+      "protocolVersion": 5,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "board_snapshot",
@@ -1536,7 +1673,7 @@
       "error": null,
       "futureOptionalReadField": "ignored",
       "partialOutcomes": [],
-      "protocolVersion": 4,
+      "protocolVersion": 5,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "subscription_accepted",
@@ -1569,7 +1706,7 @@
       "error": null,
       "futureOptionalReadField": "ignored",
       "partialOutcomes": [],
-      "protocolVersion": 5,
+      "protocolVersion": 6,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "command_accepted",
@@ -1602,7 +1739,7 @@
         "diagnostics": [],
         "error": null,
         "partialOutcomes": [],
-        "protocolVersion": 4,
+        "protocolVersion": 5,
         "requestId": "10000000-0000-0000-0000-000000000001",
         "result": {
           "type": "workspace_summary",
@@ -1698,7 +1835,7 @@
             }
           }
         },
-        "protocolVersion": 4,
+        "protocolVersion": 5,
         "sequence": 42,
         "workspaceId": "20000000-0000-0000-0000-000000000001"
       }

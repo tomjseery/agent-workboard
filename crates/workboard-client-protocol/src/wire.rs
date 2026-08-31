@@ -3,11 +3,12 @@ use time::OffsetDateTime;
 use ts_rs::TS;
 
 use crate::{
-    AttentionPage, AttentionQuery, BoardCardProjection, BoardPage, BoardQuery, BoardSnapshot,
-    BoardViewDefinition, BoardViewId, CheckoutId, CheckoutObservabilityProjection,
-    DaemonInstanceId, EntityRef, EventId, HierarchyChildren, HierarchyRef,
-    RecoveryPreviewProjection, RepositoryId, RepositoryObservabilityProjection, RequestId,
-    SessionId, SessionObservabilityProjection, WorkspaceHierarchy, WorkspaceId, WorkspaceReference,
+    ApprovalQueueItemProjection, ApprovalQueueProjection, AttentionPage, AttentionQuery,
+    BoardCardProjection, BoardPage, BoardQuery, BoardSnapshot, BoardViewDefinition, BoardViewId,
+    CheckoutId, CheckoutObservabilityProjection, DaemonInstanceId, EntityRef, EventId,
+    FeatureProposalProjection, HierarchyChildren, HierarchyRef, RecoveryPreviewProjection,
+    RepositoryId, RepositoryObservabilityProjection, RequestId, SessionId,
+    SessionObservabilityProjection, WorkspaceHierarchy, WorkspaceId, WorkspaceReference,
     WorkspaceSummary,
 };
 
@@ -203,6 +204,8 @@ pub enum ReadQuery {
     BoardView { view_id: BoardViewId },
     Board { query: BoardQuery },
     Attention { query: AttentionQuery },
+    ApprovalQueue,
+    FeatureProposal { feature_id: crate::FeatureId },
     RepositoryObservability { repository_id: RepositoryId },
     CheckoutObservability { checkout_id: CheckoutId },
     SessionObservability { session_id: SessionId },
@@ -364,6 +367,8 @@ pub enum ResponseResult {
     BoardView(BoardViewDefinition),
     Board(BoardPage),
     Attention(AttentionPage),
+    ApprovalQueue(ApprovalQueueProjection),
+    FeatureProposal(FeatureProposalProjection),
     RepositoryObservability(RepositoryObservabilityProjection),
     CheckoutObservability(CheckoutObservabilityProjection),
     SessionObservability(SessionObservabilityProjection),
@@ -506,6 +511,7 @@ pub enum EventKind {
     PartialOutcomeRecorded,
     CheckoutChanged,
     SessionLivenessChanged,
+    ProposalChanged,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -540,6 +546,10 @@ pub enum EventPayload {
         recovery: Box<RecoveryPreviewProjection>,
         cards: Vec<BoardCardProjection>,
     },
+    ProposalChanged {
+        proposal: Box<FeatureProposalProjection>,
+        queue_item: Option<Box<ApprovalQueueItemProjection>>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -559,6 +569,8 @@ pub enum ReadQueryCode {
     BoardView,
     Board,
     Attention,
+    ApprovalQueue,
+    FeatureProposal,
     RepositoryObservability,
     CheckoutObservability,
     SessionObservability,
