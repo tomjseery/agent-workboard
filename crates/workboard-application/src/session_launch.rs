@@ -184,7 +184,8 @@ impl<'a> SessionLaunchService<'a> {
         if duplicate.is_some() {
             return Err(AppError::DuplicateConfirmed);
         }
-        if request.mode == ManagedLaunchMode::New {
+        if request.mode == ManagedLaunchMode::New && role_requires_exclusive_checkout(request.role)
+        {
             reject_checkout_launch_conflict(self.store, request.checkout_id)?;
         }
         let token = Uuid::new_v4().to_string();
@@ -1246,6 +1247,13 @@ fn reject_checkout_launch_conflict(
     }
 }
 
+fn role_requires_exclusive_checkout(role: ManagedSessionRole) -> bool {
+    matches!(
+        role,
+        ManagedSessionRole::WorkItemExecution | ManagedSessionRole::Debugging
+    )
+}
+
 fn bind_writer_session_checkout(
     transaction: &Transaction<'_>,
     checkout_id: CheckoutId,
@@ -1665,6 +1673,7 @@ mod tests {
         _directory: TempDir,
         store: SqliteStore,
         workspace_id: WorkspaceId,
+        feature_id: FeatureId,
         work_item_id: WorkItemId,
         checkout_id: CheckoutId,
         checkout_path: PathBuf,
@@ -2146,6 +2155,7 @@ mod tests {
             _directory: directory,
             store,
             workspace_id,
+            feature_id,
             work_item_id,
             checkout_id,
             checkout_path,
@@ -2175,6 +2185,32 @@ mod tests {
             initial_prompt: None,
             capability: capability_fixture(fixture),
         }
+    }
+
+    #[test]
+    fn feature_planning_can_share_a_checkout_without_weakening_writer_exclusivity() {
+        let mut fixture = fixture();
+        let writer = request(&fixture, "writer-launch");
+        SessionLaunchService::new(&mut fixture.store)
+            .begin(writer)
+            .expect("reserve writer launch");
+
+        let second_writer = request(&fixture, "second-writer-launch");
+        let writer_error = match SessionLaunchService::new(&mut fixture.store).begin(second_writer)
+        {
+            Ok(_) => panic!("second writer must remain exclusive"),
+            Err(error) => error,
+        };
+        assert_eq!(writer_error.code(), "checkout_writer_active");
+
+        let mut planner = request(&fixture, "feature-planner-launch");
+        planner.owner = HierarchyOwner::Feature(fixture.feature_id);
+        planner.role = ManagedSessionRole::FeaturePlanning;
+        planner.profile =
+            LaunchProfile::suggested(Tool::Codex, ManagedSessionRole::FeaturePlanning);
+        SessionLaunchService::new(&mut fixture.store)
+            .begin(planner)
+            .expect("Feature planner may share the checkout read-only");
     }
 
     fn capability_fixture(fixture: &Fixture) -> CapabilityLaunchInputs {
