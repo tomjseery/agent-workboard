@@ -245,6 +245,7 @@ fn execute_protocol(
                     | ReadQuery::RecoveryPreview { .. }
                     | ReadQuery::ApprovalQueue
                     | ReadQuery::FeatureProposal { .. }
+                    | ReadQuery::WorkItemDetail { .. }
             );
             let revision = match application.projection_revision(core_id) {
                 Ok(revision) => revision,
@@ -299,6 +300,16 @@ fn execute_protocol(
                         )
                         .map(ResponseResult::FeatureProposal)
                 }
+                ReadQuery::WorkItemDetail { work_item_id }
+                    if request.protocol_version == CURRENT_PROTOCOL_VERSION =>
+                {
+                    application
+                        .client_work_item_detail(
+                            core_id,
+                            workboard_core::WorkItemId::from_uuid(*work_item_id.as_uuid()),
+                        )
+                        .map(|detail| ResponseResult::WorkItemDetail(Box::new(detail)))
+                }
                 ReadQuery::RepositoryObservability { repository_id }
                     if request.protocol_version == CURRENT_PROTOCOL_VERSION =>
                 {
@@ -344,7 +355,8 @@ fn execute_protocol(
                 | ReadQuery::SessionObservability { .. }
                 | ReadQuery::RecoveryPreview { .. }
                 | ReadQuery::ApprovalQueue
-                | ReadQuery::FeatureProposal { .. } => Err(AppError::External {
+                | ReadQuery::FeatureProposal { .. }
+                | ReadQuery::WorkItemDetail { .. } => Err(AppError::External {
                     code: "projection_version_unavailable".to_owned(),
                     message:
                         "the requested projection is unavailable for the negotiated read version"
@@ -485,6 +497,16 @@ fn response_within_limits(result: &ResponseResult) -> bool {
                 && value.verification_gates.len() <= MAX_COLLECTION_ITEMS
                 && value.warnings.len() <= MAX_DIAGNOSTICS
                 && value.planner_sessions.len() <= MAX_COLLECTION_ITEMS
+                && value.diagnostics.len() <= MAX_DIAGNOSTICS
+        }
+        ResponseResult::WorkItemDetail(value) => {
+            value.blockers.len() <= MAX_COLLECTION_ITEMS
+                && value.decisions.entries.len() <= MAX_COLLECTION_ITEMS
+                && value.verification.entries.len() <= MAX_COLLECTION_ITEMS
+                && value.repositories.len() <= MAX_COLLECTION_ITEMS
+                && value.checkouts.len() <= MAX_COLLECTION_ITEMS
+                && value.checkpoint_history.len() <= MAX_COLLECTION_ITEMS
+                && value.sessions.len() <= MAX_COLLECTION_ITEMS
                 && value.diagnostics.len() <= MAX_DIAGNOSTICS
         }
         ResponseResult::RepositoryObservability(value) => {

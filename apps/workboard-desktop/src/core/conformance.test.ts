@@ -110,6 +110,7 @@ describe("generated protocol conformance", () => {
       "attention",
       "approval_queue",
       "feature_proposal",
+      "work_item_detail",
       "repository_observability",
       "checkout_observability",
       "session_observability",
@@ -127,6 +128,7 @@ describe("generated protocol conformance", () => {
       "attention",
       "approval_queue",
       "feature_proposal",
+      "work_item_detail",
       "repository_observability",
       "checkout_observability",
       "session_observability",
@@ -149,6 +151,7 @@ describe("generated protocol conformance", () => {
       "checkout_changed",
       "session_liveness_changed",
       "proposal_changed",
+      "work_item_changed",
     ] satisfies EventKind[];
     const eventPayloads = [
       "projection_changed",
@@ -159,6 +162,7 @@ describe("generated protocol conformance", () => {
       "checkout_changed",
       "session_liveness_changed",
       "proposal_changed",
+      "work_item_changed",
     ] satisfies Array<EventPayload["type"]>;
     const resyncReasons = [
       "gap",
@@ -183,6 +187,7 @@ describe("generated protocol conformance", () => {
       "attention",
       "approval_queue",
       "feature_proposal",
+      "work_item_detail",
       "repository_observability",
       "checkout_observability",
       "session_observability",
@@ -295,7 +300,7 @@ describe("generated protocol conformance", () => {
       succeeded: false,
       reconciliationRequired: true,
     });
-    expect(previous.protocolVersion).toBe(5);
-    expect(current.protocolVersion).toBe(6);
+    expect(previous.protocolVersion).toBe(6);
+    expect(current.protocolVersion).toBe(7);
   });
 });

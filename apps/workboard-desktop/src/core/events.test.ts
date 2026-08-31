@@ -13,6 +13,7 @@ import { repositoryQueryKeys } from "../features/repository/api/repositoryQueryK
 import { sessionQueryKeys } from "../features/session/api/sessionQueryKeys";
 import { proposalQueryKeys } from "../features/proposal/api/proposalQueryKeys";
 import { createLargeBoardFixture } from "../features/board/fixtures/largeBoardFixture";
+import { workItemQueryKeys } from "../features/work-item/api/workItemQueryKeys";
 
 const workspaceId = "20000000-0000-0000-0000-000000000001";
 const viewId = "a0000000-0000-0000-0000-000000000001";
@@ -148,5 +149,30 @@ describe("ordered event cache updates", () => {
     expect(queue.value.entries).toEqual([payload.value.queueItem]);
     expect(queryClient.getQueryState(attentionKey)?.isInvalidated).toBe(true);
     expect(queryClient.getQueryState(boardKey)?.isInvalidated).not.toBe(true);
+  });
+
+  it("patches only the affected Work item and its canonical evidence", () => {
+    const queryClient = new QueryClient();
+    const payload = current.discriminants.eventPayloads.find(({ type }) => type === "work_item_changed") as unknown as Extract<NonNullable<EventEnvelope["payload"]>, { type: "work_item_changed" }>;
+    const unrelatedWorkItemId = "60000000-0000-0000-0000-000000000099";
+    const unrelatedSessionId = "70000000-0000-0000-0000-000000000099";
+    const unrelatedCheckoutId = "b0000000-0000-0000-0000-000000000099";
+    const unrelatedDetail = envelope(null);
+    const unrelatedSession = envelope(null);
+    const unrelatedCheckout = envelope(null);
+    queryClient.setQueryData(workItemQueryKeys.detail(workspaceId, payload.value.detail.workItem.id), envelope(null));
+    queryClient.setQueryData(workItemQueryKeys.detail(workspaceId, unrelatedWorkItemId), unrelatedDetail);
+    queryClient.setQueryData(sessionQueryKeys.detail(workspaceId, unrelatedSessionId), unrelatedSession);
+    queryClient.setQueryData(checkoutQueryKeys.detail(workspaceId, unrelatedCheckoutId), unrelatedCheckout);
+    queryClient.setQueryData(hierarchyQueryKeys.workspace(workspaceId), envelope(null));
+    const attentionKey = boardQueryKeys.attentionList(workspaceId, { limit: 200, repositoryIds: [], reasonCodes: [] });
+    queryClient.setQueryData(attentionKey, { pages: [envelope(null)], pageParams: [null] });
+    applyWorkspaceEvent(queryClient, { ...event(["work_item_detail", "board", "attention", "workspace_hierarchy", "checkout_observability", "session_observability"]), kind: "work_item_changed", payload, owner: { kind: "work_item", id: payload.value.detail.workItem.id } });
+    expect(queryClient.getQueryData<ResponseEnvelope>(workItemQueryKeys.detail(workspaceId, payload.value.detail.workItem.id))?.result).toEqual({ type: "work_item_detail", value: payload.value.detail });
+    expect(queryClient.getQueryData(workItemQueryKeys.detail(workspaceId, unrelatedWorkItemId))).toBe(unrelatedDetail);
+    expect(queryClient.getQueryData(sessionQueryKeys.detail(workspaceId, unrelatedSessionId))).toBe(unrelatedSession);
+    expect(queryClient.getQueryData(checkoutQueryKeys.detail(workspaceId, unrelatedCheckoutId))).toBe(unrelatedCheckout);
+    expect(queryClient.getQueryState(attentionKey)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(hierarchyQueryKeys.workspace(workspaceId))?.isInvalidated).toBe(true);
   });
 });

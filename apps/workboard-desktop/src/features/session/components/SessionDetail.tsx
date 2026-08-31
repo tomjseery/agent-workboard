@@ -97,6 +97,7 @@ export function SessionDetail({ workspaceId, sessionId }: { workspaceId: Workspa
           <Item label="Profile evidence" value={projection.profileEvidence.message} />
         </dl>
         {projection.checkoutId != null && <Link to="/workspaces/$workspaceId/checkouts/$checkoutId" params={{ workspaceId, checkoutId: projection.checkoutId }} className="mt-4 inline-block rounded-lg border border-[var(--border)] px-3 py-2">Open checkout evidence</Link>}
+        {projection.owner.kind === "work_item" && <a href={`/workspaces/${workspaceId}/work-items/${projection.owner.id}?q=`} className="mt-4 ml-2 inline-block rounded-lg border border-[var(--border)] px-3 py-2">Open Work item</a>}
       </section>
       <RecoveryPanel workspaceId={workspaceId} sessionId={sessionId} />
     </div>

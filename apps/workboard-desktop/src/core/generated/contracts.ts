@@ -76,6 +76,8 @@ export type Diagnostic = { code: string, severity: ErrorSeverity, message: strin
 
 export type DocumentId = string;
 
+export type DurableWorkItemSection = { entries: Array<string>, evidence: ClassifiedEvidence, };
+
 export type EffectiveCheckoutProjection = { featureId: FeatureId, workItemId: WorkItemId | null, repositoryId: RepositoryId, checkoutId: CheckoutId, inherited: boolean, };
 
 export type EntityRef = { "kind": "workspace", "id": WorkspaceId } | { "kind": "repository", "id": RepositoryId } | { "kind": "epic", "id": EpicId } | { "kind": "feature", "id": FeatureId } | { "kind": "work_item", "id": WorkItemId } | { "kind": "session", "id": SessionId };
@@ -92,9 +94,9 @@ export type EventEnvelope = { protocolVersion: number, eventVersion: number, wor
 
 export type EventId = string;
 
-export type EventKind = "projection_changed" | "board_view_saved" | "native_sessions_refreshed" | "partial_outcome_recorded" | "checkout_changed" | "session_liveness_changed" | "proposal_changed";
+export type EventKind = "projection_changed" | "board_view_saved" | "native_sessions_refreshed" | "partial_outcome_recorded" | "checkout_changed" | "session_liveness_changed" | "proposal_changed" | "work_item_changed";
 
-export type EventPayload = { "type": "projection_changed", "value": { entity: EntityRef, } } | { "type": "board_view_saved", "value": { view: BoardViewDefinition, } } | { "type": "native_sessions_refreshed", "value": { sessionCount: number, } } | { "type": "partial_outcome", "value": { outcome: PartialOutcome, } } | { "type": "board_card_changed", "value": { card: BoardCardProjection, } } | { "type": "checkout_changed", "value": { checkout: CheckoutObservabilityProjection, cards: Array<BoardCardProjection>, } } | { "type": "session_liveness_changed", "value": { session: SessionObservabilityProjection, recovery: RecoveryPreviewProjection, cards: Array<BoardCardProjection>, } } | { "type": "proposal_changed", "value": { proposal: FeatureProposalProjection, queueItem: ApprovalQueueItemProjection | null, } };
+export type EventPayload = { "type": "projection_changed", "value": { entity: EntityRef, } } | { "type": "board_view_saved", "value": { view: BoardViewDefinition, } } | { "type": "native_sessions_refreshed", "value": { sessionCount: number, } } | { "type": "partial_outcome", "value": { outcome: PartialOutcome, } } | { "type": "board_card_changed", "value": { card: BoardCardProjection, } } | { "type": "checkout_changed", "value": { checkout: CheckoutObservabilityProjection, cards: Array<BoardCardProjection>, } } | { "type": "session_liveness_changed", "value": { session: SessionObservabilityProjection, recovery: RecoveryPreviewProjection, cards: Array<BoardCardProjection>, } } | { "type": "proposal_changed", "value": { proposal: FeatureProposalProjection, queueItem: ApprovalQueueItemProjection | null, } } | { "type": "work_item_changed", "value": { detail: WorkItemDetailProjection, card: BoardCardProjection | null, } };
 
 export type EvidenceState = "current" | "historical" | "stale" | "missing" | "unknown" | "conflict" | "not_loaded";
 
@@ -148,9 +150,9 @@ export type ProtocolError = { code: string, message: string, severity: ErrorSeve
 
 export type Provider = "claude" | "codex";
 
-export type ReadQuery = { "type": "workspace_summary" } | { "type": "hierarchy_children", "value": { parent: HierarchyRef, } } | { "type": "workspace_hierarchy" } | { "type": "board_views" } | { "type": "board_view", "value": { viewId: BoardViewId, } } | { "type": "board", "value": { query: BoardQuery, } } | { "type": "attention", "value": { query: AttentionQuery, } } | { "type": "approval_queue" } | { "type": "feature_proposal", "value": { featureId: FeatureId, } } | { "type": "repository_observability", "value": { repositoryId: RepositoryId, } } | { "type": "checkout_observability", "value": { checkoutId: CheckoutId, } } | { "type": "session_observability", "value": { sessionId: SessionId, } } | { "type": "recovery_preview", "value": { sessionId: SessionId, } } | { "type": "board_snapshot" };
+export type ReadQuery = { "type": "workspace_summary" } | { "type": "hierarchy_children", "value": { parent: HierarchyRef, } } | { "type": "workspace_hierarchy" } | { "type": "board_views" } | { "type": "board_view", "value": { viewId: BoardViewId, } } | { "type": "board", "value": { query: BoardQuery, } } | { "type": "attention", "value": { query: AttentionQuery, } } | { "type": "approval_queue" } | { "type": "feature_proposal", "value": { featureId: FeatureId, } } | { "type": "work_item_detail", "value": { workItemId: WorkItemId, } } | { "type": "repository_observability", "value": { repositoryId: RepositoryId, } } | { "type": "checkout_observability", "value": { checkoutId: CheckoutId, } } | { "type": "session_observability", "value": { sessionId: SessionId, } } | { "type": "recovery_preview", "value": { sessionId: SessionId, } } | { "type": "board_snapshot" };
 
-export type ReadQueryCode = "workspace_summary" | "hierarchy_children" | "workspace_hierarchy" | "board_views" | "board_view" | "board" | "attention" | "approval_queue" | "feature_proposal" | "repository_observability" | "checkout_observability" | "session_observability" | "recovery_preview" | "board_snapshot";
+export type ReadQueryCode = "workspace_summary" | "hierarchy_children" | "workspace_hierarchy" | "board_views" | "board_view" | "board" | "attention" | "approval_queue" | "feature_proposal" | "work_item_detail" | "repository_observability" | "checkout_observability" | "session_observability" | "recovery_preview" | "board_snapshot";
 
 export type RecoveryDispositionProjection = "ready_present" | "ready_recreate" | "already_live" | "conflict" | "unresumable" | "not_loaded";
 
@@ -170,11 +172,13 @@ export type RequestId = string;
 
 export type ResponseEnvelope = { protocolVersion: number, requestId: RequestId, correlationId: RequestId, workspaceId: WorkspaceId | null, authoritativeRevision: number | null, serverTimestamp: string, result: ResponseResult | null, error: ProtocolError | null, diagnostics: Array<Diagnostic>, availableActions: Array<AvailableAction>, partialOutcomes: Array<PartialOutcome>, };
 
-export type ResponseResult = { "type": "handshake", "value": HandshakeResponse } | { "type": "workspace_summary", "value": WorkspaceSummary } | { "type": "hierarchy_children", "value": HierarchyChildren } | { "type": "workspace_hierarchy", "value": WorkspaceHierarchy } | { "type": "board_views", "value": Array<BoardViewDefinition> } | { "type": "board_view", "value": BoardViewDefinition } | { "type": "board", "value": BoardPage } | { "type": "attention", "value": AttentionPage } | { "type": "approval_queue", "value": ApprovalQueueProjection } | { "type": "feature_proposal", "value": FeatureProposalProjection } | { "type": "repository_observability", "value": RepositoryObservabilityProjection } | { "type": "checkout_observability", "value": CheckoutObservabilityProjection } | { "type": "session_observability", "value": SessionObservabilityProjection } | { "type": "recovery_preview", "value": RecoveryPreviewProjection } | { "type": "board_snapshot", "value": unknown } | { "type": "subscription_accepted", "value": { cursor: EventCursor, } } | { "type": "command_accepted", "value": { code: CommandCode, } };
+export type ResponseResult = { "type": "handshake", "value": HandshakeResponse } | { "type": "workspace_summary", "value": WorkspaceSummary } | { "type": "hierarchy_children", "value": HierarchyChildren } | { "type": "workspace_hierarchy", "value": WorkspaceHierarchy } | { "type": "board_views", "value": Array<BoardViewDefinition> } | { "type": "board_view", "value": BoardViewDefinition } | { "type": "board", "value": BoardPage } | { "type": "attention", "value": AttentionPage } | { "type": "approval_queue", "value": ApprovalQueueProjection } | { "type": "feature_proposal", "value": FeatureProposalProjection } | { "type": "work_item_detail", "value": WorkItemDetailProjection } | { "type": "repository_observability", "value": RepositoryObservabilityProjection } | { "type": "checkout_observability", "value": CheckoutObservabilityProjection } | { "type": "session_observability", "value": SessionObservabilityProjection } | { "type": "recovery_preview", "value": RecoveryPreviewProjection } | { "type": "board_snapshot", "value": unknown } | { "type": "subscription_accepted", "value": { cursor: EventCursor, } } | { "type": "command_accepted", "value": { code: CommandCode, } };
 
 export type ResyncReason = "gap" | "cursor_expired" | "daemon_restarted" | "incompatible_event" | "heartbeat_lost";
 
 export type ResyncRequirement = { reason: ResyncReason, workspaceId: WorkspaceId, authoritativeRevision: number, oldestReplayableSequence: number, requiredQueries: Array<ReadQueryCode>, };
+
+export type ReviewDeliveryState = "not_requested" | "review_requested" | "delivery_requested";
 
 export type ServerMessage = { "type": "response", "value": ResponseEnvelope } | { "type": "event", "value": EventEnvelope } | { "type": "heartbeat", "value": Heartbeat } | { "type": "resync_required", "value": ResyncRequirement };
 
@@ -200,7 +204,19 @@ export type UnavailableReason = { code: string, message: string, };
 
 export type ValidationField = { field: string, code: string, message: string, };
 
+export type WorkItemBlockerProjection = { code: string, message: string, prerequisite: WorkItemReference | null, };
+
+export type WorkItemCheckpointId = string;
+
+export type WorkItemCheckpointProjection = { id: WorkItemCheckpointId, sessionId: SessionId, nextAction: WorkItemNextActionKind, summary: string, recordedAt: string, };
+
+export type WorkItemDetailProjection = { workItem: WorkItemReference, feature: FeatureReference, outcomeDesignSummary: string, currentState: DurableWorkItemSection, dependencyReadiness: DependencyReadiness, blockers: Array<WorkItemBlockerProjection>, decisions: DurableWorkItemSection, verification: DurableWorkItemSection, nextAction: WorkItemNextActionProjection | null, reviewDeliveryState: ReviewDeliveryState, workflowState: WorkflowState, status: WorkItemStatus, repositories: Array<RepositoryReference>, checkouts: Array<CheckoutObservabilityProjection>, revision: number, contentRevision: number, contentHash: string, checkpointHistory: Array<WorkItemCheckpointProjection>, sessions: Array<SessionObservabilityProjection>, diagnostics: Array<Diagnostic>, availableActions: Array<AvailableAction>, };
+
 export type WorkItemId = string;
+
+export type WorkItemNextActionKind = "actionable" | "blocked" | "paused" | "review" | "delivery";
+
+export type WorkItemNextActionProjection = { kind: WorkItemNextActionKind, recordedAt: string, };
 
 export type WorkItemReference = { id: WorkItemId, featureId: FeatureId, key: string, slug: string, title: string, };
 
