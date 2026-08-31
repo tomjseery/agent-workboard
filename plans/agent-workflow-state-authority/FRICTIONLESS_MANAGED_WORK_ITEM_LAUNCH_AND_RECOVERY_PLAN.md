@@ -229,27 +229,35 @@ Only this accepted evidence may authorize the downstream Work item.
 
 ## Current delivery state
 
-Phases 7 through 9 were reopened on 2026-08-31 after owner review of the complete user journey. The committed
-candidate already provides managed checkout reconciliation and isolation, scoped context and capabilities,
-exact lifecycle binding, launch profiles, follow-ups, dependency-aware fan-out and integration, action
-projection, start/continue TUI flows, recovery, and clean `SessionEnd` retirement. Two product gaps remain
-before live acceptance: planning a new Work item inside an existing published Feature, and atomically moving a
-reviewed Work item to `done` after successful integration while recalculating dependant readiness.
+Phases 7 and 8 are implementation-complete as of 2026-08-31. `workboard work create` now launches a managed
+Feature-planning session in the reconciled Feature checkout, using Claude by default with an explicit provider
+override. The scoped `work_items_propose` operation records an idempotent, stale-input-protected proposal in
+schema 41. `work proposals`, `work approve`, and `work reject` keep creation approval-gated; approval publishes
+the Work-item documents in one planning-store commit, records repositories and dependencies, leaves each item
+in Backlog, and assigns no execution CLI. Opening a CLI still does not change status. A substantive checkpoint
+owns `in_progress`, a review checkpoint owns `review`, and successful integration now moves each reviewed item
+to `done` only after every repository integration for that item is complete; dependant readiness derives from
+that durable state. Clean `SessionEnd` retirement and interrupted-session recovery were already implemented and
+remain covered by deterministic tests.
 
-The next delivery gate is implementation and deterministic verification of those gaps, followed by the full
-live creation, execution, status, integration, clean-close exclusion, and `recover --since yesterday` journey
-under Claude and Codex. Review and PR publication follow that evidence. Agent Standards migration compatibility
-work remains blocked until this foundation is accepted.
+Phase 9 remains open. The next delivery gate is the full installed live creation, execution, status,
+integration, clean-close exclusion, and `recover --since yesterday` journey under Claude and Codex. Review and
+PR publication follow that accepted evidence. Agent Standards migration compatibility work remains blocked
+until this foundation is accepted.
 
 ## Verification and acceptance
 
-- Deterministic tests cover schemas, migrations, storage, action projection, selector resolution, lifecycle
+- On 2026-08-31, deterministic tests covered schemas, migrations, storage, action projection, selector resolution, lifecycle
   hooks, capability isolation, context authorization, checkout reconciliation, profiles, fan-out, integration,
-  follow-ups, recovery, CLI/TUI rendering, and Claude/Codex adapter command construction.
+  follow-ups, recovery, CLI/TUI rendering, Claude/Codex adapter command construction, approval-gated Work-item
+  creation, absence of execution assignment, and integration-to-Done behavior. `cargo test --workspace` passed
+  with 129 application tests, 30 CLI tests, 30 core tests, four daemon tests, provider-adapter and native tests,
+  and all doc tests; two authenticated real-provider smoke tests remained intentionally ignored for the live
+  gate.
 - Real-provider smoke tests make authenticated, non-mutating Claude and Codex turns from Windows Terminal
   compatible command lines and verify the expected marker response.
-- `cargo fmt --all -- --check` passes.
-- `cargo clippy --workspace --all-targets -- -D warnings` passes.
-- `cargo test --workspace` passes.
+- `cargo fmt --all -- --check` passed on 2026-08-31.
+- `cargo clippy --workspace --all-targets -- -D warnings` passed on 2026-08-31.
+- `cargo test --workspace` passed on 2026-08-31.
 - Installed dogfood proves exact managed cwd, no native-ID exposure, no global capability installation, no
   handwritten kickoff prompt, durable checkpoints, exact resume, and visible valid next actions.
