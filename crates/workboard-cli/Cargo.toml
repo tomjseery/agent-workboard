@@ -22,11 +22,12 @@ workboard-application = { path = "../workboard-application" }
 workboard-client = { path = "../workboard-client" }
 workboard-client-protocol = { path = "../workboard-client-protocol" }
 workboard-core = { path = "../workboard-core" }
+workboard-daemon = { path = "../workboard-daemon" }
+uuid.workspace = true
 
 [dev-dependencies]
 rusqlite.workspace = true
 tempfile.workspace = true
-workboard-daemon = { path = "../workboard-daemon" }
 
 [lints]
 workspace = true

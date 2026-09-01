@@ -5209,6 +5209,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "time",
+ "uuid",
  "workboard-application",
  "workboard-client",
  "workboard-client-protocol",
