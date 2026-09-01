@@ -1,0 +1,22 @@
+[package]
+name = "agent-workboard-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+workboard-application = { path = "../crates/workboard-application" }
+workboard-core = { path = "../crates/workboard-core" }
+
+[[bin]]
+name = "hook_input"
+path = "fuzz_targets/hook_input.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

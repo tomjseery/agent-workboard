@@ -87,6 +87,10 @@ impl WorkboardApplication {
         self.store.path()
     }
 
+    pub fn storage_health(&self) -> Result<StorageHealth, AppError> {
+        self.store.health()
+    }
+
     pub fn session_launch(&mut self) -> SessionLaunchService<'_> {
         SessionLaunchService::new(&mut self.store)
     }

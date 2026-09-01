@@ -709,10 +709,10 @@ Ordered delivery breakdown:
 
 1. [x] Document the current Windows installation, upgrade, uninstall, provider permissions, storage, backup,
    recovery, and troubleshooting contracts without declaring the v0 surface stable.
-2. Produce a per-user unsigned Windows archive containing the `workboard` CLI, optional daemon, operational
+2. [x] Produce a per-user unsigned Windows archive containing the `workboard` CLI, optional daemon, operational
    documentation, license, checksums, SBOM, and build provenance, with install and uninstall scripts that do
    not modify provider-global configuration.
-3. Add release diagnostics and deterministic compatibility checks for the supported Claude and Codex
+3. [x] Add release diagnostics and deterministic compatibility checks for the supported Claude and Codex
    launch-scoped capability boundaries, including clean provider-home installation and removal fixtures.
 4. Build the candidate from a clean checkout, install it into an isolated per-user root, exercise the
    packaged CLI and daemon without Node.js or the source checkout, uninstall it, and record verification
@@ -722,6 +722,18 @@ Ordered delivery breakdown:
    credentials.
 6. After the Windows terminal release is accepted, plan Linux packaging and the optional graphical client as
    separate roadmap deliveries.
+
+Current verification:
+
+- Repository formatting and clippy are clean; 170 tests pass after adding diagnostics coverage.
+- The isolated Windows release smoke test installs, creates and inspects hierarchy, previews recovery, backs
+  up and exports data, starts the daemon, preserves foreign provider fixtures, and uninstalls without Node.js
+  or the source checkout on `PATH`.
+- Installed Claude Code 2.1.251 and Codex CLI 0.151.0-alpha.7.1 report versions and pass Workboard's
+  read-only integration compatibility checks.
+- Two consecutive unsigned development builds produced the same ZIP SHA-256. The clean-checkout candidate
+  and its final digest remain the next delivery gate.
+- The hook-input fuzz target completed 300,826 executions in 31 seconds without a crash.
 
 - Add concise installation, upgrade, uninstall, integration-permission, storage, backup, recovery, and
   troubleshooting documentation.
