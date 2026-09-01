@@ -307,6 +307,8 @@ pub enum CommandOperation {
     },
     StartSession {
         work_item_id: crate::WorkItemId,
+        repository_id: Option<RepositoryId>,
+        provider: crate::projection::Provider,
     },
     ResumeSession {
         session_id: crate::SessionId,

@@ -227,34 +227,22 @@ mod tests {
                 "structured_checkpoint_unavailable",
             ),
             (
-                CommandOperation::StartSession {
-                    work_item_id: WorkItemId::generate(),
-                },
-                "session_control_unavailable",
-            ),
-            (
-                CommandOperation::ResumeSession {
-                    session_id: SessionId::generate(),
-                },
-                "session_control_unavailable",
-            ),
-            (
                 CommandOperation::FocusSession {
                     session_id: SessionId::generate(),
                 },
-                "session_control_unavailable",
+                "session_focus_unavailable",
             ),
             (
                 CommandOperation::FollowUpSession {
                     session_id: SessionId::generate(),
                 },
-                "session_control_unavailable",
+                "session_follow_up_unavailable",
             ),
             (
                 CommandOperation::RecoverSession {
                     session_id: SessionId::generate(),
                 },
-                "session_control_unavailable",
+                "session_recovery_unavailable",
             ),
         ];
 
@@ -309,6 +297,8 @@ mod tests {
                 CommandCode::SaveBoardView,
                 CommandCode::ApproveFeature,
                 CommandCode::RequestFeatureRevision,
+                CommandCode::StartSession,
+                CommandCode::ResumeSession,
             ]
         );
         assert!(
@@ -321,6 +311,8 @@ mod tests {
                     CommandCode::SaveBoardView
                         | CommandCode::ApproveFeature
                         | CommandCode::RequestFeatureRevision
+                        | CommandCode::StartSession
+                        | CommandCode::ResumeSession
                 ))
                 .all(|capability| !capability.available)
         );

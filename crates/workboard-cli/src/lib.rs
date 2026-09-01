@@ -24,7 +24,10 @@ use workboard_application::integration::{
 use workboard_application::legacy_import::{
     ImportedSessionCandidate, LegacyImportPreview, snapshot_context_catalogue,
 };
-use workboard_application::native_launch::{SystemLaunchExecutor, SystemProcessTerminator};
+use workboard_application::native_launch::{
+    SystemLaunchExecutor, SystemProcessTerminator, default_native_executable,
+    default_terminal_executable,
+};
 use workboard_application::native_sources::RefreshNativeSources;
 use workboard_application::planning_workflow::FeatureProposal;
 use workboard_application::planning_workflow::{CreateFeaturePlanning, planner_bootstrap_prompt};
@@ -2448,56 +2451,6 @@ fn execute_integration(
     output(&response, json, human)
 }
 
-#[cfg(windows)]
-fn default_terminal_executable() -> PathBuf {
-    PathBuf::from("wt.exe")
-}
-
-#[cfg(target_os = "linux")]
-fn default_terminal_executable() -> PathBuf {
-    PathBuf::from("xdg-terminal-exec")
-}
-
-#[cfg(not(any(windows, target_os = "linux")))]
-fn default_terminal_executable() -> PathBuf {
-    PathBuf::new()
-}
-
-#[cfg(windows)]
-fn codex_app_executable(local_app_data: &Path) -> Option<PathBuf> {
-    let bin = local_app_data.join("OpenAI").join("Codex").join("bin");
-    fs::read_dir(bin)
-        .ok()?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path().join("codex.exe"))
-        .filter(|path| path.is_file())
-        .filter_map(|path| {
-            let modified = path.metadata().ok()?.modified().ok()?;
-            Some((modified, path))
-        })
-        .max_by_key(|(modified, _)| *modified)
-        .map(|(_, path)| path)
-}
-
-#[cfg(windows)]
-fn default_codex_executable() -> PathBuf {
-    std::env::var_os("LOCALAPPDATA")
-        .and_then(|local_app_data| codex_app_executable(Path::new(&local_app_data)))
-        .unwrap_or_else(|| PathBuf::from("codex"))
-}
-
-#[cfg(not(windows))]
-fn default_codex_executable() -> PathBuf {
-    PathBuf::from("codex")
-}
-
-fn default_native_executable(tool: Tool) -> PathBuf {
-    match tool {
-        Tool::Claude => PathBuf::from("claude"),
-        Tool::Codex => default_codex_executable(),
-    }
-}
-
 fn new_idempotency_key() -> String {
     workboard_core::LaunchIntentId::generate().to_string()
 }
@@ -2768,7 +2721,6 @@ fn markdown_title(body: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::process::Command;
 
@@ -2782,8 +2734,7 @@ mod tests {
     use crate::selector::SelectionCandidate;
 
     use super::{
-        Cli, Command as CliCommand, SessionCommand, codex_app_executable, execute_from,
-        select_candidate, slugify,
+        Cli, Command as CliCommand, SessionCommand, execute_from, select_candidate, slugify,
     };
 
     #[test]
@@ -2847,23 +2798,6 @@ mod tests {
             .expect_err("no storage fallback");
         assert_eq!(error.code(), "daemon_io");
         drop(registration);
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn resolves_the_codex_app_managed_cli() {
-        let directory = TempDir::new().expect("temporary local app data");
-        let executable = directory
-            .path()
-            .join("OpenAI")
-            .join("Codex")
-            .join("bin")
-            .join("current")
-            .join("codex.exe");
-        fs::create_dir_all(executable.parent().expect("Codex bin directory"))
-            .expect("create Codex bin directory");
-        fs::write(&executable, []).expect("create Codex executable");
-        assert_eq!(codex_app_executable(directory.path()), Some(executable));
     }
 
     #[test]

@@ -435,6 +435,56 @@ fn resolve_executable_from_directories(
     None
 }
 
+#[cfg(windows)]
+pub fn default_terminal_executable() -> PathBuf {
+    PathBuf::from("wt.exe")
+}
+
+#[cfg(target_os = "linux")]
+pub fn default_terminal_executable() -> PathBuf {
+    PathBuf::from("xdg-terminal-exec")
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+pub fn default_terminal_executable() -> PathBuf {
+    PathBuf::new()
+}
+
+#[cfg(windows)]
+fn codex_app_executable(local_app_data: &Path) -> Option<PathBuf> {
+    let bin = local_app_data.join("OpenAI").join("Codex").join("bin");
+    std::fs::read_dir(bin)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path().join("codex.exe"))
+        .filter(|path| path.is_file())
+        .filter_map(|path| {
+            let modified = path.metadata().ok()?.modified().ok()?;
+            Some((modified, path))
+        })
+        .max_by_key(|(modified, _)| *modified)
+        .map(|(_, path)| path)
+}
+
+#[cfg(windows)]
+fn default_codex_executable() -> PathBuf {
+    std::env::var_os("LOCALAPPDATA")
+        .and_then(|local_app_data| codex_app_executable(Path::new(&local_app_data)))
+        .unwrap_or_else(|| PathBuf::from("codex"))
+}
+
+#[cfg(not(windows))]
+fn default_codex_executable() -> PathBuf {
+    PathBuf::from("codex")
+}
+
+pub fn default_native_executable(tool: Tool) -> PathBuf {
+    match tool {
+        Tool::Claude => PathBuf::from("claude"),
+        Tool::Codex => default_codex_executable(),
+    }
+}
+
 pub fn native_executable_available(requested: &Path) -> bool {
     resolve_executable(requested).is_some()
 }
@@ -484,6 +534,26 @@ fn path_text(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    #[test]
+    fn resolves_the_codex_app_managed_cli() {
+        let directory = tempfile::TempDir::new().expect("temporary local app data");
+        let executable = directory
+            .path()
+            .join("OpenAI")
+            .join("Codex")
+            .join("bin")
+            .join("current")
+            .join("codex.exe");
+        std::fs::create_dir_all(executable.parent().expect("Codex bin directory"))
+            .expect("create Codex bin directory");
+        std::fs::write(&executable, []).expect("create Codex executable");
+        assert_eq!(
+            super::codex_app_executable(directory.path()),
+            Some(executable)
+        );
+    }
+
     use std::collections::HashMap;
     use std::fs;
     use std::path::Path;

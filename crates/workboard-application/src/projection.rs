@@ -8,6 +8,22 @@ use workboard_core as core;
 use crate::AppError;
 use crate::workspace::WorkboardApplication;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartClientSession {
+    pub workspace_id: core::WorkspaceId,
+    pub expected_revision: u64,
+    pub idempotency_key: String,
+    pub request_id: protocol::RequestId,
+    pub work_item_id: core::WorkItemId,
+    pub repository_id: Option<core::RepositoryId>,
+    pub tool: core::Tool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionCommandOutcome {
+    pub detail: Box<protocol::WorkItemDetailProjection>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProposalCommandOutcome {
     pub proposal: protocol::FeatureProposalProjection,
@@ -522,6 +538,208 @@ impl WorkboardApplication {
             proposal: self.client_feature_proposal(workspace_id, feature_id)?,
             partial_outcomes: Vec::new(),
         })
+    }
+
+    pub fn start_client_session(
+        &mut self,
+        command: StartClientSession,
+    ) -> Result<SessionCommandOutcome, AppError> {
+        let StartClientSession {
+            workspace_id,
+            expected_revision,
+            idempotency_key,
+            request_id,
+            work_item_id,
+            repository_id,
+            tool,
+        } = command;
+        let idempotency_key = idempotency_key.as_str();
+        let now = OffsetDateTime::now_utc();
+        let snapshot = self.snapshot(workspace_id)?;
+        let work_item = snapshot
+            .work_items
+            .iter()
+            .find(|item| item.id == work_item_id)
+            .ok_or(AppError::WorkItemNotFound)?
+            .clone();
+        let repository_id = match repository_id {
+            Some(requested) => {
+                if !work_item.repository_ids.contains(&requested) {
+                    return Err(AppError::WorkItemRepositoryMismatch);
+                }
+                requested
+            }
+            None => match work_item.repository_ids.as_slice() {
+                [only] => *only,
+                _ => {
+                    return Err(AppError::CheckoutReconciliation {
+                        code: "launch_repository_selection_required".to_owned(),
+                        message: "the Work item targets multiple repositories; select the launch repository".to_owned(),
+                    });
+                }
+            },
+        };
+        let readiness = self.checkout_service().prepare_work_item(
+            crate::checkout::PrepareWorkItemCheckout {
+                work_item_id,
+                repository_id,
+                idempotency_key: format!("{idempotency_key}:checkout"),
+                observed_at: now,
+            },
+        )?;
+        let prepared =
+            self.session_launch()
+                .begin(crate::session_launch::BeginManagedSessionLaunch {
+                    owner: core::HierarchyOwner::WorkItem(work_item_id),
+                    role: core::ManagedSessionRole::WorkItemExecution,
+                    tool,
+                    mode: core::ManagedLaunchMode::New,
+                    checkout_id: readiness.checkout_id,
+                    working_directory: readiness.path,
+                    title: work_item.title.clone(),
+                    terminal_window: Some(format!("workboard-feature-{}", work_item.feature_id)),
+                    terminal_executable: crate::native_launch::default_terminal_executable(),
+                    native_executable: crate::native_launch::default_native_executable(tool),
+                    idempotency_key: idempotency_key.to_owned(),
+                    created_at: now,
+                    expires_at: now + time::Duration::minutes(2),
+                    resume_context: None,
+                    initial_prompt: Some(crate::workflow_operations::work_item_bootstrap_prompt(
+                        work_item_id,
+                    )),
+                })?;
+        self.session_launch()
+            .execute(&prepared, &crate::native_launch::SystemLaunchExecutor)?;
+        self.record_session_command(
+            workspace_id,
+            expected_revision,
+            &format!("{idempotency_key}:launched"),
+            "start_session",
+            request_id,
+            core::HierarchyOwner::WorkItem(work_item_id),
+        )?;
+        Ok(SessionCommandOutcome {
+            detail: Box::new(self.client_work_item_detail(workspace_id, work_item_id)?),
+        })
+    }
+
+    pub fn resume_client_session(
+        &mut self,
+        workspace_id: core::WorkspaceId,
+        expected_revision: u64,
+        idempotency_key: &str,
+        request_id: protocol::RequestId,
+        session_id: core::ConversationId,
+    ) -> Result<SessionCommandOutcome, AppError> {
+        let now = OffsetDateTime::now_utc();
+        let target = self.managed_session_target(session_id)?;
+        let core::HierarchyOwner::WorkItem(work_item_id) = target.owner else {
+            return Err(AppError::ConversationNotResumable(
+                "only Work-item sessions can be resumed from Desktop".to_owned(),
+            ));
+        };
+        self.checkout_service()
+            .reconcile_registered_checkout(target.checkout.checkout_id, now)?;
+        let context = self.native_sources().resume_context(
+            session_id,
+            target.checkout.path.clone(),
+            target.checkout.title.clone(),
+        )?;
+        let terminal_window = self
+            .snapshot(workspace_id)?
+            .work_items
+            .iter()
+            .find(|item| item.id == work_item_id)
+            .map_or_else(
+                || format!("workboard-work-item-{work_item_id}"),
+                |item| format!("workboard-feature-{}", item.feature_id),
+            );
+        let prepared =
+            self.session_launch()
+                .begin(crate::session_launch::BeginManagedSessionLaunch {
+                    owner: target.owner,
+                    role: target.role,
+                    tool: target.tool,
+                    mode: core::ManagedLaunchMode::Resume(target.native_id),
+                    checkout_id: target.checkout.checkout_id,
+                    working_directory: target.checkout.path,
+                    title: target.checkout.title,
+                    terminal_window: Some(terminal_window),
+                    terminal_executable: crate::native_launch::default_terminal_executable(),
+                    native_executable: crate::native_launch::default_native_executable(target.tool),
+                    idempotency_key: idempotency_key.to_owned(),
+                    created_at: now,
+                    expires_at: now + time::Duration::minutes(2),
+                    resume_context: Some(context),
+                    initial_prompt: None,
+                })?;
+        self.session_launch()
+            .execute(&prepared, &crate::native_launch::SystemLaunchExecutor)?;
+        self.record_session_command(
+            workspace_id,
+            expected_revision,
+            &format!("{idempotency_key}:resumed"),
+            "resume_session",
+            request_id,
+            target.owner,
+        )?;
+        Ok(SessionCommandOutcome {
+            detail: Box::new(self.client_work_item_detail(workspace_id, work_item_id)?),
+        })
+    }
+
+    fn record_session_command(
+        &mut self,
+        workspace_id: core::WorkspaceId,
+        expected_revision: u64,
+        idempotency_key: &str,
+        operation: &'static str,
+        request_id: protocol::RequestId,
+        owner: core::HierarchyOwner,
+    ) -> Result<(), AppError> {
+        let entity = match owner {
+            core::HierarchyOwner::Epic(id) => {
+                protocol::EntityRef::Epic(protocol::EpicId::from_uuid(*id.as_uuid()))
+            }
+            core::HierarchyOwner::Feature(id) => {
+                protocol::EntityRef::Feature(protocol::FeatureId::from_uuid(*id.as_uuid()))
+            }
+            core::HierarchyOwner::WorkItem(id) => {
+                protocol::EntityRef::WorkItem(protocol::WorkItemId::from_uuid(*id.as_uuid()))
+            }
+        };
+        self.store.write_projected(
+            workspace_id,
+            expected_revision,
+            idempotency_key,
+            operation,
+            |_| Ok(()),
+            |revision, ()| protocol::EventEnvelope {
+                protocol_version: protocol::CURRENT_PROTOCOL_VERSION,
+                event_version: 1,
+                workspace_id: wire_workspace_id(workspace_id),
+                sequence: revision,
+                event_id: protocol::EventId::generate(),
+                occurred_at: OffsetDateTime::now_utc(),
+                owner: entity,
+                entity_revision: revision,
+                kind: protocol::EventKind::WorkItemChanged,
+                payload: None,
+                invalidation_scope: Some(protocol::InvalidationScope {
+                    queries: vec![
+                        protocol::ReadQueryCode::WorkItemDetail,
+                        protocol::ReadQueryCode::SessionObservability,
+                        protocol::ReadQueryCode::RecoveryPreview,
+                        protocol::ReadQueryCode::Board,
+                        protocol::ReadQueryCode::Attention,
+                    ],
+                    owners: vec![entity],
+                }),
+                operation_correlation_id: request_id,
+                partial_outcomes: Vec::new(),
+            },
+        )?;
+        Ok(())
     }
 
     pub fn replay_client_events(
