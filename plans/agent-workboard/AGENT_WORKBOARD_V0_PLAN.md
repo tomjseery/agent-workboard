@@ -703,6 +703,26 @@ lives in the external store, and native CLIs remain ordinary PowerShell/Windows 
 
 ### Phase 8 — harden the open-source Windows release
 
+Status: in progress; owner acceptance, contract freeze, signing, and sustained dogfood remain gated.
+
+Ordered delivery breakdown:
+
+1. [x] Document the current Windows installation, upgrade, uninstall, provider permissions, storage, backup,
+   recovery, and troubleshooting contracts without declaring the v0 surface stable.
+2. Produce a per-user unsigned Windows archive containing the `workboard` CLI, optional daemon, operational
+   documentation, license, checksums, SBOM, and build provenance, with install and uninstall scripts that do
+   not modify provider-global configuration.
+3. Add release diagnostics and deterministic compatibility checks for the supported Claude and Codex
+   launch-scoped capability boundaries, including clean provider-home installation and removal fixtures.
+4. Build the candidate from a clean checkout, install it into an isolated per-user root, exercise the
+   packaged CLI and daemon without Node.js or the source checkout, uninstall it, and record verification
+   evidence.
+5. Dogfood the unsigned candidate for several days and fix observed workflow friction; only then request
+   owner acceptance to freeze the v0 command, schema, and document contracts and supply future signing
+   credentials.
+6. After the Windows terminal release is accepted, plan Linux packaging and the optional graphical client as
+   separate roadmap deliveries.
+
 - Add concise installation, upgrade, uninstall, integration-permission, storage, backup, recovery, and
   troubleshooting documentation.
 - Restore only the release packaging, compatibility gates, fuzzing, SBOM, provenance, and diagnostics needed
