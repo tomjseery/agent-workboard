@@ -29,6 +29,7 @@ pub struct SubscriptionTarget {
 pub struct BootstrapHandshake {
     pub state: BootstrapState,
     pub subscriptions: Vec<SubscriptionTarget>,
+    pub refusal: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

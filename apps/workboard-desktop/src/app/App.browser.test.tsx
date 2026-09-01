@@ -16,7 +16,7 @@ const { fakeDaemon } = vi.hoisted(() => {
   const requestId = "10000000-0000-0000-0000-000000000001";
   const response = (result: unknown, actions: unknown[] = []) => ({ protocolVersion: 4, requestId, correlationId: requestId, workspaceId, authoritativeRevision: 4, serverTimestamp: "2026-08-30T12:00:00Z", result, error: null, diagnostics: [], availableActions: actions, partialOutcomes: [] });
   return { fakeDaemon: {
-    handshake: async () => ({ state: "read_only", subscriptions: [{ workspaceId }] }),
+    handshake: async () => ({ state: "read_only", refusal: null, subscriptions: [{ workspaceId }] }),
     workspaceSummary: async () => response({ type: "workspace_summary", value: { workspace: { id: workspaceId, slug: "workspace", title: "Workspace" }, repositoryCount: 1, epicCount: 1, featureCount: 1, workItemCount: 0, sessionCount: 0 } }) as never,
     hierarchyChildren: async () => response(null) as never,
     workspaceHierarchy: async () => response({ type: "workspace_hierarchy", value: { workspace: { id: workspaceId, slug: "workspace", title: "Workspace" }, repositories: [{ id: repositoryId, workspaceId, slug: "service", title: "Service repository" }], epics: [{ epic: { id: epicId, workspaceId, slug: "delivery", title: "Delivery" }, repositoryIds: [repositoryId] }], features: [{ feature: { id: featureId, epicId, slug: "cross-repo", title: "Cross repository feature" }, repositoryIds: [repositoryId] }], workItems: [], recentEntities: [{ kind: "feature", id: featureId }], focusedEntity: { kind: "feature", id: featureId } } }) as never,

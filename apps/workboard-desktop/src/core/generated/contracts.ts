@@ -231,7 +231,7 @@ export type WorkspaceId = string;
 export type WorkspaceReference = { id: WorkspaceId, slug: string, title: string, };
 
 export type WorkspaceSummary = { workspace: WorkspaceReference, repositoryCount: number, epicCount: number, featureCount: number, workItemCount: number, sessionCount: number, };
-export type BootstrapHandshake = { state: BootstrapState, subscriptions: Array<SubscriptionTarget>, };
+export type BootstrapHandshake = { state: BootstrapState, subscriptions: Array<SubscriptionTarget>, refusal: string | null, };
 
 export type BootstrapState = "connecting" | "disconnected" | "incompatible" | "read_only" | "resyncing" | "ready";
 
