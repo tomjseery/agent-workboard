@@ -500,15 +500,26 @@ branch. This branch is at 34 and fails to open it with
 the real Workspace at all. This branch's own migration 35
 (`proposal-revision-request`) also collides with the live 35.
 
-Item 9 therefore cannot proceed as an independent increment. Either this branch
-reconciles with Frictionless first, or session controls land on Frictionless.
-Deciding that is a prerequisite, not part of item 9.
+Reconciliation was deferred by explicit instruction on 2026-09-01: the Desktop
+increment is being completed first. Item 9 therefore proceeds on this branch for
+the operations this branch can actually back, and Desktop remains unable to open
+the live Workspace until the schemas are reconciled.
 
-On this branch alone the following have no backing application capability:
-follow-up, OS window focus, second-writer fan-out, per-session available
-actions, provider-profile selection, and a user-actor structured checkpoint
-(`workflow_operations::checkpoint` authenticates a managed-session workflow
-token, which a human Desktop client does not hold).
+Delivered here: Start and Resume execute against the existing checkout and
+launch services, and the Work-item view renders the zero, one and many
+cardinalities with deterministic ordering, exact session selection, an
+already-live session shown disabled rather than duplicated, and a repository
+choice only where the Work item targets more than one. Work-item
+`available_actions` are derived from observed session evidence rather than a
+fixed list.
+
+Not delivered here, because this branch has no backing application capability:
+OS window focus, follow-up delivery and its receipt evidence, second-writer
+fan-out onto an isolated checkout, provider-profile selection, and a user-actor
+structured checkpoint (`workflow_operations::checkpoint` authenticates a
+managed-session workflow token, which a human Desktop client does not hold).
+Each renders its own typed reason rather than being hidden. Recovery is
+implementable here and is the next item on this branch.
 
 #### Objective
 

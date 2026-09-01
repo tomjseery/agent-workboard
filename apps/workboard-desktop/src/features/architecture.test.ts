@@ -70,7 +70,10 @@ describe("feature authority boundaries", () => {
   it("keeps Work-item authority in generated read contracts with no checkpoint escape hatch", () => {
     const implementation = Object.entries(workItemSources).filter(([path]) => !path.includes(".test.")).map(([, source]) => source).join("\n");
     expect(implementation).not.toMatch(/zustand|createStore|useStore|@tauri-apps\/api|\binvoke\s*\(|\bChannel\b|node:fs|child_process|process\.|transcript|credential|planning[_-]store|publication|checkpoint[_-](?:store|storage|write)|workboard\s+workflow|markdown|\.md\b|\bfetch\s*\(|WebSocket|git\s|shell|commandLine/i);
-    expect(implementation).not.toMatch(/useMutation|\.execute\s*\(|checkpointWorkItem|dangerouslySetInnerHTML/);
+    expect(implementation).not.toMatch(/checkpointWorkItem|dangerouslySetInnerHTML/);
     expect(implementation).toContain("availableActions");
+
+    const commands = [...implementation.matchAll(/type:\s*"([a-z_]+)"\s*,\s*value:/g)].map(([, code]) => code);
+    expect([...new Set(commands)].sort()).toEqual(["resume_session", "start_session"]);
   });
 });
