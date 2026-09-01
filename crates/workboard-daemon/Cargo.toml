@@ -8,10 +8,6 @@ license.workspace = true
 [lib]
 name = "workboard_daemon"
 
-[[bin]]
-name = "workboardd"
-path = "src/main.rs"
-
 [dependencies]
 clap.workspace = true
 notify.workspace = true

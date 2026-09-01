@@ -77,6 +77,7 @@ enum Command {
     Workflow(WorkflowArgs),
     Recover(RecoverArgs),
     Mcp,
+    Daemon(DaemonArgs),
     #[command(alias = "snapshot")]
     Show,
     Backup(DestinationArgs),
@@ -252,6 +253,16 @@ enum WorkCommand {
         #[arg(long)]
         idempotency_key: Option<String>,
     },
+}
+
+#[derive(Debug, Args)]
+struct DaemonArgs {
+    #[arg(long)]
+    address: Option<std::net::SocketAddr>,
+    #[arg(long)]
+    claude: Option<PathBuf>,
+    #[arg(long)]
+    codex: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -513,6 +524,13 @@ pub fn run() {
             mcp::run(database)
         })();
         if let Err(error) = result {
+            eprintln!("{}: {error}", error.code());
+            std::process::exit(1);
+        }
+        return;
+    }
+    if let Some(Command::Daemon(arguments)) = &cli.command {
+        if let Err(error) = run_daemon(&cli, arguments) {
             eprintln!("{}: {error}", error.code());
             std::process::exit(1);
         }
@@ -1455,8 +1473,45 @@ fn execute(cli: Cli) -> Result<String, AppError> {
                     command: ConcertablePlansCommand::Preview { .. },
                 },
         })) => unreachable!(),
-        Some(Command::Mcp) => unreachable!(),
+        Some(Command::Mcp | Command::Daemon(_)) => unreachable!(),
     }
+}
+
+fn run_daemon(cli: &Cli, arguments: &DaemonArgs) -> Result<(), AppError> {
+    let current_directory = std::env::current_dir().map_err(AppError::GitIo)?;
+    let database = cli
+        .database
+        .as_ref()
+        .map(|path| absolute(&current_directory, path))
+        .map_or_else(default_database_path, Ok)?;
+    let daemon_failure = |error: workboard_daemon::DaemonError| AppError::External {
+        code: "daemon_unavailable".to_owned(),
+        message: error.to_string(),
+    };
+    let registration =
+        workboard_daemon::EndpointRegistration::acquire(&database).map_err(daemon_failure)?;
+    let application = WorkboardApplication::open(&database)?;
+    let mut server = workboard_daemon::DaemonServer::start_application(
+        application,
+        arguments
+            .address
+            .unwrap_or_else(|| "127.0.0.1:0".parse().expect("loopback address")),
+        uuid::Uuid::new_v4().to_string(),
+    )
+    .map_err(daemon_failure)?;
+    registration
+        .publish(&server.descriptor())
+        .map_err(daemon_failure)?;
+    if arguments.claude.is_some() || arguments.codex.is_some() {
+        server
+            .enable_watcher(workboard_daemon::WatchConfig::new(
+                arguments.claude.clone(),
+                arguments.codex.clone(),
+            ))
+            .map_err(daemon_failure)?;
+    }
+    server.wait().map_err(daemon_failure)?;
+    Ok(())
 }
 
 fn run_interactive_board(cli: &Cli) -> Result<(), AppError> {

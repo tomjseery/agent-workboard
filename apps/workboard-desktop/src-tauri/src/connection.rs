@@ -29,9 +29,9 @@ impl ProcessDaemonStarter {
             None => {
                 let mut path = std::env::current_exe().map_err(|_| BridgeError::disconnected())?;
                 path.set_file_name(if cfg!(windows) {
-                    "workboardd.exe"
+                    "workboard.exe"
                 } else {
-                    "workboardd"
+                    "workboard"
                 });
                 path
             }
@@ -47,6 +47,7 @@ impl DaemonStarter for ProcessDaemonStarter {
     fn start(&self, database: &Path) -> Result<(), BridgeError> {
         let mut command = Command::new(&self.executable);
         command
+            .arg("daemon")
             .arg("--database")
             .arg(database)
             .stdin(Stdio::null())
