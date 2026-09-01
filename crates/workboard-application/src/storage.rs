@@ -14,13 +14,503 @@ use workboard_core::{ConversationId, LaunchLeaseId, WorkspaceId};
 
 use crate::AppError;
 
-pub(crate) const CURRENT_SCHEMA_VERSION: i64 = 35;
+pub(crate) const CURRENT_SCHEMA_VERSION: i64 = 43;
 const CLIENT_EVENT_JOURNAL_SCHEMA_CHECKSUM: &str = "agent-workboard-client-event-journal-v1";
 const BOARD_VIEW_DEFINITION_SCHEMA_CHECKSUM: &str = "agent-workboard-board-view-definition-v1";
-const WORK_ITEM_DEPENDENCY_SCHEMA_CHECKSUM: &str = "agent-workboard-work-item-dependency-v1";
-const PROPOSAL_REVISION_REQUEST_SCHEMA_CHECKSUM: &str =
-    "agent-workboard-proposal-revision-request-v1";
 const FOUNDATION_SCHEMA_CHECKSUM: &str = "agent-workboard-foundation-v1";
+const WORKSPACE_PLANNING_SCHEMA_CHECKSUM: &str = "agent-workboard-workspace-planning-v1";
+const WORK_ITEM_DEPENDENCY_SCHEMA_CHECKSUM: &str = "agent-workboard-work-item-dependency-v1";
+const LAUNCH_PROFILE_SCHEMA_CHECKSUM: &str = "agent-workboard-launch-profile-v1";
+const FEATURE_PROPOSAL_DECISION_SCHEMA_CHECKSUM: &str =
+    "agent-workboard-feature-proposal-decision-v1";
+const SESSION_BINDING_GENERATION_SCHEMA_CHECKSUM: &str =
+    "agent-workboard-session-binding-generation-v1";
+const SESSION_FOLLOW_UP_SCHEMA_CHECKSUM: &str = "agent-workboard-session-follow-up-v1";
+const WRITER_SESSION_RESERVATION_SCHEMA_CHECKSUM: &str =
+    "agent-workboard-writer-session-reservation-v1";
+const MANAGED_LAUNCH_BATCH_SCHEMA_CHECKSUM: &str = "agent-workboard-managed-launch-batch-v1";
+const FEATURE_BRANCH_INTEGRATION_SCHEMA_CHECKSUM: &str =
+    "agent-workboard-feature-branch-integration-v1";
+const FEATURE_WORK_ITEM_PROPOSAL_SCHEMA_CHECKSUM: &str =
+    "agent-workboard-feature-work-item-proposal-v1";
+const FEATURE_WORK_ITEM_PROPOSAL_SQL: &str = r#"
+CREATE TABLE feature_work_item_proposals (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE RESTRICT,
+    feature_id TEXT NOT NULL REFERENCES features(id) ON DELETE RESTRICT,
+    repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE RESTRICT,
+    session_id TEXT NOT NULL REFERENCES native_sessions(id) ON DELETE RESTRICT,
+    idempotency_key TEXT NOT NULL UNIQUE CHECK (idempotency_key <> ''),
+    proposal_json TEXT NOT NULL CHECK (proposal_json <> ''),
+    observed_feature_hash TEXT NOT NULL CHECK (length(observed_feature_hash) = 64),
+    observed_repository_head TEXT NOT NULL CHECK (observed_repository_head <> ''),
+    status TEXT NOT NULL CHECK (status IN ('awaiting_approval', 'approved', 'rejected')),
+    outcome_json TEXT,
+    created_at TEXT NOT NULL,
+    decided_at TEXT
+);
+CREATE INDEX feature_work_item_proposals_feature
+    ON feature_work_item_proposals (feature_id, status, created_at);
+"#;
+const FEATURE_BRANCH_INTEGRATION_SQL: &str = r#"
+CREATE TABLE feature_integration_runs (
+    id TEXT PRIMARY KEY,
+    feature_id TEXT NOT NULL REFERENCES features(id) ON DELETE RESTRICT,
+    repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE RESTRICT,
+    feature_checkout_id TEXT NOT NULL REFERENCES checkouts(id) ON DELETE RESTRICT,
+    idempotency_key TEXT NOT NULL UNIQUE CHECK (idempotency_key <> ''),
+    status TEXT NOT NULL CHECK (
+        status IN ('previewed', 'running', 'completed', 'conflict', 'failed')
+    ),
+    expected_target_head TEXT NOT NULL CHECK (expected_target_head <> ''),
+    confirmation_token_hash TEXT NOT NULL UNIQUE CHECK (length(confirmation_token_hash) = 64),
+    confirmation_expires_at TEXT NOT NULL,
+    confirmed_at TEXT,
+    result_head TEXT,
+    failure TEXT,
+    started_at TEXT NOT NULL,
+    completed_at TEXT
+);
+CREATE UNIQUE INDEX feature_integration_one_running
+    ON feature_integration_runs (feature_id, repository_id) WHERE status = 'running';
+CREATE TABLE work_item_integrations (
+    work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE RESTRICT,
+    repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE RESTRICT,
+    source_checkout_id TEXT NOT NULL REFERENCES checkouts(id) ON DELETE RESTRICT,
+    source_head TEXT NOT NULL CHECK (source_head <> ''),
+    status TEXT NOT NULL CHECK (status IN ('pending', 'integrated', 'conflict')),
+    integration_run_id TEXT REFERENCES feature_integration_runs(id) ON DELETE RESTRICT,
+    expected_target_head TEXT,
+    result_head TEXT,
+    conflict TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (work_item_id, repository_id)
+);
+CREATE INDEX work_item_integrations_pending
+    ON work_item_integrations (repository_id, status, work_item_id);
+CREATE TABLE feature_integration_steps (
+    run_id TEXT NOT NULL REFERENCES feature_integration_runs(id) ON DELETE RESTRICT,
+    position INTEGER NOT NULL CHECK (position >= 0),
+    work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE RESTRICT,
+    source_checkout_id TEXT NOT NULL REFERENCES checkouts(id) ON DELETE RESTRICT,
+    dependency_layer INTEGER NOT NULL CHECK (dependency_layer >= 0),
+    expected_target_head TEXT NOT NULL CHECK (expected_target_head <> ''),
+    source_head TEXT NOT NULL CHECK (source_head <> ''),
+    result_head TEXT,
+    status TEXT NOT NULL CHECK (status IN ('pending', 'integrated', 'conflict', 'skipped')),
+    conflict TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (run_id, position),
+    UNIQUE (run_id, work_item_id)
+);
+INSERT INTO work_item_integrations (
+    work_item_id, repository_id, source_checkout_id, source_head, status, updated_at
+)
+SELECT item.id, effective.repository_id, effective.checkout_id, checkout.head, 'pending',
+       strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+FROM work_items item
+JOIN effective_work_item_checkouts effective ON effective.work_item_id = item.id
+JOIN checkouts checkout ON checkout.id = effective.checkout_id
+WHERE item.status IN ('review', 'done') AND checkout.head IS NOT NULL;
+"#;
+const MANAGED_LAUNCH_BATCH_SQL: &str = r#"
+CREATE TABLE managed_launch_batches (
+    id TEXT PRIMARY KEY,
+    feature_id TEXT NOT NULL REFERENCES features(id) ON DELETE RESTRICT,
+    idempotency_key TEXT NOT NULL UNIQUE CHECK (idempotency_key <> ''),
+    selection_hash TEXT NOT NULL CHECK (length(selection_hash) = 64),
+    confirmation_token_hash TEXT NOT NULL UNIQUE CHECK (length(confirmation_token_hash) = 64),
+    status TEXT NOT NULL CHECK (
+        status IN ('previewed', 'reserved', 'launching', 'partial', 'completed', 'failed', 'cancelled')
+    ),
+    created_at TEXT NOT NULL,
+    confirmation_expires_at TEXT NOT NULL,
+    confirmed_at TEXT,
+    completed_at TEXT,
+    CHECK (confirmation_expires_at > created_at)
+);
+CREATE TABLE managed_launch_batch_children (
+    batch_id TEXT NOT NULL REFERENCES managed_launch_batches(id) ON DELETE RESTRICT,
+    position INTEGER NOT NULL CHECK (position >= 0),
+    work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE RESTRICT,
+    repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE RESTRICT,
+    dependency_layer INTEGER NOT NULL CHECK (dependency_layer >= 0),
+    provider TEXT NOT NULL CHECK (provider IN ('claude', 'codex')),
+    profile_json TEXT NOT NULL CHECK (profile_json <> ''),
+    checkout_id TEXT REFERENCES checkouts(id) ON DELETE RESTRICT,
+    launch_intent_id TEXT REFERENCES launch_intents(id) ON DELETE RESTRICT,
+    session_id TEXT REFERENCES native_sessions(id) ON DELETE RESTRICT,
+    status TEXT NOT NULL CHECK (
+        status IN ('selected', 'reserved', 'launched', 'bound', 'failed', 'skipped')
+    ),
+    failure TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (batch_id, position),
+    UNIQUE (batch_id, work_item_id, repository_id)
+);
+CREATE INDEX managed_launch_batch_children_status
+    ON managed_launch_batch_children (batch_id, status, position);
+"#;
+const WRITER_SESSION_RESERVATION_SQL: &str = r#"
+ALTER TABLE checkout_reconciliation_events RENAME TO checkout_reconciliation_events_v37;
+ALTER TABLE checkout_readiness RENAME TO checkout_readiness_v37;
+CREATE TABLE checkout_readiness (
+    checkout_id TEXT PRIMARY KEY REFERENCES checkouts(id) ON DELETE RESTRICT,
+    schema_version INTEGER NOT NULL CHECK (schema_version > 0),
+    repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE RESTRICT,
+    checkout_path_id TEXT NOT NULL REFERENCES checkout_paths(id) ON DELETE RESTRICT,
+    purpose TEXT NOT NULL CHECK (
+        purpose IN ('feature_integration', 'work_item_write', 'writer_session', 'read_only_shared')
+    ),
+    access_mode TEXT NOT NULL CHECK (access_mode IN ('write_isolated', 'read_only_shared')),
+    owner_kind TEXT NOT NULL CHECK (owner_kind IN ('epic', 'feature', 'work_item')),
+    owner_id TEXT NOT NULL CHECK (owner_id <> ''),
+    session_id TEXT REFERENCES native_sessions(id) ON DELETE RESTRICT,
+    session_key TEXT NOT NULL,
+    parent_feature_checkout_id TEXT REFERENCES checkouts(id) ON DELETE RESTRICT,
+    base_revision TEXT NOT NULL CHECK (base_revision <> ''),
+    source_revision TEXT NOT NULL CHECK (source_revision <> ''),
+    path TEXT NOT NULL CHECK (path <> ''),
+    git_worktree_identity TEXT NOT NULL CHECK (git_worktree_identity <> ''),
+    branch TEXT,
+    head TEXT NOT NULL CHECK (head <> ''),
+    availability TEXT NOT NULL CHECK (availability IN ('available', 'missing', 'deleted', 'replaced')),
+    isolation_generation INTEGER NOT NULL CHECK (isolation_generation > 0),
+    reconciliation_generation INTEGER NOT NULL CHECK (reconciliation_generation > 0),
+    evidence_json TEXT NOT NULL CHECK (evidence_json <> ''),
+    observed_at TEXT NOT NULL,
+    UNIQUE (repository_id, purpose, owner_kind, owner_id, session_key),
+    UNIQUE (repository_id, path),
+    UNIQUE (repository_id, branch),
+    CHECK (
+        (purpose = 'feature_integration' AND owner_kind = 'feature'
+            AND access_mode = 'write_isolated' AND session_id IS NULL AND session_key = '') OR
+        (purpose = 'work_item_write' AND owner_kind = 'work_item'
+            AND access_mode = 'write_isolated' AND session_id IS NULL AND session_key = '') OR
+        (purpose = 'writer_session' AND owner_kind = 'work_item'
+            AND access_mode = 'write_isolated' AND session_key <> '') OR
+        (purpose = 'read_only_shared' AND access_mode = 'read_only_shared'
+            AND ((session_id IS NULL AND session_key = '') OR
+                 (session_id IS NOT NULL AND session_key <> '')))
+    )
+);
+INSERT INTO checkout_readiness (
+    checkout_id, schema_version, repository_id, checkout_path_id, purpose, access_mode,
+    owner_kind, owner_id, session_id, session_key, parent_feature_checkout_id,
+    base_revision, source_revision, path, git_worktree_identity, branch, head,
+    availability, isolation_generation, reconciliation_generation, evidence_json, observed_at
+)
+SELECT checkout_id, 2, repository_id, checkout_path_id, purpose, access_mode,
+       owner_kind, owner_id, session_id, session_key, parent_feature_checkout_id,
+       base_revision, source_revision, path, git_worktree_identity, branch, head,
+       availability, isolation_generation, reconciliation_generation, evidence_json, observed_at
+FROM checkout_readiness_v37;
+CREATE TABLE checkout_reconciliation_events (
+    checkout_id TEXT NOT NULL REFERENCES checkout_readiness(checkout_id) ON DELETE RESTRICT,
+    generation INTEGER NOT NULL CHECK (generation > 0),
+    availability TEXT NOT NULL CHECK (availability IN ('available', 'missing', 'deleted', 'replaced')),
+    head TEXT NOT NULL,
+    evidence_json TEXT NOT NULL CHECK (evidence_json <> ''),
+    observed_at TEXT NOT NULL,
+    PRIMARY KEY (checkout_id, generation)
+);
+INSERT INTO checkout_reconciliation_events
+SELECT * FROM checkout_reconciliation_events_v37;
+DROP TABLE checkout_reconciliation_events_v37;
+DROP TABLE checkout_readiness_v37;
+"#;
+const SESSION_FOLLOW_UP_SQL: &str = r#"
+CREATE TABLE workflow_credentials (
+    id TEXT PRIMARY KEY,
+    managed_session_id TEXT NOT NULL REFERENCES managed_sessions(id) ON DELETE RESTRICT,
+    binding_generation INTEGER NOT NULL CHECK (binding_generation > 0),
+    token_hash TEXT NOT NULL UNIQUE CHECK (token_hash <> ''),
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    CHECK (expires_at > created_at)
+);
+INSERT INTO workflow_credentials (
+    id, managed_session_id, binding_generation, token_hash, created_at, expires_at
+)
+SELECT lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' ||
+       substr(lower(hex(randomblob(2))), 2) || '-' ||
+       substr('89ab', (random() & 3) + 1, 1) ||
+       substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6))),
+       managed.id, managed.binding_generation, intent.workflow_token_hash, intent.created_at,
+       intent.workflow_token_expires_at
+FROM managed_sessions managed
+JOIN launch_intents intent ON intent.id = managed.launch_intent_id
+WHERE intent.workflow_token_hash IS NOT NULL
+  AND intent.workflow_token_expires_at IS NOT NULL;
+CREATE INDEX workflow_credentials_session
+    ON workflow_credentials (managed_session_id, expires_at);
+CREATE TABLE session_follow_ups (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE RESTRICT,
+    feature_id TEXT REFERENCES features(id) ON DELETE RESTRICT,
+    work_item_id TEXT REFERENCES work_items(id) ON DELETE RESTRICT,
+    session_id TEXT NOT NULL REFERENCES native_sessions(id) ON DELETE RESTRICT,
+    association_id TEXT NOT NULL REFERENCES native_session_associations(id) ON DELETE RESTRICT,
+    managed_session_id TEXT NOT NULL REFERENCES managed_sessions(id) ON DELETE RESTRICT,
+    binding_generation INTEGER NOT NULL CHECK (binding_generation > 0),
+    checkout_id TEXT NOT NULL REFERENCES checkouts(id) ON DELETE RESTRICT,
+    checkout_generation INTEGER NOT NULL CHECK (checkout_generation > 0),
+    sequence INTEGER NOT NULL CHECK (sequence > 0),
+    idempotency_key TEXT NOT NULL UNIQUE CHECK (idempotency_key <> ''),
+    instruction TEXT NOT NULL CHECK (instruction <> ''),
+    instruction_hash TEXT NOT NULL CHECK (length(instruction_hash) = 64),
+    status TEXT NOT NULL CHECK (status IN ('pending', 'leased', 'delivered', 'failed')),
+    lease_token TEXT,
+    leased_until TEXT,
+    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+    receipt TEXT,
+    failure TEXT,
+    created_at TEXT NOT NULL,
+    delivered_at TEXT,
+    CHECK ((feature_id IS NOT NULL) + (work_item_id IS NOT NULL) = 1),
+    CHECK ((status = 'leased') = (lease_token IS NOT NULL)),
+    CHECK ((status = 'leased') = (leased_until IS NOT NULL)),
+    CHECK ((status = 'delivered') = (receipt IS NOT NULL)),
+    CHECK ((status = 'delivered') = (delivered_at IS NOT NULL)),
+    UNIQUE (session_id, binding_generation, sequence)
+);
+CREATE INDEX session_follow_ups_delivery
+    ON session_follow_ups (session_id, binding_generation, sequence, status);
+"#;
+const FEATURE_PROPOSAL_DECISION_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS feature_proposal_decisions (
+    feature_id TEXT NOT NULL REFERENCES features(id) ON DELETE RESTRICT,
+    generation INTEGER NOT NULL CHECK (generation > 0),
+    decision TEXT NOT NULL CHECK (decision IN ('request_revision', 'reject')),
+    reason TEXT NOT NULL CHECK (reason <> ''),
+    decided_at TEXT NOT NULL,
+    PRIMARY KEY (feature_id, generation)
+);
+"#;
+const LAUNCH_PROFILE_SQL: &str = r#"
+CREATE TABLE launch_profiles (
+    id TEXT PRIMARY KEY,
+    schema_version INTEGER NOT NULL CHECK (schema_version > 0),
+    provider TEXT NOT NULL CHECK (provider IN ('claude', 'codex')),
+    model TEXT,
+    effort TEXT CHECK (effort IN ('low', 'medium', 'high', 'xhigh', 'max')),
+    role TEXT NOT NULL,
+    source TEXT NOT NULL CHECK (
+        source IN ('suggested', 'preference', 'explicit_override', 'resume_preserved', 'legacy_unknown')
+    ),
+    created_at TEXT NOT NULL,
+    CHECK ((model IS NULL) = (effort IS NULL)),
+    CHECK (source = 'legacy_unknown' OR model IS NOT NULL)
+);
+ALTER TABLE launch_intents
+    ADD COLUMN profile_id TEXT REFERENCES launch_profiles(id) ON DELETE RESTRICT;
+ALTER TABLE managed_sessions
+    ADD COLUMN profile_id TEXT REFERENCES launch_profiles(id) ON DELETE RESTRICT;
+ALTER TABLE managed_session_requests
+    ADD COLUMN profile_id TEXT REFERENCES launch_profiles(id) ON DELETE RESTRICT;
+CREATE TABLE launch_profile_preferences (
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL CHECK (provider IN ('claude', 'codex')),
+    role TEXT NOT NULL,
+    profile_id TEXT NOT NULL REFERENCES launch_profiles(id) ON DELETE RESTRICT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (workspace_id, provider, role)
+);
+"#;
+const WORK_ITEM_DEPENDENCY_SQL: &str = r#"
+ALTER TABLE work_items ADD COLUMN proposal_order INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE work_item_dependencies (
+    work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+    dependency_work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE RESTRICT,
+    dependency_order INTEGER NOT NULL CHECK (dependency_order >= 0),
+    PRIMARY KEY (work_item_id, dependency_work_item_id),
+    UNIQUE (work_item_id, dependency_order),
+    CHECK (work_item_id <> dependency_work_item_id)
+);
+CREATE INDEX work_item_dependencies_dependency
+    ON work_item_dependencies (dependency_work_item_id, work_item_id);
+"#;
+const WORKSPACE_PLANNING_SQL: &str = r#"
+PRAGMA defer_foreign_keys = ON;
+CREATE TABLE launch_intents_v2 (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT REFERENCES workspaces(id) ON DELETE RESTRICT,
+    work_item_id TEXT REFERENCES work_items(id) ON DELETE RESTRICT,
+    feature_id TEXT REFERENCES features(id) ON DELETE RESTRICT,
+    epic_id TEXT REFERENCES epics(id) ON DELETE RESTRICT,
+    checkout_id TEXT NOT NULL REFERENCES checkouts(id) ON DELETE RESTRICT,
+    provider TEXT NOT NULL CHECK (provider IN ('claude', 'codex')),
+    idempotency_key TEXT NOT NULL UNIQUE CHECK (idempotency_key <> ''),
+    token_hash TEXT NOT NULL UNIQUE CHECK (token_hash <> ''),
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'work_item_execution',
+    expected_native_id TEXT,
+    terminal_pid INTEGER,
+    failure TEXT,
+    workflow_token_hash TEXT,
+    workflow_token_expires_at TEXT,
+    terminal_window TEXT,
+    capability_bundle_root TEXT,
+    capability_bundle_digest TEXT,
+    capability_bundle_version TEXT,
+    CHECK (
+        (workspace_id IS NOT NULL) + (epic_id IS NOT NULL) +
+        (feature_id IS NOT NULL) + (work_item_id IS NOT NULL) = 1
+    ),
+    CHECK (expires_at > created_at)
+);
+INSERT INTO launch_intents_v2 (
+    id, workspace_id, work_item_id, feature_id, epic_id, checkout_id, provider,
+    idempotency_key, token_hash, status, created_at, expires_at, role,
+    expected_native_id, terminal_pid, failure, workflow_token_hash,
+    workflow_token_expires_at, terminal_window
+)
+SELECT id, NULL, work_item_id, feature_id, epic_id, checkout_id, provider,
+       idempotency_key, token_hash, status, created_at, expires_at, role,
+       expected_native_id, terminal_pid, failure, workflow_token_hash,
+       workflow_token_expires_at, terminal_window
+FROM launch_intents;
+CREATE TEMP TABLE migration32_managed_session_intents AS
+SELECT id, launch_intent_id FROM managed_sessions WHERE launch_intent_id IS NOT NULL;
+CREATE TEMP TABLE migration32_session_request_intents AS
+SELECT id, launch_intent_id FROM managed_session_requests WHERE launch_intent_id IS NOT NULL;
+CREATE TEMP TABLE migration32_recovery_outcome_intents AS
+SELECT attempt_id, session_id, launch_intent_id
+FROM recovery_entry_outcomes WHERE launch_intent_id IS NOT NULL;
+UPDATE managed_sessions SET launch_intent_id = NULL WHERE launch_intent_id IS NOT NULL;
+UPDATE managed_session_requests SET launch_intent_id = NULL WHERE launch_intent_id IS NOT NULL;
+UPDATE recovery_entry_outcomes SET launch_intent_id = NULL WHERE launch_intent_id IS NOT NULL;
+DROP TABLE launch_intents;
+ALTER TABLE launch_intents_v2 RENAME TO launch_intents;
+UPDATE managed_sessions
+SET launch_intent_id = (
+    SELECT launch_intent_id FROM migration32_managed_session_intents saved
+    WHERE saved.id = managed_sessions.id
+)
+WHERE id IN (SELECT id FROM migration32_managed_session_intents);
+UPDATE managed_session_requests
+SET launch_intent_id = (
+    SELECT launch_intent_id FROM migration32_session_request_intents saved
+    WHERE saved.id = managed_session_requests.id
+)
+WHERE id IN (SELECT id FROM migration32_session_request_intents);
+UPDATE recovery_entry_outcomes
+SET launch_intent_id = (
+    SELECT launch_intent_id FROM migration32_recovery_outcome_intents saved
+    WHERE saved.attempt_id = recovery_entry_outcomes.attempt_id
+      AND saved.session_id = recovery_entry_outcomes.session_id
+)
+WHERE (attempt_id, session_id) IN (
+    SELECT attempt_id, session_id FROM migration32_recovery_outcome_intents
+);
+DROP TABLE migration32_managed_session_intents;
+DROP TABLE migration32_session_request_intents;
+DROP TABLE migration32_recovery_outcome_intents;
+
+CREATE TABLE native_session_associations_v2 (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES native_sessions(id) ON DELETE RESTRICT,
+    workspace_id TEXT REFERENCES workspaces(id) ON DELETE RESTRICT,
+    epic_id TEXT REFERENCES epics(id) ON DELETE RESTRICT,
+    feature_id TEXT REFERENCES features(id) ON DELETE RESTRICT,
+    work_item_id TEXT REFERENCES work_items(id) ON DELETE RESTRICT,
+    role TEXT NOT NULL,
+    associated_from TEXT NOT NULL,
+    associated_until TEXT,
+    CHECK (
+        (workspace_id IS NOT NULL) + (epic_id IS NOT NULL) +
+        (feature_id IS NOT NULL) + (work_item_id IS NOT NULL) = 1
+    ),
+    CHECK (associated_until IS NULL OR associated_until > associated_from)
+);
+INSERT INTO native_session_associations_v2 (
+    id, session_id, workspace_id, epic_id, feature_id, work_item_id, role,
+    associated_from, associated_until
+)
+SELECT id, session_id, NULL, epic_id, feature_id, work_item_id, role,
+       associated_from, associated_until
+FROM native_session_associations;
+DROP TABLE native_session_associations;
+ALTER TABLE native_session_associations_v2 RENAME TO native_session_associations;
+CREATE UNIQUE INDEX native_session_associations_one_current
+    ON native_session_associations (session_id) WHERE associated_until IS NULL;
+CREATE TRIGGER native_session_associations_no_delete
+BEFORE DELETE ON native_session_associations
+BEGIN
+    SELECT RAISE(ABORT, 'native session associations are append-only');
+END;
+CREATE TRIGGER native_session_associations_no_rewrite
+BEFORE UPDATE ON native_session_associations
+WHEN OLD.associated_until IS NOT NULL OR
+     NEW.id <> OLD.id OR
+     NEW.session_id <> OLD.session_id OR
+     NEW.workspace_id IS NOT OLD.workspace_id OR
+     NEW.epic_id IS NOT OLD.epic_id OR
+     NEW.feature_id IS NOT OLD.feature_id OR
+     NEW.work_item_id IS NOT OLD.work_item_id OR
+     NEW.role <> OLD.role OR
+     NEW.associated_from <> OLD.associated_from OR
+     NEW.associated_until IS NULL OR
+     NEW.associated_until <= OLD.associated_from
+BEGIN
+    SELECT RAISE(ABORT, 'native session associations are append-only');
+END;
+
+CREATE TABLE restore_entries_v2 (
+    session_id TEXT PRIMARY KEY REFERENCES native_sessions(id) ON DELETE RESTRICT,
+    workspace_id TEXT REFERENCES workspaces(id) ON DELETE RESTRICT,
+    epic_id TEXT REFERENCES epics(id) ON DELETE RESTRICT,
+    feature_id TEXT REFERENCES features(id) ON DELETE RESTRICT,
+    work_item_id TEXT REFERENCES work_items(id) ON DELETE RESTRICT,
+    added_at TEXT NOT NULL,
+    removed_at TEXT,
+    remove_reason TEXT,
+    CHECK (
+        (workspace_id IS NOT NULL) + (epic_id IS NOT NULL) +
+        (feature_id IS NOT NULL) + (work_item_id IS NOT NULL) = 1
+    ),
+    CHECK (removed_at IS NULL OR removed_at >= added_at)
+);
+INSERT INTO restore_entries_v2 (
+    session_id, workspace_id, epic_id, feature_id, work_item_id, added_at,
+    removed_at, remove_reason
+)
+SELECT session_id, NULL, epic_id, feature_id, work_item_id, added_at,
+       removed_at, remove_reason
+FROM restore_entries;
+DROP TABLE restore_entries;
+ALTER TABLE restore_entries_v2 RENAME TO restore_entries;
+
+CREATE TABLE workspace_planning_proposals (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE RESTRICT,
+    repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE RESTRICT,
+    session_id TEXT NOT NULL REFERENCES native_sessions(id) ON DELETE RESTRICT,
+    kind TEXT NOT NULL CHECK (
+        kind IN ('create_epic', 'import_epic_research', 'create_feature')
+    ),
+    payload_json TEXT NOT NULL CHECK (payload_json <> ''),
+    idempotency_key TEXT NOT NULL UNIQUE CHECK (idempotency_key <> ''),
+    observed_revision TEXT NOT NULL CHECK (observed_revision <> ''),
+    status TEXT NOT NULL CHECK (
+        status IN ('awaiting_approval', 'approved', 'rejected')
+    ),
+    outcome_json TEXT,
+    created_at TEXT NOT NULL,
+    decided_at TEXT,
+    CHECK (decided_at IS NULL OR decided_at >= created_at),
+    CHECK (
+        (status = 'awaiting_approval' AND decided_at IS NULL AND outcome_json IS NULL) OR
+        (status = 'rejected' AND decided_at IS NOT NULL) OR
+        (status = 'approved' AND decided_at IS NOT NULL AND outcome_json IS NOT NULL)
+    )
+);
+CREATE INDEX workspace_planning_proposals_workspace
+    ON workspace_planning_proposals (workspace_id, status);
+"#;
+
 const LAUNCH_LEASE_SCHEMA_CHECKSUM: &str = "agent-workboard-launch-leases-v1";
 const WORKBOARD_DOMAIN_SCHEMA_CHECKSUM: &str = "agent-workboard-domain-v1";
 const MANAGED_BINDING_SCHEMA_CHECKSUM: &str = "agent-workboard-managed-binding-v1";
@@ -2361,6 +2851,83 @@ fn migrate(connection: &Connection) -> Result<(), AppError> {
     apply_migration(
         connection,
         32,
+        WORKSPACE_PLANNING_SCHEMA_CHECKSUM,
+        WORKSPACE_PLANNING_SQL,
+    )?;
+    apply_validated_migration(
+        connection,
+        33,
+        WORK_ITEM_DEPENDENCY_SCHEMA_CHECKSUM,
+        WORK_ITEM_DEPENDENCY_SQL,
+        backfill_work_item_dependencies,
+    )?;
+    apply_migration(
+        connection,
+        34,
+        LAUNCH_PROFILE_SCHEMA_CHECKSUM,
+        LAUNCH_PROFILE_SQL,
+    )?;
+    apply_validated_migration(
+        connection,
+        35,
+        FEATURE_PROPOSAL_DECISION_SCHEMA_CHECKSUM,
+        FEATURE_PROPOSAL_DECISION_SQL,
+        |transaction| {
+            add_column_if_missing(
+                transaction,
+                "feature_planning_proposals",
+                "generation",
+                "ALTER TABLE feature_planning_proposals ADD COLUMN generation INTEGER NOT NULL DEFAULT 1 CHECK (generation > 0)",
+            )
+        },
+    )?;
+    apply_validated_migration(
+        connection,
+        36,
+        SESSION_BINDING_GENERATION_SCHEMA_CHECKSUM,
+        "",
+        |transaction| {
+            add_column_if_missing(
+                transaction,
+                "managed_sessions",
+                "binding_generation",
+                "ALTER TABLE managed_sessions ADD COLUMN binding_generation INTEGER NOT NULL DEFAULT 1 CHECK (binding_generation > 0)",
+            )
+        },
+    )?;
+    apply_migration(
+        connection,
+        37,
+        SESSION_FOLLOW_UP_SCHEMA_CHECKSUM,
+        SESSION_FOLLOW_UP_SQL,
+    )?;
+    apply_migration(
+        connection,
+        38,
+        WRITER_SESSION_RESERVATION_SCHEMA_CHECKSUM,
+        WRITER_SESSION_RESERVATION_SQL,
+    )?;
+    apply_migration(
+        connection,
+        39,
+        MANAGED_LAUNCH_BATCH_SCHEMA_CHECKSUM,
+        MANAGED_LAUNCH_BATCH_SQL,
+    )?;
+    apply_migration(
+        connection,
+        40,
+        FEATURE_BRANCH_INTEGRATION_SCHEMA_CHECKSUM,
+        FEATURE_BRANCH_INTEGRATION_SQL,
+    )?;
+    apply_migration(
+        connection,
+        41,
+        FEATURE_WORK_ITEM_PROPOSAL_SCHEMA_CHECKSUM,
+        FEATURE_WORK_ITEM_PROPOSAL_SQL,
+    )?;
+    apply_migration(
+        connection,
+        42,
         CLIENT_EVENT_JOURNAL_SCHEMA_CHECKSUM,
         "CREATE TABLE IF NOT EXISTS workspace_projection_revisions (
              workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE RESTRICT,
@@ -2398,7 +2965,7 @@ fn migrate(connection: &Connection) -> Result<(), AppError> {
     )?;
     apply_migration(
         connection,
-        33,
+        43,
         BOARD_VIEW_DEFINITION_SCHEMA_CHECKSUM,
         "CREATE TABLE IF NOT EXISTS board_view_definitions (
              id TEXT PRIMARY KEY CHECK (id <> ''),
@@ -2411,61 +2978,6 @@ fn migrate(connection: &Connection) -> Result<(), AppError> {
              revision INTEGER NOT NULL CHECK (revision > 0),
              UNIQUE (workspace_id, title)
          );",
-    )?;
-    apply_migration(
-        connection,
-        34,
-        WORK_ITEM_DEPENDENCY_SCHEMA_CHECKSUM,
-        "CREATE TABLE IF NOT EXISTS work_item_dependencies (
-             work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE RESTRICT,
-             depends_on_work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE RESTRICT,
-             PRIMARY KEY (work_item_id, depends_on_work_item_id),
-             CHECK (work_item_id <> depends_on_work_item_id)
-         );
-         CREATE INDEX IF NOT EXISTS work_item_dependencies_prerequisite
-             ON work_item_dependencies (depends_on_work_item_id, work_item_id);
-         INSERT OR IGNORE INTO work_item_dependencies (work_item_id, depends_on_work_item_id)
-         SELECT json_extract(item.value, '$.work_item_id'),
-                json_extract(prerequisite.value, '$.work_item_id')
-         FROM feature_planning_proposals proposal
-         JOIN json_each(proposal.proposal_json, '$.work_items') item
-         JOIN json_each(item.value, '$.proposal.dependencies') dependency
-         JOIN json_each(proposal.proposal_json, '$.work_items') prerequisite
-           ON json_extract(prerequisite.value, '$.proposal.slug') = dependency.value
-         WHERE proposal.status = 'published';",
-    )?;
-    apply_migration(
-        connection,
-        35,
-        PROPOSAL_REVISION_REQUEST_SCHEMA_CHECKSUM,
-        "CREATE TABLE feature_planning_proposals_v35 (
-             feature_id TEXT PRIMARY KEY REFERENCES features(id) ON DELETE RESTRICT,
-             workflow_run_id TEXT NOT NULL UNIQUE REFERENCES workflow_runs(id) ON DELETE RESTRICT,
-             idempotency_key TEXT NOT NULL UNIQUE CHECK (idempotency_key <> ''),
-             proposal_json TEXT NOT NULL CHECK (proposal_json <> ''),
-             status TEXT NOT NULL CHECK (
-                 status IN (
-                     'awaiting_approval', 'rejected', 'revision_requested',
-                     'publishing', 'published'
-                 )
-             ),
-             submitted_at TEXT NOT NULL,
-             approved_at TEXT,
-             published_commit TEXT,
-             revision_feedback TEXT CHECK (revision_feedback <> ''),
-             revision_requested_at TEXT
-         );
-         INSERT INTO feature_planning_proposals_v35 (
-             feature_id, workflow_run_id, idempotency_key, proposal_json,
-             status, submitted_at, approved_at, published_commit,
-             revision_feedback, revision_requested_at
-         )
-         SELECT feature_id, workflow_run_id, idempotency_key, proposal_json,
-                status, submitted_at, approved_at, published_commit, NULL, NULL
-         FROM feature_planning_proposals;
-         DROP TABLE feature_planning_proposals;
-         ALTER TABLE feature_planning_proposals_v35
-             RENAME TO feature_planning_proposals;",
     )?;
     Ok(())
 }
@@ -2580,6 +3092,106 @@ fn apply_import_repository_migrations(
     )
 }
 
+fn backfill_work_item_dependencies(transaction: &Transaction<'_>) -> Result<(), AppError> {
+    let feature_ids = {
+        let mut statement =
+            transaction.prepare("SELECT id FROM features ORDER BY created_at, id")?;
+        statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    for feature_id in feature_ids {
+        let payload = transaction
+            .query_row(
+                "SELECT event.payload_json FROM workflow_events event
+                 JOIN workflow_runs run ON run.id = event.run_id
+                 JOIN feature_planning_proposals proposal
+                   ON proposal.feature_id = run.feature_id AND proposal.status = 'published'
+                 WHERE run.feature_id = ?1 AND event.to_state = 'proposal_ready'
+                 ORDER BY event.sequence DESC LIMIT 1",
+                [feature_id.as_str()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        let Some(payload) = payload else {
+            continue;
+        };
+        let payload: serde_json::Value = serde_json::from_str(&payload)?;
+        let proposed = payload
+            .pointer("/proposal/work_items")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| {
+                AppError::PlanningDocumentInvalid(
+                    "published Feature proposal has no Work-item dependency graph".to_owned(),
+                )
+            })?;
+        let database_items = {
+            let mut statement =
+                transaction.prepare("SELECT slug, id FROM work_items WHERE feature_id = ?1")?;
+            statement
+                .query_map([feature_id.as_str()], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<Result<HashMap<_, _>, _>>()?
+        };
+        for (proposal_order, item) in proposed.iter().enumerate() {
+            let slug = item
+                .get("slug")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| {
+                    AppError::PlanningDocumentInvalid(
+                        "published Work-item dependency slug is missing".to_owned(),
+                    )
+                })?;
+            let work_item_id = database_items.get(slug).ok_or_else(|| {
+                AppError::PlanningDocumentInvalid(format!(
+                    "published Work item {slug} is missing from its Feature"
+                ))
+            })?;
+            transaction.execute(
+                "UPDATE work_items SET proposal_order = ?2 WHERE id = ?1",
+                params![
+                    work_item_id,
+                    i64::try_from(proposal_order)
+                        .map_err(|error| AppError::Domain(error.to_string()))?,
+                ],
+            )?;
+            let dependencies = item
+                .get("dependencies")
+                .and_then(serde_json::Value::as_array)
+                .ok_or_else(|| {
+                    AppError::PlanningDocumentInvalid(format!(
+                        "published Work item {slug} has no dependency list"
+                    ))
+                })?;
+            for (dependency_order, dependency) in dependencies.iter().enumerate() {
+                let dependency_slug = dependency.as_str().ok_or_else(|| {
+                    AppError::PlanningDocumentInvalid(format!(
+                        "published Work item {slug} has an invalid dependency"
+                    ))
+                })?;
+                let dependency_id = database_items.get(dependency_slug).ok_or_else(|| {
+                    AppError::PlanningDocumentInvalid(format!(
+                        "published dependency {dependency_slug} is missing from its Feature"
+                    ))
+                })?;
+                transaction.execute(
+                    "INSERT INTO work_item_dependencies (
+                         work_item_id, dependency_work_item_id, dependency_order
+                     ) VALUES (?1, ?2, ?3)",
+                    params![
+                        work_item_id,
+                        dependency_id,
+                        i64::try_from(dependency_order)
+                            .map_err(|error| AppError::Domain(error.to_string()))?,
+                    ],
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn apply_import_repository_migrations_atomically(
     connection: &Connection,
     direct_ownership: &HashMap<String, String>,
@@ -2673,6 +3285,23 @@ fn migration_exists(connection: &Connection, version: i64) -> Result<bool, AppEr
         |row| row.get(0),
     )?;
     Ok(exists != 0)
+}
+
+fn add_column_if_missing(
+    transaction: &Transaction<'_>,
+    table: &str,
+    column: &str,
+    sql: &str,
+) -> Result<(), AppError> {
+    let exists: i64 = transaction.query_row(
+        "SELECT EXISTS (SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2)",
+        params![table, column],
+        |row| row.get(0),
+    )?;
+    if exists == 0 {
+        transaction.execute_batch(sql)?;
+    }
+    Ok(())
 }
 
 fn apply_migration(
@@ -3309,6 +3938,176 @@ fn health(connection: &Connection) -> Result<StorageHealth, AppError> {
 }
 
 #[cfg(test)]
+pub(crate) fn drop_workspace_planning_schema(connection: &Connection) {
+    connection
+        .execute_batch(
+            r#"DROP TABLE board_view_definitions;
+            DELETE FROM schema_migrations WHERE version = 43;
+
+            DROP TRIGGER workspaces_create_projection_revision;
+            DROP TABLE client_operation_outcomes;
+            DROP TABLE client_events;
+            DROP TABLE workspace_projection_revisions;
+            DELETE FROM schema_migrations WHERE version = 42;
+
+            DROP TABLE feature_work_item_proposals;
+            DELETE FROM schema_migrations WHERE version = 41;
+
+            DROP TABLE feature_integration_steps;
+            DROP TABLE work_item_integrations;
+            DROP TABLE feature_integration_runs;
+            DELETE FROM schema_migrations WHERE version = 40;
+
+            DROP TABLE managed_launch_batch_children;
+            DROP TABLE managed_launch_batches;
+            DELETE FROM schema_migrations WHERE version = 39;
+
+            DELETE FROM schema_migrations WHERE version = 38;
+
+            DROP TABLE session_follow_ups;
+            DROP TABLE workflow_credentials;
+            DELETE FROM schema_migrations WHERE version = 37;
+
+            ALTER TABLE managed_sessions DROP COLUMN binding_generation;
+            DELETE FROM schema_migrations WHERE version = 36;
+
+            DROP TABLE feature_proposal_decisions;
+            DELETE FROM schema_migrations WHERE version = 35;
+
+            DROP TABLE launch_profile_preferences;
+            ALTER TABLE managed_session_requests DROP COLUMN profile_id;
+            ALTER TABLE managed_sessions DROP COLUMN profile_id;
+            ALTER TABLE launch_intents DROP COLUMN profile_id;
+            DROP TABLE launch_profiles;
+            DELETE FROM schema_migrations WHERE version = 34;
+
+            DROP TABLE work_item_dependencies;
+            ALTER TABLE work_items DROP COLUMN proposal_order;
+            DELETE FROM schema_migrations WHERE version = 33;
+
+            DROP TABLE workspace_planning_proposals;
+
+            CREATE TABLE launch_intents_v1 (
+                id TEXT PRIMARY KEY,
+                work_item_id TEXT REFERENCES work_items(id) ON DELETE RESTRICT,
+                feature_id TEXT REFERENCES features(id) ON DELETE RESTRICT,
+                epic_id TEXT REFERENCES epics(id) ON DELETE RESTRICT,
+                checkout_id TEXT NOT NULL REFERENCES checkouts(id) ON DELETE RESTRICT,
+                provider TEXT NOT NULL CHECK (provider IN ('claude', 'codex')),
+                idempotency_key TEXT NOT NULL UNIQUE CHECK (idempotency_key <> ''),
+                token_hash TEXT NOT NULL UNIQUE CHECK (token_hash <> ''),
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'work_item_execution',
+                expected_native_id TEXT,
+                terminal_pid INTEGER,
+                failure TEXT,
+                workflow_token_hash TEXT,
+                workflow_token_expires_at TEXT,
+                terminal_window TEXT,
+                CHECK (
+                    (epic_id IS NOT NULL) + (feature_id IS NOT NULL) +
+                    (work_item_id IS NOT NULL) = 1
+                ),
+                CHECK (expires_at > created_at)
+            );
+            INSERT INTO launch_intents_v1 (
+                id, work_item_id, feature_id, epic_id, checkout_id, provider,
+                idempotency_key, token_hash, status, created_at, expires_at, role,
+                expected_native_id, terminal_pid, failure, workflow_token_hash,
+                workflow_token_expires_at, terminal_window
+            )
+            SELECT id, work_item_id, feature_id, epic_id, checkout_id, provider,
+                   idempotency_key, token_hash, status, created_at, expires_at, role,
+                   expected_native_id, terminal_pid, failure, workflow_token_hash,
+                   workflow_token_expires_at, terminal_window
+            FROM launch_intents WHERE workspace_id IS NULL;
+            DROP TABLE launch_intents;
+            ALTER TABLE launch_intents_v1 RENAME TO launch_intents;
+
+            DROP TRIGGER native_session_associations_no_rewrite;
+            DROP TRIGGER native_session_associations_no_delete;
+            DROP INDEX native_session_associations_one_current;
+            CREATE TABLE native_session_associations_v1 (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL REFERENCES native_sessions(id) ON DELETE RESTRICT,
+                epic_id TEXT REFERENCES epics(id) ON DELETE RESTRICT,
+                feature_id TEXT REFERENCES features(id) ON DELETE RESTRICT,
+                work_item_id TEXT REFERENCES work_items(id) ON DELETE RESTRICT,
+                role TEXT NOT NULL,
+                associated_from TEXT NOT NULL,
+                associated_until TEXT,
+                CHECK (
+                    (epic_id IS NOT NULL) + (feature_id IS NOT NULL) +
+                    (work_item_id IS NOT NULL) = 1
+                ),
+                CHECK (associated_until IS NULL OR associated_until > associated_from)
+            );
+            INSERT INTO native_session_associations_v1 (
+                id, session_id, epic_id, feature_id, work_item_id, role,
+                associated_from, associated_until
+            )
+            SELECT id, session_id, epic_id, feature_id, work_item_id, role,
+                   associated_from, associated_until
+            FROM native_session_associations WHERE workspace_id IS NULL;
+            DROP TABLE native_session_associations;
+            ALTER TABLE native_session_associations_v1
+                RENAME TO native_session_associations;
+            CREATE UNIQUE INDEX native_session_associations_one_current
+                ON native_session_associations (session_id) WHERE associated_until IS NULL;
+            CREATE TRIGGER native_session_associations_no_delete
+            BEFORE DELETE ON native_session_associations
+            BEGIN
+                SELECT RAISE(ABORT, 'native session associations are append-only');
+            END;
+            CREATE TRIGGER native_session_associations_no_rewrite
+            BEFORE UPDATE ON native_session_associations
+            WHEN OLD.associated_until IS NOT NULL OR
+                 NEW.id <> OLD.id OR
+                 NEW.session_id <> OLD.session_id OR
+                 NEW.epic_id IS NOT OLD.epic_id OR
+                 NEW.feature_id IS NOT OLD.feature_id OR
+                 NEW.work_item_id IS NOT OLD.work_item_id OR
+                 NEW.role <> OLD.role OR
+                 NEW.associated_from <> OLD.associated_from OR
+                 NEW.associated_until IS NULL OR
+                 NEW.associated_until <= OLD.associated_from
+            BEGIN
+                SELECT RAISE(ABORT, 'native session associations are append-only');
+            END;
+
+            CREATE TABLE restore_entries_v1 (
+                session_id TEXT PRIMARY KEY REFERENCES native_sessions(id) ON DELETE RESTRICT,
+                epic_id TEXT REFERENCES epics(id) ON DELETE RESTRICT,
+                feature_id TEXT REFERENCES features(id) ON DELETE RESTRICT,
+                work_item_id TEXT REFERENCES work_items(id) ON DELETE RESTRICT,
+                added_at TEXT NOT NULL,
+                removed_at TEXT,
+                remove_reason TEXT,
+                CHECK (
+                    (epic_id IS NOT NULL) + (feature_id IS NOT NULL) +
+                    (work_item_id IS NOT NULL) = 1
+                ),
+                CHECK (removed_at IS NULL OR removed_at >= added_at)
+            );
+            INSERT INTO restore_entries_v1 (
+                session_id, epic_id, feature_id, work_item_id, added_at, removed_at,
+                remove_reason
+            )
+            SELECT session_id, epic_id, feature_id, work_item_id, added_at, removed_at,
+                   remove_reason
+            FROM restore_entries WHERE workspace_id IS NULL;
+            DROP TABLE restore_entries;
+            ALTER TABLE restore_entries_v1 RENAME TO restore_entries;
+
+            DELETE FROM schema_migrations WHERE version = 32;
+            PRAGMA user_version = 31;"#,
+        )
+        .expect("remove workspace planning schema");
+}
+
+#[cfg(test)]
 mod tests {
     use rusqlite::{Connection, Transaction, params};
     use tempfile::TempDir;
@@ -3319,6 +4118,7 @@ mod tests {
     use crate::AppError;
 
     fn drop_checkout_readiness_schema(connection: &Connection) {
+        super::drop_workspace_planning_schema(connection);
         connection
             .execute_batch(
                 "DROP TABLE checkout_reconciliation_events;
@@ -3326,7 +4126,7 @@ mod tests {
                  ALTER TABLE managed_session_requests DROP COLUMN repository_id;
                  ALTER TABLE managed_session_requests DROP COLUMN readiness_generation;
                  ALTER TABLE managed_session_requests DROP COLUMN checkout_id;
-                 DELETE FROM schema_migrations WHERE version = 31;
+                 DELETE FROM schema_migrations WHERE version IN (31, 38, 39, 40);
                  PRAGMA user_version = 30;",
             )
             .expect("remove checkout readiness schema");
@@ -3478,6 +4278,127 @@ mod tests {
                 .expect("health")
                 .is_healthy()
         );
+    }
+
+    #[test]
+    fn schema_31_live_bindings_and_rejected_proposals_survive_upgrade() {
+        let directory = TempDir::new().expect("temporary directory");
+        let path = directory.path().join("workboard.sqlite");
+        let mut store = SqliteStore::open(&path).expect("open store");
+        store.write(seed_hierarchy).expect("seed hierarchy");
+        drop(store);
+
+        let connection = Connection::open(&path).expect("open current database");
+        super::drop_workspace_planning_schema(&connection);
+        connection
+            .execute_batch(
+                r#"INSERT INTO checkouts (
+                       id, repository_id, git_worktree_identity, branch, head, availability,
+                       created_at
+                   ) VALUES (
+                       'checkout', 'code-repository', 'worktree', 'feature/live', 'head',
+                       'available', '2026-08-27T08:00:00Z'
+                   );
+                   INSERT INTO native_sessions (
+                       id, provider, native_id, discovered_at
+                   ) VALUES (
+                       'session', 'codex', 'native-session', '2026-08-27T08:00:00Z'
+                   );
+                   INSERT INTO launch_intents (
+                       id, work_item_id, checkout_id, provider, idempotency_key, token_hash,
+                       status, created_at, expires_at, role
+                   ) VALUES (
+                       'launch-intent', 'work-item', 'checkout', 'codex', 'launch-key',
+                       'launch-token', 'bound', '2026-08-27T08:00:00Z',
+                       '2026-08-28T08:00:00Z', 'work_item_execution'
+                   );
+                   INSERT INTO managed_sessions (
+                       id, launch_intent_id, session_id, checkout_id, role, status, managed_from
+                   ) VALUES (
+                       'managed-session', 'launch-intent', 'session', 'checkout',
+                       'work_item_execution', 'bound', '2026-08-27T08:00:00Z'
+                   );
+                   INSERT INTO managed_session_requests (
+                       id, requesting_session_id, work_item_id, provider, idempotency_key,
+                       status, requested_at, launch_intent_id
+                   ) VALUES (
+                       'session-request', 'session', 'work-item', 'codex', 'request-key',
+                       'bound', '2026-08-27T08:00:00Z', 'launch-intent'
+                   );
+                   INSERT INTO recovery_attempts (
+                       id, workspace_id, idempotency_key, requested_at, plan_json, status,
+                       completed_at
+                   ) VALUES (
+                       'recovery-attempt', 'workspace', 'recovery-key',
+                       '2026-08-27T08:00:00Z', '{}', 'completed', '2026-08-27T08:01:00Z'
+                   );
+                   INSERT INTO recovery_entry_outcomes (
+                       attempt_id, session_id, status, launch_intent_id, observed_at
+                   ) VALUES (
+                       'recovery-attempt', 'session', 'bound', 'launch-intent',
+                       '2026-08-27T08:01:00Z'
+                   );
+                   INSERT INTO workflow_runs (
+                       id, feature_id, current_state, started_at
+                   ) VALUES (
+                       'planning-run', 'feature', 'planning_active', '2026-08-27T08:00:00Z'
+                   );
+                   INSERT INTO workflow_events (
+                       id, run_id, sequence, from_state, to_state, actor, occurred_at,
+                       payload_json
+                   ) VALUES (
+                       'proposal-event', 'planning-run', 1, 'planning_active', 'proposal_ready',
+                       'planner', '2026-08-27T08:01:00Z',
+                       '{"proposal":{"work_items":[{"slug":"never-published","dependencies":[]}]}}'
+                   );
+                   INSERT INTO feature_planning_proposals (
+                       feature_id, workflow_run_id, idempotency_key, proposal_json, status,
+                       submitted_at
+                   ) VALUES (
+                       'feature', 'planning-run', 'proposal-key', '{}', 'rejected',
+                       '2026-08-27T08:01:00Z'
+                   );"#,
+            )
+            .expect("seed live schema 31 state");
+        drop(connection);
+
+        let store = SqliteStore::open(&path).expect("upgrade live schema 31 state");
+        let references: (String, String, String) = store
+            .read(|connection| {
+                Ok((
+                    connection.query_row(
+                        "SELECT launch_intent_id FROM managed_sessions WHERE id = 'managed-session'",
+                        [],
+                        |row| row.get(0),
+                    )?,
+                    connection.query_row(
+                        "SELECT launch_intent_id FROM managed_session_requests WHERE id = 'session-request'",
+                        [],
+                        |row| row.get(0),
+                    )?,
+                    connection.query_row(
+                        "SELECT launch_intent_id FROM recovery_entry_outcomes
+                         WHERE attempt_id = 'recovery-attempt' AND session_id = 'session'",
+                        [],
+                        |row| row.get(0),
+                    )?,
+                ))
+            })
+            .expect("read preserved launch intent references");
+
+        assert_eq!(
+            references,
+            (
+                "launch-intent".to_owned(),
+                "launch-intent".to_owned(),
+                "launch-intent".to_owned()
+            )
+        );
+        assert_eq!(
+            store.health().expect("storage health").schema_version,
+            super::CURRENT_SCHEMA_VERSION
+        );
+        assert!(store.health().expect("storage health").is_healthy());
     }
 
     #[test]

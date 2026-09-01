@@ -671,6 +671,7 @@ fn owner_entity(owner: protocol::OwnerProjection) -> protocol::EntityRef {
         protocol::OwnerProjection::Epic(id) => protocol::EntityRef::Epic(id),
         protocol::OwnerProjection::Feature(id) => protocol::EntityRef::Feature(id),
         protocol::OwnerProjection::WorkItem(id) => protocol::EntityRef::WorkItem(id),
+        protocol::OwnerProjection::Workspace(id) => protocol::EntityRef::Workspace(id),
     }
 }
 

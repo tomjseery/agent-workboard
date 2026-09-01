@@ -126,13 +126,13 @@ export type HierarchyWorkItem = { workItem: WorkItemReference, repositoryIds: Ar
 
 export type InvalidationScope = { queries: Array<ReadQueryCode>, owners: Array<EntityRef>, };
 
-export type ManagedSessionRole = "epic_navigation" | "feature_planning" | "work_item_execution" | "debugging" | "review";
+export type ManagedSessionRole = "workspace_planning" | "epic_navigation" | "feature_planning" | "work_item_execution" | "debugging" | "review";
 
 export type ObservedDisplayPath = { displayPath: string, state: EvidenceState, observedFrom: string, observedUntil: string | null, };
 
 export type Operation = { "type": "handshake", "value": HandshakeRequest } | { "type": "query", "value": ReadQuery } | { "type": "command", "value": CommandOperation } | { "type": "subscribe", "value": SubscriptionRequest };
 
-export type OwnerProjection = { "kind": "epic", "id": EpicId } | { "kind": "feature", "id": FeatureId } | { "kind": "work_item", "id": WorkItemId };
+export type OwnerProjection = { "kind": "workspace", "id": WorkspaceId } | { "kind": "epic", "id": EpicId } | { "kind": "feature", "id": FeatureId } | { "kind": "work_item", "id": WorkItemId };
 
 export type ParallelReadiness = { groupKey: string, readyCount: number, waitingCount: number, };
 

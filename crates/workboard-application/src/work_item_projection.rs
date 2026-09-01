@@ -238,7 +238,8 @@ impl WorkboardApplication {
         let snapshot = self.snapshot(workspace_id)?;
         let dependency_ids = self.store.read(|connection| {
             let mut statement = connection.prepare(
-                "SELECT depends_on_work_item_id FROM work_item_dependencies WHERE work_item_id = ?1 ORDER BY depends_on_work_item_id",
+                "SELECT dependency_work_item_id FROM work_item_dependencies
+                 WHERE work_item_id = ?1 ORDER BY dependency_order",
             )?;
             statement
                 .query_map([work_item_id.to_string()], |row| row.get::<_, String>(0))?

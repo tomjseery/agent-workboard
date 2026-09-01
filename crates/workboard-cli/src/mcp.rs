@@ -3,14 +3,17 @@ use std::path::PathBuf;
 
 use serde_json::{Value, json};
 use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 use workboard_application::AppError;
+use workboard_application::follow_up::{SendSessionFollowUp, SystemFollowUpExecutor};
 use workboard_application::workflow_operations::CheckpointWorkItem;
 use workboard_application::workspace::WorkboardApplication;
 use workboard_core::HierarchyOwner;
 
 use super::{
     FeatureProposalRequest, FeaturePublicationRequest, ManagedSessionRequest,
-    WorkItemCheckpointRequest, execute_managed_session_request, workflow_token,
+    SessionFollowUpRequest, WorkItemCheckpointRequest, execute_managed_session_request,
+    workflow_token,
 };
 
 const MAX_MESSAGE_BYTES: usize = 2 * 1024 * 1024;
@@ -103,6 +106,65 @@ fn tool_definitions() -> Value {
             "inputSchema": { "type": "object", "additionalProperties": false }
         },
         {
+            "name": "epic_propose",
+            "description": "Submit a typed Epic proposal from a managed workspace-planning session for explicit user approval.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["title", "body", "idempotencyKey"],
+                "properties": {
+                    "title": { "type": "string", "minLength": 1 },
+                    "slug": { "type": "string" },
+                    "body": { "type": "string", "minLength": 1 },
+                    "idempotencyKey": { "type": "string", "minLength": 1 }
+                },
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "epic_propose_research",
+            "description": "Submit imported or researched Markdown as a typed Epic proposal, recording every source it was read from.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["title", "body", "sources", "idempotencyKey"],
+                "properties": {
+                    "title": { "type": "string", "minLength": 1 },
+                    "slug": { "type": "string" },
+                    "body": { "type": "string", "minLength": 1 },
+                    "sources": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                            "type": "object",
+                            "required": ["path", "contentHash"],
+                            "properties": {
+                                "path": { "type": "string", "minLength": 1 },
+                                "contentHash": { "type": "string", "minLength": 1 }
+                            },
+                            "additionalProperties": false
+                        }
+                    },
+                    "idempotencyKey": { "type": "string", "minLength": 1 }
+                },
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "feature_propose",
+            "description": "Submit a typed Feature proposal under an existing Epic for explicit user approval.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["epicId", "title", "outcome", "idempotencyKey"],
+                "properties": {
+                    "epicId": { "type": "string", "format": "uuid" },
+                    "title": { "type": "string", "minLength": 1 },
+                    "slug": { "type": "string" },
+                    "outcome": { "type": "string", "minLength": 1 },
+                    "idempotencyKey": { "type": "string", "minLength": 1 }
+                },
+                "additionalProperties": false
+            }
+        },
+        {
             "name": "feature_submit_proposal",
             "description": "Submit one complete Feature and Work-item proposal for explicit user approval.",
             "inputSchema": {
@@ -123,6 +185,22 @@ fn tool_definitions() -> Value {
                 "type": "object",
                 "required": ["featureId"],
                 "properties": { "featureId": { "type": "string", "format": "uuid" } },
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "work_items_propose",
+            "description": "Submit additional Work items for the assigned published Feature for explicit user approval.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["featureId", "workItems", "expectedFeatureContentHash", "expectedRepositoryHead", "idempotencyKey"],
+                "properties": {
+                    "featureId": { "type": "string", "format": "uuid" },
+                    "workItems": { "type": "array", "minItems": 1, "items": { "type": "object" } },
+                    "expectedFeatureContentHash": { "type": "string", "minLength": 64, "maxLength": 64 },
+                    "expectedRepositoryHead": { "type": "string", "minLength": 40 },
+                    "idempotencyKey": { "type": "string", "minLength": 1 }
+                },
                 "additionalProperties": false
             }
         },
@@ -160,6 +238,30 @@ fn tool_definitions() -> Value {
                 },
                 "additionalProperties": false
             }
+        },
+        {
+            "name": "session_send_follow_up",
+            "description": "Queue and deliver an ordered follow-up using only Workboard owner and session identity.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["owner", "expectedBindingGeneration", "text", "idempotencyKey"],
+                "properties": {
+                    "owner": {
+                        "type": "object",
+                        "required": ["kind", "id"],
+                        "properties": {
+                            "kind": { "type": "string", "enum": ["feature", "work_item"] },
+                            "id": { "type": "string", "format": "uuid" }
+                        },
+                        "additionalProperties": false
+                    },
+                    "sessionId": { "type": "string", "format": "uuid" },
+                    "expectedBindingGeneration": { "type": "integer", "minimum": 1 },
+                    "text": { "type": "string", "minLength": 1, "maxLength": 65536 },
+                    "idempotencyKey": { "type": "string", "minLength": 1 }
+                },
+                "additionalProperties": false
+            }
         }
     ])
 }
@@ -177,6 +279,33 @@ fn call_tool(application: &mut WorkboardApplication, request: &Value) -> Result<
     let now = OffsetDateTime::now_utc();
     let result = match name {
         "hierarchy_read" => serde_json::to_value(application.assigned_hierarchy(&token, now)?)?,
+        "epic_propose" => {
+            let mut request: Value = arguments;
+            request["proposedAt"] = json!(now.format(&Rfc3339).unwrap_or_default());
+            serde_json::to_value(
+                application
+                    .workspace_planning()
+                    .propose_epic(&token, serde_json::from_value(request)?)?,
+            )?
+        }
+        "epic_propose_research" => {
+            let mut request: Value = arguments;
+            request["proposedAt"] = json!(now.format(&Rfc3339).unwrap_or_default());
+            serde_json::to_value(
+                application
+                    .workspace_planning()
+                    .propose_epic_research(&token, serde_json::from_value(request)?)?,
+            )?
+        }
+        "feature_propose" => {
+            let mut request: Value = arguments;
+            request["proposedAt"] = json!(now.format(&Rfc3339).unwrap_or_default());
+            serde_json::to_value(
+                application
+                    .workspace_planning()
+                    .propose_feature(&token, serde_json::from_value(request)?)?,
+            )?
+        }
         "feature_submit_proposal" => {
             let request: FeatureProposalRequest = serde_json::from_value(arguments)?;
             serde_json::to_value(application.planning_workflows().submit_proposal(
@@ -201,6 +330,15 @@ fn call_tool(application: &mut WorkboardApplication, request: &Value) -> Result<
                     .publish_approved(request.feature_id, now)?,
             )?
         }
+        "work_items_propose" => {
+            let mut request: Value = arguments;
+            request["proposedAt"] = json!(now.format(&Rfc3339).unwrap_or_default());
+            serde_json::to_value(
+                application
+                    .feature_work_item_planning()
+                    .propose(&token, serde_json::from_value(request)?)?,
+            )?
+        }
         "work_checkpoint" => {
             let request: WorkItemCheckpointRequest = serde_json::from_value(arguments)?;
             serde_json::to_value(application.workflow_operations().checkpoint(
@@ -217,6 +355,25 @@ fn call_tool(application: &mut WorkboardApplication, request: &Value) -> Result<
         "session_request" => {
             let request: ManagedSessionRequest = serde_json::from_value(arguments)?;
             execute_managed_session_request(application, &token, request, now)?
+        }
+        "session_send_follow_up" => {
+            let request: SessionFollowUpRequest = serde_json::from_value(arguments)?;
+            let queued = application.follow_ups().queue_authenticated(
+                &token,
+                SendSessionFollowUp {
+                    owner: request.owner,
+                    session_id: request.session_id,
+                    expected_binding_generation: request.expected_binding_generation,
+                    text: request.text,
+                    idempotency_key: request.idempotency_key,
+                    requested_at: now,
+                },
+            )?;
+            let outcome = application
+                .follow_ups()
+                .deliver_next(Some(queued.session_id), now, &SystemFollowUpExecutor)?
+                .unwrap_or(queued);
+            serde_json::to_value(outcome)?
         }
         _ => {
             return Err(AppError::External {
@@ -261,10 +418,15 @@ mod tests {
             names,
             [
                 "hierarchy_read",
+                "epic_propose",
+                "epic_propose_research",
+                "feature_propose",
                 "feature_submit_proposal",
                 "feature_publish",
+                "work_items_propose",
                 "work_checkpoint",
-                "session_request"
+                "session_request",
+                "session_send_follow_up"
             ]
         );
     }
@@ -321,6 +483,6 @@ mod tests {
             }),
         )
         .expect("tools response");
-        assert_eq!(listed["result"]["tools"].as_array().map(Vec::len), Some(5));
+        assert_eq!(listed["result"]["tools"].as_array().map(Vec::len), Some(10));
     }
 }

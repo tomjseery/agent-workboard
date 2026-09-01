@@ -1,11 +1,12 @@
 mod app_server;
 
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 use time::OffsetDateTime;
-use workboard_core::Tool;
+use workboard_core::{LaunchProfile, LaunchProfileError, Tool};
 use workboard_native::{
     AdapterFailure, AdapterFailureKind, AdapterScan, ConversationKind, NativeAdapter,
     NativeConversation, ScanLimits, SourceScan, SourceState, TranscriptBuilder, TranscriptChunk,
@@ -15,10 +16,32 @@ use workboard_native::{
 pub use app_server::{
     APP_SERVER_ADAPTER_VERSION, CodexAppServerClient, CodexAppServerFailure,
     CodexAppServerFailureKind, CodexAppServerLimits, CodexAppServerSnapshot,
-    CodexAppServerStatusObservation, CodexAppServerThread,
+    CodexAppServerStatusObservation, CodexAppServerThread, CodexFollowUpReceipt,
+    CodexFollowUpRequest,
 };
 
 pub const ADAPTER_VERSION: &str = "codex-rollout-v1";
+
+pub fn launch_profile_arguments(
+    profile: &LaunchProfile,
+) -> Result<Vec<OsString>, LaunchProfileError> {
+    profile.validate_for_launch(Tool::Codex, profile.role)?;
+    let effort = profile
+        .effort
+        .ok_or(LaunchProfileError::UnknownEffort)?
+        .as_str();
+    Ok(vec![
+        OsString::from("--model"),
+        OsString::from(
+            profile
+                .model
+                .as_deref()
+                .ok_or(LaunchProfileError::UnknownModel)?,
+        ),
+        OsString::from("--config"),
+        OsString::from(format!("model_reasoning_effort=\"{effort}\"")),
+    ])
+}
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CodexAdapterV1 {
@@ -394,6 +417,29 @@ mod tests {
 
         assert!(text.contains("Assistant-only aurora phrase"));
         assert!(!text.contains("C:/synthetic/repository"));
+    }
+
+    #[test]
+    fn maps_a_validated_profile_without_shell_interpretation() {
+        let profile = workboard_core::LaunchProfile::new(
+            workboard_core::Tool::Codex,
+            "gpt-5.6-sol",
+            workboard_core::ReasoningEffort::High,
+            workboard_core::ManagedSessionRole::WorkItemExecution,
+            workboard_core::LaunchProfileSource::ExplicitOverride,
+        )
+        .expect("valid profile");
+
+        assert_eq!(
+            super::launch_profile_arguments(&profile).expect("profile arguments"),
+            [
+                "--model",
+                "gpt-5.6-sol",
+                "--config",
+                "model_reasoning_effort=\"high\"",
+            ]
+            .map(std::ffi::OsString::from)
+        );
     }
 
     fn find<'a>(

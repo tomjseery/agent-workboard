@@ -398,8 +398,9 @@ suggest candidates but never overrides a managed or user-confirmed association.
 
 ## Managed recovery and Windows Terminal layout
 
-Every Workboard-created CLI enters a durable restore set independent of whether its process is currently
-running. Terminal closure, Workboard failure, provider exit, or computer restart changes live evidence but
+Every Workboard-created CLI enters a durable restore set while it remains part of the open working set. A
+clean native `SessionEnd` records deliberate closure and removes it from recovery automatically. Terminal
+loss, provider crash, Workboard failure, or computer restart without a clean end changes live evidence but
 does not erase intended workspace membership.
 
 `workboard recover` defaults to the last saved active working set. `workboard recover --since yesterday`
@@ -414,7 +415,8 @@ The default Windows layout is:
 - initial directory set to the session's effective worktree;
 - existing live sessions skipped rather than duplicated;
 - missing worktrees safely recreated or shown as explicit conflicts;
-- completed, archived, removed-from-restore, or unresumable sessions excluded unless selected.
+- deliberately closed, completed, archived, removed-from-restore, or unresumable sessions excluded unless
+  selected from history where an explicit replacement is supported.
 
 Workboard records logical grouping and launch intent rather than relying on opaque terminal process state.
 Platform launchers receive argument vectors. Linux terminal restoration can use the existing portable edge
@@ -662,7 +664,8 @@ Status: complete.
 
 - Persist logical Windows Terminal grouping for every managed session and active work set.
 - Implement `workboard recover`, `--since yesterday`, interactive selection, dry-run, one-Feature-per-window,
-  one-session-per-tab launch plans, duplicate skipping, and remove-from-restore behavior.
+  one-session-per-tab launch plans, duplicate skipping, clean-`SessionEnd` retirement, and explicit
+  remove-from-restore behavior.
 - Restore present checkouts, safely recreate missing checkouts, and expose conflicts for dirty, unreachable,
   colliding, unresumable, or provider-incompatible entries.
 - Preserve older sessions on historical worktrees and allow a confirmed new session to replace an

@@ -445,19 +445,8 @@ impl WorkboardApplication {
         feature_id: core::FeatureId,
     ) -> Result<ProposalCommandOutcome, AppError> {
         let approved_at = OffsetDateTime::now_utc();
-        self.store.write_projected(
-            workspace_id,
-            expected_revision,
-            idempotency_key,
-            "approve_feature",
-            |transaction| {
-                crate::planning_workflow::approve_proposal_in(transaction, feature_id, approved_at)
-                    .map(|_| ())
-            },
-            |revision, ()| {
-                proposal_event(workspace_id, revision, feature_id, request_id, Vec::new())
-            },
-        )?;
+        self.planning_workflows()
+            .approve_proposal(feature_id, approved_at)?;
         let publication = self
             .planning_workflows()
             .publish_approved(feature_id, approved_at);
@@ -472,36 +461,18 @@ impl WorkboardApplication {
                 evidence: Vec::new(),
             }],
         };
-        let published_revision = self.projection_revision(workspace_id)?;
-        self.store.write_projected(
+        self.record_proposal_command(
             workspace_id,
-            published_revision,
-            &format!("{idempotency_key}:publication"),
-            "approve_feature_publication",
-            |_| Ok(()),
-            |revision, ()| {
-                proposal_event(
-                    workspace_id,
-                    revision,
-                    feature_id,
-                    request_id,
-                    partial_outcomes.clone(),
-                )
-            },
+            expected_revision,
+            idempotency_key,
+            "approve_feature",
+            request_id,
+            feature_id,
+            partial_outcomes.clone(),
         )?;
         Ok(ProposalCommandOutcome {
             proposal: self.client_feature_proposal(workspace_id, feature_id)?,
-            partial_outcomes: match publication {
-                Ok(_) => Vec::new(),
-                Err(error) => vec![protocol::PartialOutcome {
-                    owner: Some(protocol::EntityRef::Feature(wire_feature_id(feature_id))),
-                    code: error.code().to_owned(),
-                    succeeded: false,
-                    message: error.to_string(),
-                    reconciliation_required: true,
-                    evidence: Vec::new(),
-                }],
-            },
+            partial_outcomes,
         })
     }
 
@@ -514,30 +485,80 @@ impl WorkboardApplication {
         feature_id: core::FeatureId,
         feedback: &str,
     ) -> Result<ProposalCommandOutcome, AppError> {
-        crate::planning_workflow::validate_revision_feedback(feedback)?;
-        let requested_at = OffsetDateTime::now_utc();
-        self.store.write_projected(
+        self.planning_workflows().request_proposal_revision(
+            feature_id,
+            feedback,
+            OffsetDateTime::now_utc(),
+        )?;
+        self.record_proposal_command(
             workspace_id,
             expected_revision,
             idempotency_key,
             "request_feature_revision",
-            |transaction| {
-                crate::planning_workflow::request_proposal_revision_in(
-                    transaction,
-                    feature_id,
-                    feedback,
-                    requested_at,
-                )
-                .map(|_| ())
-            },
-            |revision, ()| {
-                proposal_event(workspace_id, revision, feature_id, request_id, Vec::new())
-            },
+            request_id,
+            feature_id,
+            Vec::new(),
         )?;
         Ok(ProposalCommandOutcome {
             proposal: self.client_feature_proposal(workspace_id, feature_id)?,
             partial_outcomes: Vec::new(),
         })
+    }
+
+    pub fn reject_client_feature(
+        &mut self,
+        workspace_id: core::WorkspaceId,
+        expected_revision: u64,
+        idempotency_key: &str,
+        request_id: protocol::RequestId,
+        feature_id: core::FeatureId,
+        reason: &str,
+    ) -> Result<ProposalCommandOutcome, AppError> {
+        self.planning_workflows()
+            .reject_proposal(feature_id, reason, OffsetDateTime::now_utc())?;
+        self.record_proposal_command(
+            workspace_id,
+            expected_revision,
+            idempotency_key,
+            "reject_feature",
+            request_id,
+            feature_id,
+            Vec::new(),
+        )?;
+        Ok(ProposalCommandOutcome {
+            proposal: self.client_feature_proposal(workspace_id, feature_id)?,
+            partial_outcomes: Vec::new(),
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn record_proposal_command(
+        &mut self,
+        workspace_id: core::WorkspaceId,
+        expected_revision: u64,
+        idempotency_key: &str,
+        operation: &'static str,
+        request_id: protocol::RequestId,
+        feature_id: core::FeatureId,
+        partial_outcomes: Vec<protocol::PartialOutcome>,
+    ) -> Result<(), AppError> {
+        self.store.write_projected(
+            workspace_id,
+            expected_revision,
+            idempotency_key,
+            operation,
+            |_| Ok(()),
+            |revision, ()| {
+                proposal_event(
+                    workspace_id,
+                    revision,
+                    feature_id,
+                    request_id,
+                    partial_outcomes.clone(),
+                )
+            },
+        )?;
+        Ok(())
     }
 
     pub fn start_client_session(
@@ -579,6 +600,19 @@ impl WorkboardApplication {
                 }
             },
         };
+        let repository_slug = snapshot
+            .repositories
+            .iter()
+            .find(|repository| repository.id == repository_id)
+            .map(|repository| repository.slug.to_string())
+            .ok_or_else(|| {
+                AppError::Domain("the launch repository is not in this Workspace".to_owned())
+            })?;
+        let capability = crate::session_launch::CapabilityLaunchInputs::for_managed_launch(
+            self.database_path().to_path_buf(),
+            tool,
+            &repository_slug,
+        )?;
         let readiness = self.checkout_service().prepare_work_item(
             crate::checkout::PrepareWorkItemCheckout {
                 work_item_id,
@@ -604,9 +638,14 @@ impl WorkboardApplication {
                     created_at: now,
                     expires_at: now + time::Duration::minutes(2),
                     resume_context: None,
+                    profile: core::LaunchProfile::suggested(
+                        tool,
+                        core::ManagedSessionRole::WorkItemExecution,
+                    ),
                     initial_prompt: Some(crate::workflow_operations::work_item_bootstrap_prompt(
                         work_item_id,
                     )),
+                    capability,
                 })?;
         self.session_launch()
             .execute(&prepared, &crate::native_launch::SystemLaunchExecutor)?;
@@ -645,6 +684,20 @@ impl WorkboardApplication {
             target.checkout.path.clone(),
             target.checkout.title.clone(),
         )?;
+        let repository_slug = self
+            .snapshot(workspace_id)?
+            .repositories
+            .iter()
+            .find(|repository| repository.id == target.checkout.repository_id)
+            .map(|repository| repository.slug.to_string())
+            .ok_or_else(|| {
+                AppError::Domain("the launch repository is not in this Workspace".to_owned())
+            })?;
+        let capability = crate::session_launch::CapabilityLaunchInputs::for_managed_launch(
+            self.database_path().to_path_buf(),
+            target.tool,
+            &repository_slug,
+        )?;
         let terminal_window = self
             .snapshot(workspace_id)?
             .work_items
@@ -671,7 +724,9 @@ impl WorkboardApplication {
                     created_at: now,
                     expires_at: now + time::Duration::minutes(2),
                     resume_context: Some(context),
+                    profile: core::LaunchProfile::suggested(target.tool, target.role),
                     initial_prompt: None,
+                    capability,
                 })?;
         self.session_launch()
             .execute(&prepared, &crate::native_launch::SystemLaunchExecutor)?;
@@ -706,6 +761,9 @@ impl WorkboardApplication {
             }
             core::HierarchyOwner::WorkItem(id) => {
                 protocol::EntityRef::WorkItem(protocol::WorkItemId::from_uuid(*id.as_uuid()))
+            }
+            core::HierarchyOwner::Workspace(id) => {
+                protocol::EntityRef::Workspace(wire_workspace_id(id))
             }
         };
         self.store.write_projected(
@@ -1115,6 +1173,9 @@ fn owner(owner: core::HierarchyOwner) -> protocol::OwnerProjection {
         core::HierarchyOwner::Epic(id) => protocol::OwnerProjection::Epic(epic_id(id)),
         core::HierarchyOwner::Feature(id) => protocol::OwnerProjection::Feature(feature_id(id)),
         core::HierarchyOwner::WorkItem(id) => protocol::OwnerProjection::WorkItem(work_item_id(id)),
+        core::HierarchyOwner::Workspace(id) => {
+            protocol::OwnerProjection::Workspace(wire_workspace_id(id))
+        }
     }
 }
 
@@ -1127,6 +1188,9 @@ fn provider(tool: core::Tool) -> protocol::Provider {
 
 fn role(role: core::ManagedSessionRole) -> protocol::ManagedSessionRole {
     match role {
+        core::ManagedSessionRole::WorkspacePlanning => {
+            protocol::ManagedSessionRole::WorkspacePlanning
+        }
         core::ManagedSessionRole::EpicNavigation => protocol::ManagedSessionRole::EpicNavigation,
         core::ManagedSessionRole::FeaturePlanning => protocol::ManagedSessionRole::FeaturePlanning,
         core::ManagedSessionRole::WorkItemExecution => {

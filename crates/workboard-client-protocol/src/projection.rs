@@ -768,6 +768,7 @@ pub struct WorkItemProjection {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", content = "id", rename_all = "snake_case")]
 pub enum OwnerProjection {
+    Workspace(WorkspaceId),
     Epic(EpicId),
     Feature(FeatureId),
     WorkItem(WorkItemId),
@@ -893,6 +894,7 @@ pub enum CheckoutAvailability {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum ManagedSessionRole {
+    WorkspacePlanning,
     EpicNavigation,
     FeaturePlanning,
     WorkItemExecution,

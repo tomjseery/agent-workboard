@@ -6,8 +6,8 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use workboard_core::{
     CheckoutId, CheckoutPathId, ConversationId, FeatureId, HierarchyOwner, LaunchIntentId,
-    ManagedSessionRole, RecoveryAttemptId, RepositoryId, TerminalLayoutId, TerminalTabId, Tool,
-    WorkspaceId,
+    LaunchProfile, ManagedSessionRole, RecoveryAttemptId, RepositoryId, TerminalLayoutId,
+    TerminalTabId, Tool, WorkspaceId,
 };
 
 use crate::AppError;
@@ -53,6 +53,7 @@ pub struct RecoveryEntry {
     pub owner: HierarchyOwner,
     pub role: ManagedSessionRole,
     pub tool: Tool,
+    pub profile: LaunchProfile,
     pub native_id: String,
     pub checkout_id: CheckoutId,
     pub repository_id: RepositoryId,
@@ -139,6 +140,10 @@ struct RecoveryRow {
     latest_live_expires_at: Option<String>,
     latest_launch_status: Option<String>,
     latest_launch_expires_at: Option<String>,
+    profile_schema: Option<u32>,
+    profile_model: Option<String>,
+    profile_effort: Option<String>,
+    profile_source: Option<String>,
 }
 
 pub struct RecoveryService<'a> {
@@ -182,7 +187,8 @@ impl<'a> RecoveryService<'a> {
                         (SELECT launch.expires_at FROM launch_intents launch
                          WHERE launch.provider = session.provider
                            AND launch.expected_native_id = session.native_id
-                         ORDER BY launch.created_at DESC LIMIT 1)
+                         ORDER BY launch.created_at DESC LIMIT 1),
+                        profile.schema_version, profile.model, profile.effort, profile.source
                  FROM restore_entries restore
                  JOIN native_sessions session ON session.id = restore.session_id
                  JOIN managed_sessions managed ON managed.id = (
@@ -192,6 +198,7 @@ impl<'a> RecoveryService<'a> {
                  )
                  LEFT JOIN launch_intents managed_launch
                    ON managed_launch.id = managed.launch_intent_id
+                 LEFT JOIN launch_profiles profile ON profile.id = managed.profile_id
                  JOIN checkouts checkout ON checkout.id = managed.checkout_id
                  JOIN repositories repository ON repository.id = checkout.repository_id
                  JOIN repository_paths repository_path
@@ -246,6 +253,10 @@ impl<'a> RecoveryService<'a> {
                         latest_live_expires_at: row.get(18)?,
                         latest_launch_status: row.get(19)?,
                         latest_launch_expires_at: row.get(20)?,
+                        profile_schema: row.get(21)?,
+                        profile_model: row.get(22)?,
+                        profile_effort: row.get(23)?,
+                        profile_source: row.get(24)?,
                     })
                 })?
                 .collect::<Result<Vec<_>, _>>()
@@ -549,6 +560,23 @@ impl<'a> RecoveryService<'a> {
     ) -> Result<RecoveryEntry, AppError> {
         let session_id = parse_id(&row.session_id)?;
         let tool = parse_tool(&row.provider)?;
+        let role = parse_role(&row.role)?;
+        let profile = match (
+            row.profile_schema,
+            row.profile_model,
+            row.profile_effort,
+            row.profile_source,
+        ) {
+            (Some(schema_version), Some(model), Some(effort), Some(source)) => LaunchProfile {
+                schema_version,
+                tool,
+                model: Some(model),
+                effort: Some(parse_wire(&effort)?),
+                role,
+                source: parse_wire(&source)?,
+            },
+            _ => LaunchProfile::legacy_unknown(tool, role),
+        };
         let owner = parse_owner(row.epic_id, row.feature_id, row.work_item_id)?;
         let feature_id = row.group_feature_id.as_deref().map(parse_id).transpose()?;
         let checkout_path = PathBuf::from(&row.checkout_path);
@@ -613,8 +641,9 @@ impl<'a> RecoveryService<'a> {
         Ok(RecoveryEntry {
             session_id,
             owner,
-            role: parse_role(&row.role)?,
+            role,
             tool,
+            profile,
             native_id: row.native_id,
             checkout_id: parse_id(&row.checkout_id)?,
             repository_id: parse_id(&row.repository_id)?,
@@ -751,6 +780,13 @@ fn parse_tool(value: &str) -> Result<Tool, AppError> {
 }
 
 fn parse_role(value: &str) -> Result<ManagedSessionRole, AppError> {
+    serde_json::from_value(serde_json::Value::String(value.to_owned())).map_err(Into::into)
+}
+
+fn parse_wire<T>(value: &str) -> Result<T, AppError>
+where
+    T: serde::de::DeserializeOwned,
+{
     serde_json::from_value(serde_json::Value::String(value.to_owned())).map_err(Into::into)
 }
 

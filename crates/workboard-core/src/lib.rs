@@ -1,11 +1,16 @@
+mod actions;
 mod association;
 mod conversation;
 mod hierarchy;
 mod identity;
 mod launch;
 mod live;
+mod profile;
 mod workflow;
 
+pub use actions::{
+    AVAILABLE_ACTIONS_SCHEMA_VERSION, AvailableAction, AvailableActionKind, AvailableActions,
+};
 pub use association::{
     AssociationAction, AssociationAuthority, AssociationEvent, AssociationEventError,
     AssociationEventVersion, AssociationEvidence, AssociationEvidenceError,
@@ -27,17 +32,22 @@ pub use identity::{
     DocumentId, DocumentReferenceId, EpicId, FeatureId, GitOperationIntentId, ImportBatchId,
     LaunchIntentId, LaunchLeaseId, LiveObservationId, ManagedSessionId, ManagedSessionRequestId,
     OperationIntentId, RecoveryAttemptId, RepositoryId, RepositoryPathId, RestoreMembershipId,
-    SessionBindingId, TerminalLayoutId, TerminalTabId, WorkItemCheckpointId, WorkItemId,
-    WorkflowEventId, WorkflowRunId, WorkspaceId, WorktreeId,
+    SessionBindingId, SessionFollowUpId, TerminalLayoutId, TerminalTabId, WorkItemCheckpointId,
+    WorkItemId, WorkflowEventId, WorkflowRunId, WorkspaceId, WorktreeId,
 };
 pub use launch::{
     CommandSpec, LaunchSpecError, ManagedLaunchMode, ManagedLaunchRequest, ManagedLaunchSpec,
-    ResumeLaunchSpec, TerminalKind, WORKBOARD_LAUNCH_TOKEN_ENV, WORKBOARD_WORKFLOW_TOKEN_ENV,
-    sanitise_terminal_title,
+    ResumeLaunchSpec, TerminalKind, WORKBOARD_BUNDLE_ENV, WORKBOARD_CHECKOUT_ENV,
+    WORKBOARD_LAUNCH_TOKEN_ENV, WORKBOARD_OWNER_ENV, WORKBOARD_REPOSITORY_ENV,
+    WORKBOARD_SESSION_ROLE_ENV, WORKBOARD_WORKFLOW_TOKEN_ENV, sanitise_terminal_title,
 };
 pub use live::{
     ConversationLifecycle, LiveEvidenceSource, LiveStatus, ProcessIdentity, ProcessIdentityError,
     Resumability,
+};
+pub use profile::{
+    LAUNCH_PROFILE_SCHEMA_VERSION, LaunchProfile, LaunchProfileError, LaunchProfileSource,
+    ReasoningEffort,
 };
 pub use workflow::{
     DocumentKind, GitOperationKind, IntentStatus, ManagedSessionRole, NextActionKind,

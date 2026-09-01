@@ -1,4 +1,5 @@
 use std::io::{self, Stdout};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -14,8 +15,9 @@ use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 use ratatui::{Frame, Terminal};
 use workboard_application::AppError;
 use workboard_core::{
-    CheckoutAvailability, HierarchyOwner, WorkItem, WorkItemStatus, WorkflowState,
-    WorkspaceSnapshot,
+    CheckoutAccessMode, CheckoutAvailability, ConversationId, HierarchyOwner, LaunchProfile,
+    LaunchProfileSource, ManagedSessionRole, PRODUCT_NAME, ReasoningEffort, RepositoryId,
+    Resumability, Tool, WorkItem, WorkItemStatus, WorkflowState, WorkspaceSnapshot,
 };
 
 use crate::selector::{RankedCandidate, SelectionCandidate, SelectionResult, resolve};
@@ -24,6 +26,275 @@ use crate::selector::{RankedCandidate, SelectionCandidate, SelectionResult, reso
 enum BoardControl {
     Continue,
     Exit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LaunchOption {
+    pub session_id: Option<ConversationId>,
+    pub writer_reservation_key: Option<String>,
+    pub repository_id: RepositoryId,
+    pub provider: Tool,
+    pub profile: LaunchProfile,
+    pub role: ManagedSessionRole,
+    pub access_mode: CheckoutAccessMode,
+    pub status: String,
+    pub last_activity: Option<time::OffsetDateTime>,
+    pub checkout: PathBuf,
+    pub branch: Option<String>,
+    pub resumability: Resumability,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LaunchSelection {
+    pub session_id: Option<ConversationId>,
+    pub writer_reservation_key: Option<String>,
+    pub repository_id: RepositoryId,
+    pub provider: Tool,
+    pub profile: LaunchProfile,
+    pub role: ManagedSessionRole,
+    pub access_mode: CheckoutAccessMode,
+}
+
+struct LaunchPickerState {
+    title: String,
+    options: Vec<LaunchOption>,
+    selected: usize,
+}
+
+impl LaunchPickerState {
+    fn selected(&self) -> Option<&LaunchOption> {
+        self.options.get(self.selected)
+    }
+
+    fn selected_mut(&mut self) -> Option<&mut LaunchOption> {
+        self.options.get_mut(self.selected)
+    }
+
+    fn move_down(&mut self) {
+        self.selected = self
+            .selected
+            .saturating_add(1)
+            .min(self.options.len().saturating_sub(1));
+    }
+
+    fn cycle_model(&mut self) {
+        let Some(option) = self.selected_mut() else {
+            return;
+        };
+        let models: &[&str] = match option.provider {
+            Tool::Claude => &["sonnet", "opus", "haiku"],
+            Tool::Codex => &["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
+        };
+        let current = option.profile.model.as_deref();
+        let index = models
+            .iter()
+            .position(|model| Some(*model) == current)
+            .map_or(0, |index| index.saturating_add(1) % models.len());
+        option.profile.model = Some(models[index].to_owned());
+        option.profile.source = LaunchProfileSource::ExplicitOverride;
+    }
+
+    fn cycle_effort(&mut self) {
+        let Some(option) = self.selected_mut() else {
+            return;
+        };
+        let efforts: &[ReasoningEffort] = match option.provider {
+            Tool::Claude => &[
+                ReasoningEffort::Low,
+                ReasoningEffort::Medium,
+                ReasoningEffort::High,
+                ReasoningEffort::Xhigh,
+                ReasoningEffort::Max,
+            ],
+            Tool::Codex => &[
+                ReasoningEffort::Low,
+                ReasoningEffort::Medium,
+                ReasoningEffort::High,
+                ReasoningEffort::Xhigh,
+            ],
+        };
+        let index = efforts
+            .iter()
+            .position(|effort| Some(*effort) == option.profile.effort)
+            .map_or(0, |index| index.saturating_add(1) % efforts.len());
+        option.profile.effort = Some(efforts[index]);
+        option.profile.source = LaunchProfileSource::ExplicitOverride;
+    }
+
+    fn cycle_role(&mut self) {
+        let Some(option) = self.selected_mut() else {
+            return;
+        };
+        if option.session_id.is_some() {
+            return;
+        }
+        option.role = match option.role {
+            ManagedSessionRole::WorkItemExecution => ManagedSessionRole::Debugging,
+            ManagedSessionRole::Debugging => ManagedSessionRole::Review,
+            _ => ManagedSessionRole::WorkItemExecution,
+        };
+        option.profile.role = option.role;
+        option.profile.source = LaunchProfileSource::ExplicitOverride;
+    }
+
+    fn selection(&self) -> Option<LaunchSelection> {
+        self.selected().map(|option| LaunchSelection {
+            session_id: option.session_id,
+            writer_reservation_key: option.writer_reservation_key.clone(),
+            repository_id: option.repository_id,
+            provider: option.provider,
+            profile: option.profile.clone(),
+            role: option.role,
+            access_mode: option.access_mode,
+        })
+    }
+}
+
+pub fn launch_picker(
+    title: &str,
+    options: Vec<LaunchOption>,
+) -> Result<Option<LaunchSelection>, AppError> {
+    let mut state = LaunchPickerState {
+        title: title.to_owned(),
+        options,
+        selected: 0,
+    };
+    let mut terminal = TerminalSession::new()?;
+    loop {
+        terminal
+            .terminal
+            .draw(|frame| render_launch_picker(frame, &state))
+            .map_err(terminal_error)?;
+        if event::poll(Duration::from_millis(100)).map_err(terminal_error)?
+            && let Event::Key(key) = event::read().map_err(terminal_error)?
+            && matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+        {
+            match key.code {
+                KeyCode::Esc => return Ok(None),
+                KeyCode::Enter | KeyCode::Char('s') => return Ok(state.selection()),
+                KeyCode::Down | KeyCode::Char('j') => state.move_down(),
+                KeyCode::Up | KeyCode::Char('k') => {
+                    state.selected = state.selected.saturating_sub(1);
+                }
+                KeyCode::Char('m') => state.cycle_model(),
+                KeyCode::Char('e') => state.cycle_effort(),
+                KeyCode::Char('r') => state.cycle_role(),
+                _ => {}
+            }
+        }
+    }
+}
+
+fn render_launch_picker(frame: &mut Frame<'_>, state: &LaunchPickerState) {
+    let sections = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Min(6),
+        Constraint::Length(10),
+        Constraint::Length(2),
+    ])
+    .split(frame.area());
+    frame.render_widget(
+        Paragraph::new("Choose an associated Workboard session or start another managed CLI")
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(state.title.clone()),
+            ),
+        sections[0],
+    );
+    let items = state
+        .options
+        .iter()
+        .enumerate()
+        .map(|(index, option)| {
+            let marker = if index == state.selected { ">" } else { " " };
+            let action = if option.session_id.is_some() {
+                "Resume"
+            } else {
+                "New"
+            };
+            ListItem::new(format!(
+                "{marker} {action} {}  {}  {}  {}",
+                tool_title(option.provider),
+                option.profile.model.as_deref().unwrap_or("unknown"),
+                role_title(option.role),
+                option.status,
+            ))
+        })
+        .collect::<Vec<_>>();
+    frame.render_widget(
+        List::new(items).block(Block::default().borders(Borders::ALL).title("Managed CLIs")),
+        sections[1],
+    );
+    let details = state.selected().map_or_else(
+        || vec![Line::from("No launch options")],
+        |option| {
+            vec![
+                Line::from(format!("Provider: {}", tool_title(option.provider))),
+                Line::from(format!(
+                    "Model / effort: {} / {}",
+                    option.profile.model.as_deref().unwrap_or("unknown"),
+                    option
+                        .profile
+                        .effort
+                        .map_or("unknown", ReasoningEffort::as_str),
+                )),
+                Line::from(format!("Role: {}", role_title(option.role))),
+                Line::from(format!("Access: {}", access_mode_title(option.access_mode))),
+                Line::from(format!("Status: {}", option.status)),
+                Line::from(format!(
+                    "Activity: {}",
+                    option
+                        .last_activity
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "unknown".to_owned())
+                )),
+                Line::from(format!("Checkout: {}", option.checkout.display())),
+                Line::from(format!(
+                    "Branch / resumability: {} / {:?}",
+                    option.branch.as_deref().unwrap_or("materialize on Start"),
+                    option.resumability,
+                )),
+            ]
+        },
+    );
+    frame.render_widget(
+        Paragraph::new(details).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Configuration"),
+        ),
+        sections[2],
+    );
+    frame.render_widget(
+        Paragraph::new("Up/Down select  m model  e effort  r role  Enter/s Start  Esc cancel"),
+        sections[3],
+    );
+}
+
+fn tool_title(tool: Tool) -> &'static str {
+    match tool {
+        Tool::Claude => "Claude",
+        Tool::Codex => "Codex",
+    }
+}
+
+fn role_title(role: ManagedSessionRole) -> &'static str {
+    match role {
+        ManagedSessionRole::WorkspacePlanning => "workspace planning",
+        ManagedSessionRole::EpicNavigation => "Epic navigation",
+        ManagedSessionRole::FeaturePlanning => "Feature planning",
+        ManagedSessionRole::WorkItemExecution => "execution",
+        ManagedSessionRole::Debugging => "debugging",
+        ManagedSessionRole::Review => "review",
+    }
+}
+
+fn access_mode_title(access_mode: CheckoutAccessMode) -> &'static str {
+    match access_mode {
+        CheckoutAccessMode::WriteIsolated => "write isolated",
+        CheckoutAccessMode::ReadOnlyShared => "read-only shared",
+    }
 }
 
 pub struct BoardState {
@@ -231,7 +502,7 @@ pub fn checklist(
 
 pub fn plain(snapshot: &WorkspaceSnapshot) -> String {
     let mut output = format!(
-        "Agent Workboard: {}\nRepositories: {}\nEpics: {}\nFeatures: {}\nWork items: {}\n",
+        "{PRODUCT_NAME}: {}\nRepositories: {}\nEpics: {}\nFeatures: {}\nWork items: {}\n",
         snapshot.workspace.title,
         snapshot.repositories.len(),
         snapshot.epics.len(),
@@ -427,7 +698,7 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, state: &BoardState) {
         .join(", ");
     let title = Line::from(vec![
         styled(
-            " Agent Workboard ",
+            format!(" {PRODUCT_NAME} "),
             state.no_color,
             Color::Cyan,
             Modifier::BOLD,
@@ -608,7 +879,7 @@ fn render_details(frame: &mut Frame<'_>, area: Rect, state: &BoardState) {
             lines.push(Line::from(format!(
                 "  {} {}",
                 session.native.tool(),
-                session.native.native_id()
+                session.id
             )));
         }
     }
@@ -795,14 +1066,15 @@ mod tests {
     use ratatui::backend::TestBackend;
     use time::OffsetDateTime;
     use workboard_core::{
-        AssociationIntervalId, Checkout, CheckoutAvailability, CheckoutId, CheckoutPathId,
-        CheckoutPathInterval, ConversationId, ConversationRef, DocumentId, EffectiveCheckout, Epic,
-        EpicId, Feature, FeatureId, ManagedSessionRole, NativeSession, NativeSessionAssociation,
-        Repository, RepositoryId, Slug, Tool, WorkItem, WorkItemId, WorkItemKey, WorkItemStatus,
-        WorkflowState, Workspace, WorkspaceId, WorkspaceSnapshot,
+        AssociationIntervalId, Checkout, CheckoutAccessMode, CheckoutAvailability, CheckoutId,
+        CheckoutPathId, CheckoutPathInterval, ConversationId, ConversationRef, DocumentId,
+        EffectiveCheckout, Epic, EpicId, Feature, FeatureId, LaunchProfile, ManagedSessionRole,
+        NativeSession, NativeSessionAssociation, Repository, RepositoryId, Resumability, Slug,
+        Tool, WorkItem, WorkItemId, WorkItemKey, WorkItemStatus, WorkflowState, Workspace,
+        WorkspaceId, WorkspaceSnapshot,
     };
 
-    use super::{BoardControl, BoardState, plain, render};
+    use super::{BoardControl, BoardState, LaunchOption, LaunchPickerState, plain, render};
 
     fn empty_snapshot() -> WorkspaceSnapshot {
         let planning_repository_id = RepositoryId::generate();
@@ -934,6 +1206,45 @@ mod tests {
             .join("\n")
     }
 
+    fn render_launch_picker_text(state: &LaunchPickerState) -> String {
+        let backend = TestBackend::new(140, 30);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| super::render_launch_picker(frame, state))
+            .expect("render launch picker");
+        let buffer = terminal.backend().buffer();
+        buffer
+            .content()
+            .chunks(buffer.area.width as usize)
+            .map(|cells| cells.iter().map(|cell| cell.symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn launch_option(
+        provider: Tool,
+        session_id: Option<ConversationId>,
+        role: ManagedSessionRole,
+        access_mode: CheckoutAccessMode,
+        status: &str,
+        resumability: Resumability,
+    ) -> LaunchOption {
+        LaunchOption {
+            session_id,
+            writer_reservation_key: None,
+            repository_id: RepositoryId::generate(),
+            provider,
+            profile: LaunchProfile::suggested(provider, role),
+            role,
+            access_mode,
+            status: status.to_owned(),
+            last_activity: Some(OffsetDateTime::UNIX_EPOCH),
+            checkout: "C:/worktrees/managed".into(),
+            branch: Some("feature/managed".to_owned()),
+            resumability,
+        }
+    }
+
     #[test]
     fn empty_terminal_fixture_is_explicit() {
         let rendered = render_text(empty_snapshot(), true);
@@ -950,7 +1261,8 @@ mod tests {
         assert!(rendered.contains("missing"));
         assert!(rendered.contains("inherited"));
         assert!(rendered.contains("historical"));
-        assert!(rendered.contains("Codex thread-1"));
+        assert!(rendered.contains("Codex "));
+        assert!(!rendered.contains("thread-1"));
         assert!(rendered.contains("Reconciliation required"));
     }
 
@@ -982,6 +1294,151 @@ mod tests {
             state.selected_work_item().map(|item| item.title.as_str()),
             Some("Availability API")
         );
+    }
+
+    #[test]
+    fn launch_picker_changes_profile_and_role_before_start() {
+        let repository_id = RepositoryId::generate();
+        let mut state = LaunchPickerState {
+            title: "Start Work item".to_owned(),
+            options: vec![LaunchOption {
+                session_id: None,
+                writer_reservation_key: None,
+                repository_id,
+                provider: Tool::Codex,
+                profile: LaunchProfile::suggested(
+                    Tool::Codex,
+                    ManagedSessionRole::WorkItemExecution,
+                ),
+                role: ManagedSessionRole::WorkItemExecution,
+                access_mode: CheckoutAccessMode::WriteIsolated,
+                status: "new".to_owned(),
+                last_activity: None,
+                checkout: "C:/worktrees/materialize-on-start".into(),
+                branch: None,
+                resumability: Resumability::Unknown,
+            }],
+            selected: 0,
+        };
+
+        state.cycle_model();
+        state.cycle_effort();
+        state.cycle_role();
+        let selection = state.selection().expect("launch selection");
+        assert_eq!(selection.profile.model.as_deref(), Some("gpt-5.6-sol"));
+        assert_eq!(
+            selection.profile.effort.map(|value| value.as_str()),
+            Some("xhigh")
+        );
+        assert_eq!(selection.role, ManagedSessionRole::Debugging);
+        assert_eq!(selection.profile.role, ManagedSessionRole::Debugging);
+    }
+
+    #[test]
+    fn launch_picker_zero_session_fixture_shows_both_new_providers() {
+        let state = LaunchPickerState {
+            title: "Start Work item".to_owned(),
+            options: vec![
+                launch_option(
+                    Tool::Claude,
+                    None,
+                    ManagedSessionRole::WorkItemExecution,
+                    CheckoutAccessMode::WriteIsolated,
+                    "ready",
+                    Resumability::Unknown,
+                ),
+                launch_option(
+                    Tool::Codex,
+                    None,
+                    ManagedSessionRole::WorkItemExecution,
+                    CheckoutAccessMode::WriteIsolated,
+                    "ready",
+                    Resumability::Unknown,
+                ),
+            ],
+            selected: 0,
+        };
+
+        let rendered = render_launch_picker_text(&state);
+        assert!(rendered.contains("New Claude"));
+        assert!(rendered.contains("New Codex"));
+        assert!(rendered.contains("Access: write isolated"));
+        assert!(rendered.contains("Enter/s Start"));
+    }
+
+    #[test]
+    fn launch_picker_one_live_session_fixture_reports_exact_resume_facts() {
+        let state = LaunchPickerState {
+            title: "Continue Work item".to_owned(),
+            options: vec![launch_option(
+                Tool::Codex,
+                Some(ConversationId::generate()),
+                ManagedSessionRole::Debugging,
+                CheckoutAccessMode::ReadOnlyShared,
+                "bound / Active",
+                Resumability::Validated,
+            )],
+            selected: 0,
+        };
+
+        let rendered = render_launch_picker_text(&state);
+        assert!(rendered.contains("Resume Codex"));
+        assert!(rendered.contains("debugging"));
+        assert!(rendered.contains("bound / Active"));
+        assert!(rendered.contains("Activity: 1970-01-01"));
+        assert!(rendered.contains("Access: read-only shared"));
+        assert!(rendered.contains("feature/managed / Validated"));
+    }
+
+    #[test]
+    fn launch_picker_many_session_fixture_keeps_history_and_new_choices_visible() {
+        let state = LaunchPickerState {
+            title: "Continue Work item".to_owned(),
+            options: vec![
+                launch_option(
+                    Tool::Claude,
+                    Some(ConversationId::generate()),
+                    ManagedSessionRole::Review,
+                    CheckoutAccessMode::WriteIsolated,
+                    "stopped / Stopped",
+                    Resumability::Missing,
+                ),
+                launch_option(
+                    Tool::Codex,
+                    Some(ConversationId::generate()),
+                    ManagedSessionRole::WorkItemExecution,
+                    CheckoutAccessMode::WriteIsolated,
+                    "bound / Idle",
+                    Resumability::Validated,
+                ),
+                launch_option(
+                    Tool::Claude,
+                    None,
+                    ManagedSessionRole::WorkItemExecution,
+                    CheckoutAccessMode::WriteIsolated,
+                    "ready",
+                    Resumability::Unknown,
+                ),
+                launch_option(
+                    Tool::Codex,
+                    None,
+                    ManagedSessionRole::WorkItemExecution,
+                    CheckoutAccessMode::WriteIsolated,
+                    "ready",
+                    Resumability::Unknown,
+                ),
+            ],
+            selected: 1,
+        };
+
+        let rendered = render_launch_picker_text(&state);
+        assert!(rendered.contains("Resume Claude"));
+        assert!(rendered.contains("review"));
+        assert!(rendered.contains("stopped / Stopped"));
+        assert!(rendered.contains("Resume Codex"));
+        assert!(rendered.contains("bound / Idle"));
+        assert!(rendered.contains("New Claude"));
+        assert!(rendered.contains("New Codex"));
     }
 
     #[test]
