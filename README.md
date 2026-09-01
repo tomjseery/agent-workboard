@@ -13,6 +13,9 @@ The unsigned Windows dogfood archive installs per user and contains the CLI, opt
 operational documentation, checksums, SBOM, and provenance. It requires neither Node.js nor a source checkout
 at runtime. See the [Windows installation, upgrade, backup, recovery, and uninstall guide](docs/operations/WINDOWS.md).
 
+Configuration and work state survive package upgrades. After the first installation, update from a published
+GitHub Release with `workboard update`; use `workboard update --check` to check without installing.
+
 ## Managed capability isolation
 
 Workboard skills, hooks, tokens, and assignments are never installed globally. They are injected only into a

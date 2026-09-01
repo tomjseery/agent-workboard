@@ -72,11 +72,30 @@ try {
         & $workboard --database $database --json recover --dry-run | Out-Null
         & $workboard --database $database backup (Join-Path $testRoot 'backup\workboard.sqlite') | Out-Null
         & $workboard --database $database export (Join-Path $testRoot 'export') | Out-Null
-        foreach ($command in 'plan', 'feature', 'work', 'session', 'recover') {
+        foreach ($command in 'plan', 'feature', 'work', 'session', 'recover', 'update') {
             $help = & $workboard $command --help
             if ($LASTEXITCODE -ne 0 -or -not $help) {
                 throw "Packaged command is unavailable: $command"
             }
+        }
+
+        $installedManifest = Join-Path $installRoot 'installed-manifest.json'
+        $manifestWriteTime = (Get-Item -LiteralPath $installedManifest).LastWriteTimeUtc
+        & $workboard update --archive $Archive --checksum "$Archive.sha256" --force | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw 'The packaged updater did not start.'
+        }
+        $updateDeadline = [DateTime]::UtcNow.AddSeconds(30)
+        while ((Get-Item -LiteralPath $installedManifest).LastWriteTimeUtc -le $manifestWriteTime -and
+            [DateTime]::UtcNow -lt $updateDeadline) {
+            Start-Sleep -Milliseconds 100
+        }
+        if ((Get-Item -LiteralPath $installedManifest).LastWriteTimeUtc -le $manifestWriteTime) {
+            throw 'The packaged updater did not complete.'
+        }
+        & $workboard --database $database --json show | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw 'The in-place update did not preserve the Workboard database.'
         }
 
         $daemonProcess = Start-Process $daemon -ArgumentList @(
@@ -120,7 +139,7 @@ try {
     if (-not (Test-Path -LiteralPath $database -PathType Leaf)) {
         throw 'Uninstall removed the Workboard database without an explicit data-removal request.'
     }
-    Write-Output 'Windows release installation, source-free workflow smoke test, daemon, isolation, and uninstall passed.'
+    Write-Output 'Windows release installation, source-free workflow smoke test, in-place update, daemon, isolation, and uninstall passed.'
 }
 finally {
     if (Test-Path -LiteralPath $testRoot) {
