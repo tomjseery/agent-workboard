@@ -714,7 +714,7 @@ Ordered delivery breakdown:
    not modify provider-global configuration.
 3. [x] Add release diagnostics and deterministic compatibility checks for the supported Claude and Codex
    launch-scoped capability boundaries, including clean provider-home installation and removal fixtures.
-4. Build the candidate from a clean checkout, install it into an isolated per-user root, exercise the
+4. [x] Build the candidate from a clean checkout, install it into an isolated per-user root, exercise the
    packaged CLI and daemon without Node.js or the source checkout, uninstall it, and record verification
    evidence.
 5. Dogfood the unsigned candidate for several days and fix observed workflow friction; only then request
@@ -731,15 +731,20 @@ Current verification:
   or the source checkout on `PATH`.
 - Installed Claude Code 2.1.251 and Codex CLI 0.151.0-alpha.7.1 report versions and pass Workboard's
   read-only integration compatibility checks.
-- Two consecutive unsigned development builds produced the same ZIP SHA-256. The clean-checkout candidate
-  and its final digest remain the next delivery gate.
+- The unsigned candidate built twice from clean commit `1c81926` with identical ZIP SHA-256
+  `5f379011a9b09ebbf302bd655f86cb69a7bf256966691c10784e6d150978fe07`; its SBOM contains 199 locked
+  components and its unsigned provenance names nine packaged inputs.
 - The hook-input fuzz target completed 300,826 executions in 31 seconds without a crash.
 
-- Add concise installation, upgrade, uninstall, integration-permission, storage, backup, recovery, and
+Next delivery gate: use the unsigned candidate for several days across real create, plan, execute, resume,
+adopt, and recovery work; fix observed friction; then request owner acceptance, contract freeze, and signing
+inputs. No command, schema, or document contract is frozen by this delivery.
+
+- [x] Add concise installation, upgrade, uninstall, integration-permission, storage, backup, recovery, and
   troubleshooting documentation.
-- Restore only the release packaging, compatibility gates, fuzzing, SBOM, provenance, and diagnostics needed
+- [x] Restore only the release packaging, compatibility gates, fuzzing, SBOM, provenance, and diagnostics needed
   by the terminal product; do not restore the old graphical updater merely for parity.
-- Build an unsigned Windows dogfood candidate, use it for several days, fix workflow friction, and freeze the
+- [ ] Build an unsigned Windows dogfood candidate, use it for several days, fix workflow friction, and freeze the
   v0 command/schema/document contracts only after owner acceptance.
 - Define later Linux packaging and graphical-client entries without delaying the accepted Windows CLI/TUI.
 
