@@ -403,7 +403,18 @@ Disable the observability routes independently; no checkout/session state is sto
 - Status: [x]
 - Slug: `deliver-feature-proposal-and-approval-queues`
 - Dependencies: items 4 and 5
-- Mutation gate: accepted Autonomous publication policy and daemon-advertised approval operations
+- Mutation gate: satisfied for Approve and Request revision; Reject remains gated
+
+Approve and publish, and Request revision, execute from Desktop as of
+`9ceb03a`. Both commit through `write_projected`, so the workflow transition,
+the Workspace revision and the client event share one SQLite transaction.
+Publication does planning-store Git I/O outside that transaction and reports
+failure as a partial outcome rather than success. Availability is derived from
+workflow state, so a proposal that is not awaiting approval reports why.
+
+Reject stays unavailable with `terminal_rejection_unavailable`. It currently
+shares one transition with Request revision; making it a terminal cancel
+changes CLI-visible semantics and needs its own decision.
 
 #### Objective
 
@@ -474,7 +485,30 @@ Disable editors while retaining read-only detail. Accepted checkpoints remain ca
 - Status: [ ]
 - Slug: `deliver-zero-one-many-session-controls`
 - Dependencies: items 5, 6, and 8
-- Mutation gate: accepted Frictionless checkout, lifecycle, profile, fan-out, follow-up, recovery, and session-choice operations
+- Mutation gate: blocked on schema reconciliation with Frictionless, not on capability acceptance
+
+The gate wording was investigated on 2026-09-01. The named operations are not
+absent: `Feature/Frictionless-Managed-Work-Item-Launch` is at schema 41 and
+owns `feature-proposal-decision` (35), `session-binding-generation` (36),
+`session-follow-up` (37), `writer-session-reservation` (38),
+`managed-launch-batch` (39), `feature-branch-integration` (40) and
+`feature-work-item-proposal` (41).
+
+The live Workspace database has already been migrated to schema 41 by that
+branch. This branch is at 34 and fails to open it with
+`schema migration 32 checksum mismatch`, so Desktop on this branch cannot read
+the real Workspace at all. This branch's own migration 35
+(`proposal-revision-request`) also collides with the live 35.
+
+Item 9 therefore cannot proceed as an independent increment. Either this branch
+reconciles with Frictionless first, or session controls land on Frictionless.
+Deciding that is a prerequisite, not part of item 9.
+
+On this branch alone the following have no backing application capability:
+follow-up, OS window focus, second-writer fan-out, per-session available
+actions, provider-profile selection, and a user-actor structured checkpoint
+(`workflow_operations::checkpoint` authenticates a managed-session workflow
+token, which a human Desktop client does not hold).
 
 #### Objective
 
