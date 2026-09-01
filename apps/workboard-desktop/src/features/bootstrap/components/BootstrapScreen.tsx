@@ -54,11 +54,11 @@ const toneClasses: Record<BootstrapPresentation["tone"], string> = {
 };
 
 export function BootstrapScreen() {
-  const { state } = useBootstrap();
-  return <BootstrapStatus state={state} />;
+  const { state, refusal } = useBootstrap();
+  return <BootstrapStatus state={state} refusal={refusal} />;
 }
 
-export function BootstrapStatus({ state }: { state: BootstrapState }) {
+export function BootstrapStatus({ state, refusal }: { state: BootstrapState; refusal?: string }) {
   const presentation = bootstrapPresentations[state];
 
   return (
@@ -79,6 +79,11 @@ export function BootstrapStatus({ state }: { state: BootstrapState }) {
         <p className="mt-4 max-w-md text-pretty text-base leading-7 text-[var(--muted-text)]">
           {presentation.detail}
         </p>
+        {refusal !== undefined && (
+          <p className="mt-4 max-w-md text-pretty break-words rounded-lg border border-[var(--warning-muted)] p-3 text-sm">
+            {refusal}
+          </p>
+        )}
       </section>
     </main>
   );
