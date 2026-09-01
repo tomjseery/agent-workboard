@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use serde_json::{Value, json};
 use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 use workboard_application::AppError;
 use workboard_application::workflow_operations::CheckpointWorkItem;
 use workboard_application::workspace::WorkboardApplication;
@@ -103,6 +104,65 @@ fn tool_definitions() -> Value {
             "inputSchema": { "type": "object", "additionalProperties": false }
         },
         {
+            "name": "epic_propose",
+            "description": "Submit a typed Epic proposal from a managed workspace-planning session for explicit user approval.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["title", "body", "idempotencyKey"],
+                "properties": {
+                    "title": { "type": "string", "minLength": 1 },
+                    "slug": { "type": "string" },
+                    "body": { "type": "string", "minLength": 1 },
+                    "idempotencyKey": { "type": "string", "minLength": 1 }
+                },
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "epic_propose_research",
+            "description": "Submit imported or researched Markdown as a typed Epic proposal, recording every source it was read from.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["title", "body", "sources", "idempotencyKey"],
+                "properties": {
+                    "title": { "type": "string", "minLength": 1 },
+                    "slug": { "type": "string" },
+                    "body": { "type": "string", "minLength": 1 },
+                    "sources": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                            "type": "object",
+                            "required": ["path", "contentHash"],
+                            "properties": {
+                                "path": { "type": "string", "minLength": 1 },
+                                "contentHash": { "type": "string", "minLength": 1 }
+                            },
+                            "additionalProperties": false
+                        }
+                    },
+                    "idempotencyKey": { "type": "string", "minLength": 1 }
+                },
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "feature_propose",
+            "description": "Submit a typed Feature proposal under an existing Epic for explicit user approval.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["epicId", "title", "outcome", "idempotencyKey"],
+                "properties": {
+                    "epicId": { "type": "string", "format": "uuid" },
+                    "title": { "type": "string", "minLength": 1 },
+                    "slug": { "type": "string" },
+                    "outcome": { "type": "string", "minLength": 1 },
+                    "idempotencyKey": { "type": "string", "minLength": 1 }
+                },
+                "additionalProperties": false
+            }
+        },
+        {
             "name": "feature_submit_proposal",
             "description": "Submit one complete Feature and Work-item proposal for explicit user approval.",
             "inputSchema": {
@@ -177,6 +237,33 @@ fn call_tool(application: &mut WorkboardApplication, request: &Value) -> Result<
     let now = OffsetDateTime::now_utc();
     let result = match name {
         "hierarchy_read" => serde_json::to_value(application.assigned_hierarchy(&token, now)?)?,
+        "epic_propose" => {
+            let mut request: Value = arguments;
+            request["proposedAt"] = json!(now.format(&Rfc3339).unwrap_or_default());
+            serde_json::to_value(
+                application
+                    .workspace_planning()
+                    .propose_epic(&token, serde_json::from_value(request)?)?,
+            )?
+        }
+        "epic_propose_research" => {
+            let mut request: Value = arguments;
+            request["proposedAt"] = json!(now.format(&Rfc3339).unwrap_or_default());
+            serde_json::to_value(
+                application
+                    .workspace_planning()
+                    .propose_epic_research(&token, serde_json::from_value(request)?)?,
+            )?
+        }
+        "feature_propose" => {
+            let mut request: Value = arguments;
+            request["proposedAt"] = json!(now.format(&Rfc3339).unwrap_or_default());
+            serde_json::to_value(
+                application
+                    .workspace_planning()
+                    .propose_feature(&token, serde_json::from_value(request)?)?,
+            )?
+        }
         "feature_submit_proposal" => {
             let request: FeatureProposalRequest = serde_json::from_value(arguments)?;
             serde_json::to_value(application.planning_workflows().submit_proposal(
@@ -261,6 +348,9 @@ mod tests {
             names,
             [
                 "hierarchy_read",
+                "epic_propose",
+                "epic_propose_research",
+                "feature_propose",
                 "feature_submit_proposal",
                 "feature_publish",
                 "work_checkpoint",
@@ -321,6 +411,6 @@ mod tests {
             }),
         )
         .expect("tools response");
-        assert_eq!(listed["result"]["tools"].as_array().map(Vec::len), Some(5));
+        assert_eq!(listed["result"]["tools"].as_array().map(Vec::len), Some(8));
     }
 }

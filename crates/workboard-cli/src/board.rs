@@ -1,4 +1,7 @@
+use std::collections::HashMap;
+use std::fs;
 use std::io::{self, Stdout};
+use std::path::Path;
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -14,8 +17,8 @@ use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 use ratatui::{Frame, Terminal};
 use workboard_application::AppError;
 use workboard_core::{
-    CheckoutAvailability, HierarchyOwner, WorkItem, WorkItemStatus, WorkflowState,
-    WorkspaceSnapshot,
+    CheckoutAvailability, HierarchyOwner, PRODUCT_NAME, WorkItem, WorkItemId, WorkItemStatus,
+    WorkflowState, WorkspaceSnapshot,
 };
 
 use crate::selector::{RankedCandidate, SelectionCandidate, SelectionResult, resolve};
@@ -28,6 +31,7 @@ enum BoardControl {
 
 pub struct BoardState {
     snapshot: WorkspaceSnapshot,
+    descriptions: HashMap<WorkItemId, String>,
     query: String,
     searching: bool,
     selected: usize,
@@ -36,8 +40,10 @@ pub struct BoardState {
 
 impl BoardState {
     pub fn new(snapshot: WorkspaceSnapshot, no_color: bool) -> Self {
+        let descriptions = work_item_descriptions(&snapshot);
         Self {
             snapshot,
+            descriptions,
             query: String::new(),
             searching: false,
             selected: 0,
@@ -231,7 +237,7 @@ pub fn checklist(
 
 pub fn plain(snapshot: &WorkspaceSnapshot) -> String {
     let mut output = format!(
-        "Agent Workboard: {}\nRepositories: {}\nEpics: {}\nFeatures: {}\nWork items: {}\n",
+        "{PRODUCT_NAME}: {}\nRepositories: {}\nEpics: {}\nFeatures: {}\nWork items: {}\n",
         snapshot.workspace.title,
         snapshot.repositories.len(),
         snapshot.epics.len(),
@@ -427,7 +433,7 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, state: &BoardState) {
         .join(", ");
     let title = Line::from(vec![
         styled(
-            " Agent Workboard ",
+            format!(" {PRODUCT_NAME} "),
             state.no_color,
             Color::Cyan,
             Modifier::BOLD,
@@ -524,6 +530,45 @@ fn render_board(frame: &mut Frame<'_>, area: Rect, state: &BoardState) {
     );
 }
 
+fn planning_store_root(snapshot: &WorkspaceSnapshot) -> Option<&Path> {
+    snapshot
+        .repositories
+        .iter()
+        .find(|repository| repository.id == snapshot.workspace.planning_store_repository_id)?
+        .paths
+        .iter()
+        .find(|path| path.superseded_at.is_none())
+        .map(|path| path.path.as_path())
+}
+
+fn work_item_descriptions(snapshot: &WorkspaceSnapshot) -> HashMap<WorkItemId, String> {
+    let Some(root) = planning_store_root(snapshot) else {
+        return HashMap::new();
+    };
+    snapshot
+        .work_items
+        .iter()
+        .filter_map(|item| {
+            let document = snapshot
+                .documents
+                .iter()
+                .find(|document| document.id == item.document_id)?;
+            let body = fs::read_to_string(root.join(&document.relative_path)).ok()?;
+            Some((item.id, document_body(&body).to_owned()))
+        })
+        .collect()
+}
+
+fn document_body(document: &str) -> &str {
+    let Some(rest) = document.strip_prefix("---") else {
+        return document.trim();
+    };
+    match rest.find("\n---") {
+        Some(index) => rest[index + 4..].trim_start_matches('-').trim(),
+        None => document.trim(),
+    }
+}
+
 fn render_details(frame: &mut Frame<'_>, area: Rect, state: &BoardState) {
     let Some(item) = state.selected_work_item() else {
         frame.render_widget(
@@ -542,9 +587,21 @@ fn render_details(frame: &mut Frame<'_>, area: Rect, state: &BoardState) {
         )),
         Line::from(item.key.to_string()),
         Line::from(format!("Status: {}", work_item_status(item.status))),
-        Line::from(""),
-        Line::from("Checkouts"),
     ];
+    match state.descriptions.get(&item.id) {
+        Some(description) => {
+            lines.push(Line::from(""));
+            lines.extend(description.lines().map(|line| Line::from(line.to_owned())));
+        }
+        None => lines.push(Line::from(styled(
+            "  No planning document on disk".to_owned(),
+            state.no_color,
+            Color::Yellow,
+            Modifier::empty(),
+        ))),
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from("Checkouts"));
     let effective = state
         .snapshot
         .effective_checkouts

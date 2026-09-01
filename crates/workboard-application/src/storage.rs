@@ -12,8 +12,156 @@ use workboard_core::{ConversationId, LaunchLeaseId};
 
 use crate::AppError;
 
-const CURRENT_SCHEMA_VERSION: i64 = 31;
+const CURRENT_SCHEMA_VERSION: i64 = 32;
 const FOUNDATION_SCHEMA_CHECKSUM: &str = "agent-workboard-foundation-v1";
+const WORKSPACE_PLANNING_SCHEMA_CHECKSUM: &str = "agent-workboard-workspace-planning-v1";
+const WORKSPACE_PLANNING_SQL: &str = r#"
+PRAGMA defer_foreign_keys = ON;
+CREATE TABLE launch_intents_v2 (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT REFERENCES workspaces(id) ON DELETE RESTRICT,
+    work_item_id TEXT REFERENCES work_items(id) ON DELETE RESTRICT,
+    feature_id TEXT REFERENCES features(id) ON DELETE RESTRICT,
+    epic_id TEXT REFERENCES epics(id) ON DELETE RESTRICT,
+    checkout_id TEXT NOT NULL REFERENCES checkouts(id) ON DELETE RESTRICT,
+    provider TEXT NOT NULL CHECK (provider IN ('claude', 'codex')),
+    idempotency_key TEXT NOT NULL UNIQUE CHECK (idempotency_key <> ''),
+    token_hash TEXT NOT NULL UNIQUE CHECK (token_hash <> ''),
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'work_item_execution',
+    expected_native_id TEXT,
+    terminal_pid INTEGER,
+    failure TEXT,
+    workflow_token_hash TEXT,
+    workflow_token_expires_at TEXT,
+    terminal_window TEXT,
+    capability_bundle_root TEXT,
+    capability_bundle_digest TEXT,
+    capability_bundle_version TEXT,
+    CHECK (
+        (workspace_id IS NOT NULL) + (epic_id IS NOT NULL) +
+        (feature_id IS NOT NULL) + (work_item_id IS NOT NULL) = 1
+    ),
+    CHECK (expires_at > created_at)
+);
+INSERT INTO launch_intents_v2 (
+    id, workspace_id, work_item_id, feature_id, epic_id, checkout_id, provider,
+    idempotency_key, token_hash, status, created_at, expires_at, role,
+    expected_native_id, terminal_pid, failure, workflow_token_hash,
+    workflow_token_expires_at, terminal_window
+)
+SELECT id, NULL, work_item_id, feature_id, epic_id, checkout_id, provider,
+       idempotency_key, token_hash, status, created_at, expires_at, role,
+       expected_native_id, terminal_pid, failure, workflow_token_hash,
+       workflow_token_expires_at, terminal_window
+FROM launch_intents;
+DROP TABLE launch_intents;
+ALTER TABLE launch_intents_v2 RENAME TO launch_intents;
+
+CREATE TABLE native_session_associations_v2 (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES native_sessions(id) ON DELETE RESTRICT,
+    workspace_id TEXT REFERENCES workspaces(id) ON DELETE RESTRICT,
+    epic_id TEXT REFERENCES epics(id) ON DELETE RESTRICT,
+    feature_id TEXT REFERENCES features(id) ON DELETE RESTRICT,
+    work_item_id TEXT REFERENCES work_items(id) ON DELETE RESTRICT,
+    role TEXT NOT NULL,
+    associated_from TEXT NOT NULL,
+    associated_until TEXT,
+    CHECK (
+        (workspace_id IS NOT NULL) + (epic_id IS NOT NULL) +
+        (feature_id IS NOT NULL) + (work_item_id IS NOT NULL) = 1
+    ),
+    CHECK (associated_until IS NULL OR associated_until > associated_from)
+);
+INSERT INTO native_session_associations_v2 (
+    id, session_id, workspace_id, epic_id, feature_id, work_item_id, role,
+    associated_from, associated_until
+)
+SELECT id, session_id, NULL, epic_id, feature_id, work_item_id, role,
+       associated_from, associated_until
+FROM native_session_associations;
+DROP TABLE native_session_associations;
+ALTER TABLE native_session_associations_v2 RENAME TO native_session_associations;
+CREATE UNIQUE INDEX native_session_associations_one_current
+    ON native_session_associations (session_id) WHERE associated_until IS NULL;
+CREATE TRIGGER native_session_associations_no_delete
+BEFORE DELETE ON native_session_associations
+BEGIN
+    SELECT RAISE(ABORT, 'native session associations are append-only');
+END;
+CREATE TRIGGER native_session_associations_no_rewrite
+BEFORE UPDATE ON native_session_associations
+WHEN OLD.associated_until IS NOT NULL OR
+     NEW.id <> OLD.id OR
+     NEW.session_id <> OLD.session_id OR
+     NEW.workspace_id IS NOT OLD.workspace_id OR
+     NEW.epic_id IS NOT OLD.epic_id OR
+     NEW.feature_id IS NOT OLD.feature_id OR
+     NEW.work_item_id IS NOT OLD.work_item_id OR
+     NEW.role <> OLD.role OR
+     NEW.associated_from <> OLD.associated_from OR
+     NEW.associated_until IS NULL OR
+     NEW.associated_until <= OLD.associated_from
+BEGIN
+    SELECT RAISE(ABORT, 'native session associations are append-only');
+END;
+
+CREATE TABLE restore_entries_v2 (
+    session_id TEXT PRIMARY KEY REFERENCES native_sessions(id) ON DELETE RESTRICT,
+    workspace_id TEXT REFERENCES workspaces(id) ON DELETE RESTRICT,
+    epic_id TEXT REFERENCES epics(id) ON DELETE RESTRICT,
+    feature_id TEXT REFERENCES features(id) ON DELETE RESTRICT,
+    work_item_id TEXT REFERENCES work_items(id) ON DELETE RESTRICT,
+    added_at TEXT NOT NULL,
+    removed_at TEXT,
+    remove_reason TEXT,
+    CHECK (
+        (workspace_id IS NOT NULL) + (epic_id IS NOT NULL) +
+        (feature_id IS NOT NULL) + (work_item_id IS NOT NULL) = 1
+    ),
+    CHECK (removed_at IS NULL OR removed_at >= added_at)
+);
+INSERT INTO restore_entries_v2 (
+    session_id, workspace_id, epic_id, feature_id, work_item_id, added_at,
+    removed_at, remove_reason
+)
+SELECT session_id, NULL, epic_id, feature_id, work_item_id, added_at,
+       removed_at, remove_reason
+FROM restore_entries;
+DROP TABLE restore_entries;
+ALTER TABLE restore_entries_v2 RENAME TO restore_entries;
+
+CREATE TABLE workspace_planning_proposals (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE RESTRICT,
+    repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE RESTRICT,
+    session_id TEXT NOT NULL REFERENCES native_sessions(id) ON DELETE RESTRICT,
+    kind TEXT NOT NULL CHECK (
+        kind IN ('create_epic', 'import_epic_research', 'create_feature')
+    ),
+    payload_json TEXT NOT NULL CHECK (payload_json <> ''),
+    idempotency_key TEXT NOT NULL UNIQUE CHECK (idempotency_key <> ''),
+    observed_revision TEXT NOT NULL CHECK (observed_revision <> ''),
+    status TEXT NOT NULL CHECK (
+        status IN ('awaiting_approval', 'approved', 'rejected')
+    ),
+    outcome_json TEXT,
+    created_at TEXT NOT NULL,
+    decided_at TEXT,
+    CHECK (decided_at IS NULL OR decided_at >= created_at),
+    CHECK (
+        (status = 'awaiting_approval' AND decided_at IS NULL AND outcome_json IS NULL) OR
+        (status = 'rejected' AND decided_at IS NOT NULL) OR
+        (status = 'approved' AND decided_at IS NOT NULL AND outcome_json IS NOT NULL)
+    )
+);
+CREATE INDEX workspace_planning_proposals_workspace
+    ON workspace_planning_proposals (workspace_id, status);
+"#;
+
 const LAUNCH_LEASE_SCHEMA_CHECKSUM: &str = "agent-workboard-launch-leases-v1";
 const WORKBOARD_DOMAIN_SCHEMA_CHECKSUM: &str = "agent-workboard-domain-v1";
 const MANAGED_BINDING_SCHEMA_CHECKSUM: &str = "agent-workboard-managed-binding-v1";
@@ -2249,6 +2397,12 @@ fn migrate(connection: &Connection) -> Result<(), AppError> {
          ALTER TABLE managed_session_requests
              ADD COLUMN repository_id TEXT REFERENCES repositories(id) ON DELETE RESTRICT;",
     )?;
+    apply_migration(
+        connection,
+        32,
+        WORKSPACE_PLANNING_SCHEMA_CHECKSUM,
+        WORKSPACE_PLANNING_SQL,
+    )?;
     Ok(())
 }
 
@@ -3057,6 +3211,134 @@ fn health(connection: &Connection) -> Result<StorageHealth, AppError> {
 }
 
 #[cfg(test)]
+/// Reverses migration 32 so an upgrade test can start from the schema that shipped before
+/// workspace-scoped sessions existed.
+pub(crate) fn drop_workspace_planning_schema(connection: &Connection) {
+    connection
+        .execute_batch(
+            r#"DROP TABLE workspace_planning_proposals;
+
+            CREATE TABLE launch_intents_v1 (
+                id TEXT PRIMARY KEY,
+                work_item_id TEXT REFERENCES work_items(id) ON DELETE RESTRICT,
+                feature_id TEXT REFERENCES features(id) ON DELETE RESTRICT,
+                epic_id TEXT REFERENCES epics(id) ON DELETE RESTRICT,
+                checkout_id TEXT NOT NULL REFERENCES checkouts(id) ON DELETE RESTRICT,
+                provider TEXT NOT NULL CHECK (provider IN ('claude', 'codex')),
+                idempotency_key TEXT NOT NULL UNIQUE CHECK (idempotency_key <> ''),
+                token_hash TEXT NOT NULL UNIQUE CHECK (token_hash <> ''),
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'work_item_execution',
+                expected_native_id TEXT,
+                terminal_pid INTEGER,
+                failure TEXT,
+                workflow_token_hash TEXT,
+                workflow_token_expires_at TEXT,
+                terminal_window TEXT,
+                CHECK (
+                    (epic_id IS NOT NULL) + (feature_id IS NOT NULL) +
+                    (work_item_id IS NOT NULL) = 1
+                ),
+                CHECK (expires_at > created_at)
+            );
+            INSERT INTO launch_intents_v1 (
+                id, work_item_id, feature_id, epic_id, checkout_id, provider,
+                idempotency_key, token_hash, status, created_at, expires_at, role,
+                expected_native_id, terminal_pid, failure, workflow_token_hash,
+                workflow_token_expires_at, terminal_window
+            )
+            SELECT id, work_item_id, feature_id, epic_id, checkout_id, provider,
+                   idempotency_key, token_hash, status, created_at, expires_at, role,
+                   expected_native_id, terminal_pid, failure, workflow_token_hash,
+                   workflow_token_expires_at, terminal_window
+            FROM launch_intents WHERE workspace_id IS NULL;
+            DROP TABLE launch_intents;
+            ALTER TABLE launch_intents_v1 RENAME TO launch_intents;
+
+            DROP TRIGGER native_session_associations_no_rewrite;
+            DROP TRIGGER native_session_associations_no_delete;
+            DROP INDEX native_session_associations_one_current;
+            CREATE TABLE native_session_associations_v1 (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL REFERENCES native_sessions(id) ON DELETE RESTRICT,
+                epic_id TEXT REFERENCES epics(id) ON DELETE RESTRICT,
+                feature_id TEXT REFERENCES features(id) ON DELETE RESTRICT,
+                work_item_id TEXT REFERENCES work_items(id) ON DELETE RESTRICT,
+                role TEXT NOT NULL,
+                associated_from TEXT NOT NULL,
+                associated_until TEXT,
+                CHECK (
+                    (epic_id IS NOT NULL) + (feature_id IS NOT NULL) +
+                    (work_item_id IS NOT NULL) = 1
+                ),
+                CHECK (associated_until IS NULL OR associated_until > associated_from)
+            );
+            INSERT INTO native_session_associations_v1 (
+                id, session_id, epic_id, feature_id, work_item_id, role,
+                associated_from, associated_until
+            )
+            SELECT id, session_id, epic_id, feature_id, work_item_id, role,
+                   associated_from, associated_until
+            FROM native_session_associations WHERE workspace_id IS NULL;
+            DROP TABLE native_session_associations;
+            ALTER TABLE native_session_associations_v1
+                RENAME TO native_session_associations;
+            CREATE UNIQUE INDEX native_session_associations_one_current
+                ON native_session_associations (session_id) WHERE associated_until IS NULL;
+            CREATE TRIGGER native_session_associations_no_delete
+            BEFORE DELETE ON native_session_associations
+            BEGIN
+                SELECT RAISE(ABORT, 'native session associations are append-only');
+            END;
+            CREATE TRIGGER native_session_associations_no_rewrite
+            BEFORE UPDATE ON native_session_associations
+            WHEN OLD.associated_until IS NOT NULL OR
+                 NEW.id <> OLD.id OR
+                 NEW.session_id <> OLD.session_id OR
+                 NEW.epic_id IS NOT OLD.epic_id OR
+                 NEW.feature_id IS NOT OLD.feature_id OR
+                 NEW.work_item_id IS NOT OLD.work_item_id OR
+                 NEW.role <> OLD.role OR
+                 NEW.associated_from <> OLD.associated_from OR
+                 NEW.associated_until IS NULL OR
+                 NEW.associated_until <= OLD.associated_from
+            BEGIN
+                SELECT RAISE(ABORT, 'native session associations are append-only');
+            END;
+
+            CREATE TABLE restore_entries_v1 (
+                session_id TEXT PRIMARY KEY REFERENCES native_sessions(id) ON DELETE RESTRICT,
+                epic_id TEXT REFERENCES epics(id) ON DELETE RESTRICT,
+                feature_id TEXT REFERENCES features(id) ON DELETE RESTRICT,
+                work_item_id TEXT REFERENCES work_items(id) ON DELETE RESTRICT,
+                added_at TEXT NOT NULL,
+                removed_at TEXT,
+                remove_reason TEXT,
+                CHECK (
+                    (epic_id IS NOT NULL) + (feature_id IS NOT NULL) +
+                    (work_item_id IS NOT NULL) = 1
+                ),
+                CHECK (removed_at IS NULL OR removed_at >= added_at)
+            );
+            INSERT INTO restore_entries_v1 (
+                session_id, epic_id, feature_id, work_item_id, added_at, removed_at,
+                remove_reason
+            )
+            SELECT session_id, epic_id, feature_id, work_item_id, added_at, removed_at,
+                   remove_reason
+            FROM restore_entries WHERE workspace_id IS NULL;
+            DROP TABLE restore_entries;
+            ALTER TABLE restore_entries_v1 RENAME TO restore_entries;
+
+            DELETE FROM schema_migrations WHERE version = 32;
+            PRAGMA user_version = 31;"#,
+        )
+        .expect("remove workspace planning schema");
+}
+
+#[cfg(test)]
 mod tests {
     use rusqlite::{Connection, Transaction, params};
     use tempfile::TempDir;
@@ -3067,6 +3349,7 @@ mod tests {
     use crate::AppError;
 
     fn drop_checkout_readiness_schema(connection: &Connection) {
+        super::drop_workspace_planning_schema(connection);
         connection
             .execute_batch(
                 "DROP TABLE checkout_reconciliation_events;
@@ -3923,7 +4206,7 @@ mod tests {
         assert_eq!(preserved_attestation, valid_attestation);
         assert_eq!(legacy_authority, "immutable_evidence");
         let health = store.health().expect("storage health");
-        assert_eq!(health.schema_version, 31);
+        assert_eq!(health.schema_version, 32);
         assert!(health.is_healthy());
         let audited_attestations: Vec<(String, String, String, String)> = store
             .read(|connection| {
@@ -3968,7 +4251,7 @@ mod tests {
             .expect("read upgraded schema 20 attestations");
         assert_eq!(upgraded_attestations, audited_attestations);
         let health = store.health().expect("upgraded storage health");
-        assert_eq!(health.schema_version, 31);
+        assert_eq!(health.schema_version, 32);
         assert!(health.is_healthy());
         drop(store);
 

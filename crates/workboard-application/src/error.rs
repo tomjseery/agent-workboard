@@ -203,6 +203,27 @@ pub enum AppError {
     Domain(String),
     #[error("storage interruption injected for verification")]
     InjectedStorageInterruption,
+    #[error("the capability bundle path is not absolute or is unsafe: {0}")]
+    CapabilityBundlePathInvalid(PathBuf),
+    #[error("a capability bundle path resolved outside its bundle root: {0}")]
+    CapabilityBundleEscape(PathBuf),
+    #[error("{operation} failed for {path}: {source}")]
+    CapabilityBundleIo {
+        operation: &'static str,
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(
+        "no {tool} credential is available at {path}; sign in to {tool} before opening a managed session"
+    )]
+    CapabilityBundleCredentialMissing { tool: &'static str, path: PathBuf },
+    #[error("the managed session has no capability bundle")]
+    CapabilityBundleMissing,
+    #[error("the workspace planning proposal does not exist")]
+    WorkspacePlanningProposalNotFound,
+    #[error("the workspace planning proposal has already been decided")]
+    WorkspacePlanningProposalDecided,
     #[error("{message}")]
     External { code: String, message: String },
 }
@@ -304,6 +325,15 @@ impl AppError {
             Self::Adapter { .. } => "adapter",
             Self::Domain(_) => "domain",
             Self::InjectedStorageInterruption => "injected_storage_interruption",
+            Self::CapabilityBundlePathInvalid(_) => "capability_bundle_path_invalid",
+            Self::CapabilityBundleEscape(_) => "capability_bundle_escape",
+            Self::CapabilityBundleIo { .. } => "capability_bundle_io",
+            Self::CapabilityBundleCredentialMissing { .. } => {
+                "capability_bundle_credential_missing"
+            }
+            Self::CapabilityBundleMissing => "capability_bundle_missing",
+            Self::WorkspacePlanningProposalNotFound => "workspace_planning_proposal_not_found",
+            Self::WorkspacePlanningProposalDecided => "workspace_planning_proposal_decided",
             Self::External { code, .. } => code,
         }
     }

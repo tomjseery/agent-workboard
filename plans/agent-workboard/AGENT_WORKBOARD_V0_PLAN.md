@@ -276,25 +276,30 @@ changing a live process's checkout or reclassifying it implicitly.
 
 ## Skills, MCP, hooks, and provider integration
 
-The CLI remains the authority regardless of how a workflow is invoked.
+The CLI remains the authority regardless of how a workflow is invoked. Capabilities are launch-scoped; the
+normative boundary is [`docs/architecture/MANAGED_SESSION_CAPABILITY_INJECTION.md`](../../docs/architecture/MANAGED_SESSION_CAPABILITY_INJECTION.md).
 
-- `workboard integration install --tool claude|codex` installs previewable, reversible, product-owned hooks
-  and the provider's generic Workboard planning instructions.
-- `workboard mcp` exposes provider-neutral tools for reading the assigned hierarchy, submitting a Feature
-  proposal, publishing approved documents, creating Work items, checkpointing a Work item, and requesting a
-  new managed session.
-- A small generic planning skill teaches the AI how to turn Epic intent into an implementation-ready Feature
-  and Work items. It contains no Concertable paths, branch names, plan suffixes, or Git orchestration.
+- Workboard owns the canonical skill and hook assets and injects them into one managed launch by pointing the
+  provider at a Workboard-owned configuration root (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`). Nothing is written to
+  a provider-global skill or hook directory.
+- A launch receives only the skills its role allows: workspace planning, Epic navigation, Feature planning, or
+  Work-item execution. A normally opened Claude or Codex CLI has no Workboard skills, hooks, token, or
+  assignment.
+- The bundle root is durable and lives beside the Workboard database. Closing a session removes its skills,
+  hook configuration, and credential reference; the provider's own transcripts stay so the session remains
+  resumable. Resume and recovery reconstruct the same role bundle with a fresh token.
+- `workboard mcp` exposes provider-neutral tools for reading the assigned hierarchy, proposing Epics and
+  Features from a planning session, submitting and publishing a Feature proposal, checkpointing a Work item,
+  and requesting a new managed session.
 - Provider lifecycle hooks report exact native identity, cwd, process/lifecycle evidence, and launch token to
   Workboard. Hooks do not select roadmap scope, declare plan completion, or perform unrestricted mutations.
-- The bootstrap prompt can carry the complete generic contract when a provider has no skill mechanism. The
-  core product therefore does not fail merely because a skill was not installed.
+- `workboard integration status|preview|remove` no longer installs anything. It reports and removes skills and
+  hooks that an earlier Workboard release wrote into a provider-global home, and never touches configuration
+  Workboard does not own.
 
-The current `/continue-roadmap` behavior becomes a compatibility path rather than the primary implementation.
-Preferred usage is `workboard epic continue` or `workboard feature create`. If `/continue-roadmap` is
-invoked inside an unmanaged base-checkout conversation, its generic shim immediately hands the request to
-Workboard and opens a new managed planner in the correct worktree; it does not create the substantive plan in
-the already-wrong session.
+`/continue-roadmap` is retired rather than shimmed: a global compatibility skill is exactly what the invariant
+forbids. Roadmap continuation runs through `workboard plan`, `workboard epic continue`, or
+`workboard feature create`.
 
 Workboard launches native CLIs instead of calling Anthropic or OpenAI model APIs invisibly. Users retain the
 normal provider authentication, model selection, permissions, transcript storage, commands, and interactive
@@ -344,6 +349,15 @@ workboard epic import [<markdown>]
 workboard epic create [<title>]
     Create a new Epic document, using selectors or prompts for omitted values.
 
+workboard plan --repository <repository> --tool claude|codex
+    Open a managed workspace-planning session scoped to one workspace and repository. It owns no Epic,
+    Feature, or Work item, and submits typed create-epic, import-epic-research, and create-feature
+    proposals.
+
+workboard plan proposals|approve|reject [<proposal>]
+    Review a submitted planning proposal and record the explicit user decision that turns it into
+    hierarchy.
+
 workboard epic continue [<epic>]
     Launch or resume a managed Epic-level roadmap navigator.
 
@@ -368,8 +382,9 @@ workboard session adopt [<work-item>]
 workboard recover [--since <period>] [--dry-run]
     Preview and restore the previous managed terminal working set or a selected period such as yesterday.
 
-workboard integration status|preview|install|repair|disable|remove
-    Manage Workboard-owned provider integrations without overwriting unrelated configuration.
+workboard integration status|preview|remove
+    Report and remove Workboard skills or hooks left in a provider-global home by an earlier release,
+    without overwriting unrelated configuration. Nothing is installed globally.
 
 workboard import context-catalogue <database>
     Preview and import reusable repositories, native sessions, associations, and checkout history.

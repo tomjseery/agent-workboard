@@ -9,9 +9,7 @@ use tempfile::{Builder, NamedTempFile};
 use workboard_core::Tool;
 
 use crate::error::AppError;
-use crate::workflow_contract::{
-    WORKFLOW_CONTRACT_VERSION, generated_continue_roadmap_shim, generated_skill,
-};
+use crate::workflow_contract::WORKFLOW_CONTRACT_VERSION;
 
 pub const INTEGRATION_OWNER: &str = "agent-workboard/native-integration-v1";
 const MAX_CONFIGURATION_BYTES: u64 = 1024 * 1024;
@@ -23,9 +21,6 @@ pub const ADAPTER_VERSION: &str = "native-hook-v1";
 pub enum IntegrationOperation {
     Status,
     Preview,
-    Install,
-    Repair,
-    Disable,
     Remove,
 }
 
@@ -51,10 +46,8 @@ pub struct IntegrationConfirmation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IntegrationState {
-    NotInstalled,
-    Installed,
-    NeedsRepair,
-    Disabled,
+    Clean,
+    ResiduePresent,
     Unavailable,
 }
 
@@ -139,15 +132,12 @@ pub struct IntegrationPlan {
     configuration_path: PathBuf,
     current_bytes: Option<Vec<u8>>,
     current_value: Option<Value>,
-    installed_value: Option<Value>,
     removed_value: Option<Value>,
     owned_configuration: Value,
     workflow_contract_path: PathBuf,
     workflow_current: Option<Vec<u8>>,
-    workflow_installed: Vec<u8>,
     compatibility_path: PathBuf,
     compatibility_current: Option<Vec<u8>>,
-    compatibility_installed: Vec<u8>,
     capability: IntegrationCapability,
 }
 
@@ -169,13 +159,12 @@ impl IntegrationPlan {
         let executable = canonical_file(&request.workboard_executable, "workboard executable")?;
         let database = canonical_file(database, "Workboard database")?;
         let configuration_path = configuration_path(request.tool, &request.native_home);
-        let owned_configuration = owned_configuration(request.tool, &executable, &database)?;
+        let owned_configuration = owned_hook_configuration(request.tool, &executable, &database)?;
         let workflow_contract_path = request
             .native_home
             .join("skills")
             .join("agent-workboard")
             .join("SKILL.md");
-        let workflow_installed = generated_skill(&executable)?.into_bytes();
         let workflow_current = workflow_contract_path
             .is_file()
             .then(|| read_bounded(&workflow_contract_path))
@@ -185,7 +174,6 @@ impl IntegrationPlan {
             .join("skills")
             .join("continue-roadmap")
             .join("SKILL.md");
-        let compatibility_installed = generated_continue_roadmap_shim(&executable)?.into_bytes();
         let compatibility_current = compatibility_path
             .is_file()
             .then(|| read_bounded(&compatibility_path))
@@ -218,41 +206,31 @@ impl IntegrationPlan {
                 ),
             );
         }
-        let (current_bytes, current_value, installed_value, removed_value) = match current {
-            Ok((bytes, value)) => {
-                match remove_owned(value.clone()).and_then(|removed| {
-                    add_owned(removed.clone(), &owned_configuration)
-                        .map(|installed| (removed, installed))
-                }) {
-                    Ok((removed, installed)) => {
-                        (bytes, Some(value), Some(installed), Some(removed))
-                    }
-                    Err(error) => {
-                        capability = unavailable_capability(
-                            request.tool,
-                            "configuration_malformed",
-                            error.to_string(),
-                        );
-                        (bytes, None, None, None)
-                    }
+        let (current_bytes, current_value, removed_value) = match current {
+            Ok((bytes, value)) => match remove_owned(value.clone()) {
+                Ok(removed) => (bytes, Some(value), Some(removed)),
+                Err(error) => {
+                    capability = unavailable_capability(
+                        request.tool,
+                        "configuration_malformed",
+                        error.to_string(),
+                    );
+                    (bytes, None, None)
                 }
-            }
-            Err(_) => (None, None, None, None),
+            },
+            Err(_) => (None, None, None),
         };
         Ok(Self {
             tool: request.tool,
             configuration_path,
             current_bytes,
             current_value,
-            installed_value,
             removed_value,
             owned_configuration,
             workflow_contract_path,
             workflow_current,
-            workflow_installed,
             compatibility_path,
             compatibility_current,
-            compatibility_installed,
             capability,
         })
     }
@@ -261,18 +239,11 @@ impl IntegrationPlan {
         &self,
         registration: Option<&IntegrationRegistration>,
         observations: &IntegrationObservations,
-        operation: Option<IntegrationOperation>,
+        _operation: Option<IntegrationOperation>,
     ) -> Result<PreparedIntegrationPreview, AppError> {
         let status = self.status(registration, observations);
-        let operation = match operation {
-            Some(
-                operation @ (IntegrationOperation::Install
-                | IntegrationOperation::Repair
-                | IntegrationOperation::Disable
-                | IntegrationOperation::Remove),
-            ) => operation,
-            _ => IntegrationOperation::Install,
-        };
+        // Removing residue left by an earlier global install is the only mutation that remains.
+        let operation = IntegrationOperation::Remove;
         let value = self.value_for(operation);
         let contents = value.as_ref().map(encode_configuration).transpose()?;
         let workflow_contract_contents = self
@@ -314,67 +285,18 @@ impl IntegrationPlan {
         observations: &IntegrationObservations,
     ) -> IntegrationStatus {
         let enabled = registration.is_some_and(|value| value.enabled);
-        let state = if !self.capability.available {
+        let residue = self.has_residue();
+        let state = if !self.capability.available && !residue {
             IntegrationState::Unavailable
+        } else if residue {
+            IntegrationState::ResiduePresent
         } else {
-            let configuration_state =
-                match (&self.current_value, &self.installed_value, registration) {
-                    (Some(current), Some(installed), Some(value))
-                        if value.enabled && current == installed =>
-                    {
-                        IntegrationState::Installed
-                    }
-                    (Some(current), Some(_), Some(value))
-                        if !value.enabled && self.removed_value.as_ref() == Some(current) =>
-                    {
-                        IntegrationState::Disabled
-                    }
-                    (Some(current), Some(installed), None) if current == installed => {
-                        IntegrationState::NeedsRepair
-                    }
-                    (Some(current), Some(installed), None)
-                        if self.removed_value.as_ref() == Some(current) && current != installed =>
-                    {
-                        IntegrationState::NotInstalled
-                    }
-                    (Some(_), Some(_), _) => IntegrationState::NeedsRepair,
-                    _ => IntegrationState::Unavailable,
-                };
-            match configuration_state {
-                IntegrationState::Installed
-                    if self.workflow_current.as_deref()
-                        != Some(self.workflow_installed.as_slice())
-                        || self.compatibility_current.as_deref()
-                            != Some(self.compatibility_installed.as_slice()) =>
-                {
-                    IntegrationState::NeedsRepair
-                }
-                IntegrationState::Disabled | IntegrationState::NotInstalled
-                    if self.workflow_current.is_some() || self.compatibility_current.is_some() =>
-                {
-                    IntegrationState::NeedsRepair
-                }
-                value => value,
-            }
+            IntegrationState::Clean
         };
-        let available_operations = match state {
-            IntegrationState::NotInstalled => vec![IntegrationOperation::Install],
-            IntegrationState::Installed => {
-                vec![IntegrationOperation::Disable, IntegrationOperation::Remove]
-            }
-            IntegrationState::NeedsRepair => {
-                vec![IntegrationOperation::Repair, IntegrationOperation::Remove]
-            }
-            IntegrationState::Disabled => {
-                vec![IntegrationOperation::Install, IntegrationOperation::Remove]
-            }
-            IntegrationState::Unavailable
-                if self.removed_value.is_some()
-                    && (registration.is_some() || self.current_value != self.removed_value) =>
-            {
-                vec![IntegrationOperation::Remove]
-            }
-            IntegrationState::Unavailable => Vec::new(),
+        let available_operations = if residue {
+            vec![IntegrationOperation::Remove]
+        } else {
+            Vec::new()
         };
         IntegrationStatus {
             schema_version: 1,
@@ -414,16 +336,6 @@ impl IntegrationPlan {
                 workflow_backup_path: None,
             });
         }
-        if matches!(
-            operation,
-            IntegrationOperation::Install | IntegrationOperation::Repair
-        ) && !self.capability.available
-        {
-            return Err(AppError::IntegrationUnavailable {
-                tool: tool_name(self.tool),
-                reason: self.capability.message.clone(),
-            });
-        }
         let workflow_mutation = self.apply_workflow(operation)?;
         let configuration_mutation = match self.apply_configuration(operation) {
             Ok(mutation) => mutation,
@@ -446,18 +358,7 @@ impl IntegrationPlan {
         operation: IntegrationOperation,
     ) -> Result<ConfigurationMutation, AppError> {
         let proposed = match operation {
-            IntegrationOperation::Install | IntegrationOperation::Repair => {
-                if !self.capability.available {
-                    return Err(AppError::IntegrationUnavailable {
-                        tool: tool_name(self.tool),
-                        reason: self.capability.message.clone(),
-                    });
-                }
-                self.installed_value.as_ref()
-            }
-            IntegrationOperation::Disable | IntegrationOperation::Remove => {
-                self.removed_value.as_ref()
-            }
+            IntegrationOperation::Remove => self.removed_value.as_ref(),
             IntegrationOperation::Status | IntegrationOperation::Preview => {
                 return Ok(ConfigurationMutation {
                     changed: false,
@@ -558,35 +459,24 @@ impl IntegrationPlan {
         &self.configuration_path
     }
 
-    fn value_for(&self, operation: IntegrationOperation) -> &Option<Value> {
-        match operation {
-            IntegrationOperation::Disable | IntegrationOperation::Remove => &self.removed_value,
-            _ => &self.installed_value,
-        }
+    fn value_for(&self, _operation: IntegrationOperation) -> &Option<Value> {
+        &self.removed_value
     }
 
-    fn workflow_value_for(&self, operation: IntegrationOperation) -> Option<&[u8]> {
-        match operation {
-            IntegrationOperation::Install | IntegrationOperation::Repair => {
-                Some(&self.workflow_installed)
-            }
-            IntegrationOperation::Disable | IntegrationOperation::Remove => None,
-            IntegrationOperation::Status | IntegrationOperation::Preview => {
-                Some(&self.workflow_installed)
-            }
-        }
+    const fn workflow_value_for(&self, _operation: IntegrationOperation) -> Option<&[u8]> {
+        None
     }
 
-    fn compatibility_value_for(&self, operation: IntegrationOperation) -> Option<&[u8]> {
-        match operation {
-            IntegrationOperation::Install | IntegrationOperation::Repair => {
-                Some(&self.compatibility_installed)
-            }
-            IntegrationOperation::Disable | IntegrationOperation::Remove => None,
-            IntegrationOperation::Status | IntegrationOperation::Preview => {
-                Some(&self.compatibility_installed)
-            }
-        }
+    const fn compatibility_value_for(&self, _operation: IntegrationOperation) -> Option<&[u8]> {
+        None
+    }
+
+    /// True when an earlier Workboard version left skills or hooks in a provider-global
+    /// directory. Capabilities are launch-scoped now, so any global asset is residue.
+    fn has_residue(&self) -> bool {
+        self.workflow_current.is_some()
+            || self.compatibility_current.is_some()
+            || (self.current_value.is_some() && self.current_value != self.removed_value)
     }
 }
 
@@ -623,9 +513,6 @@ fn configuration_digest(input: ConfigurationDigestInput<'_>) -> String {
     digest_field(&mut digest, tool_name(tool).as_bytes());
     digest_field(&mut digest, configuration_path.to_string_lossy().as_bytes());
     digest.update([match operation {
-        IntegrationOperation::Install => 1,
-        IntegrationOperation::Repair => 2,
-        IntegrationOperation::Disable => 3,
         IntegrationOperation::Remove => 4,
         IntegrationOperation::Status => 5,
         IntegrationOperation::Preview => 6,
@@ -846,7 +733,11 @@ fn read_bounded(path: &Path) -> Result<Vec<u8>, AppError> {
     })
 }
 
-fn owned_configuration(tool: Tool, executable: &Path, database: &Path) -> Result<Value, AppError> {
+pub(crate) fn owned_hook_configuration(
+    tool: Tool,
+    executable: &Path,
+    database: &Path,
+) -> Result<Value, AppError> {
     let executable = path_text(executable)?;
     let database = path_text(database)?;
     let events = match tool {
@@ -972,49 +863,6 @@ fn remove_owned(mut value: Value) -> Result<Value, AppError> {
     });
     if hooks.is_empty() {
         root.remove("hooks");
-    }
-    Ok(value)
-}
-
-fn add_owned(mut value: Value, owned: &Value) -> Result<Value, AppError> {
-    let root =
-        value
-            .as_object_mut()
-            .ok_or_else(|| AppError::IntegrationConfigurationMalformed {
-                path: PathBuf::new(),
-                message: "configuration root must be a JSON object".to_owned(),
-            })?;
-    if !root.contains_key("hooks") {
-        root.insert("hooks".to_owned(), Value::Object(Map::new()));
-    }
-    let hooks = root
-        .get_mut("hooks")
-        .and_then(Value::as_object_mut)
-        .ok_or_else(|| AppError::IntegrationConfigurationMalformed {
-            path: PathBuf::new(),
-            message: "hooks must be a JSON object".to_owned(),
-        })?;
-    let owned_hooks = owned
-        .get("hooks")
-        .and_then(Value::as_object)
-        .expect("owned configuration has hooks");
-    for (event, groups) in owned_hooks {
-        let target = hooks
-            .entry(event.clone())
-            .or_insert_with(|| Value::Array(Vec::new()));
-        let target =
-            target
-                .as_array_mut()
-                .ok_or_else(|| AppError::IntegrationConfigurationMalformed {
-                    path: PathBuf::new(),
-                    message: format!("hooks.{event} must be a JSON array"),
-                })?;
-        target.extend(
-            groups
-                .as_array()
-                .expect("owned hook event is an array")
-                .clone(),
-        );
     }
     Ok(value)
 }
@@ -1195,6 +1043,11 @@ fn remove_owned_file(path: &Path, expected: &[u8]) -> Result<ConfigurationMutati
         path: path.to_path_buf(),
         source,
     })?;
+    // A reviewable backup stays beside the removed file, so the owned directory is pruned only
+    // when nothing at all remains in it.
+    if let Some(directory) = path.parent() {
+        let _ = fs::remove_dir(directory);
+    }
     Ok(ConfigurationMutation {
         changed: true,
         backup_path,
@@ -1407,9 +1260,13 @@ fn encode_configuration(value: &Value) -> Result<String, AppError> {
 }
 
 fn configuration_path(tool: Tool, native_home: &Path) -> PathBuf {
+    native_home.join(provider_configuration_file(tool))
+}
+
+pub(crate) const fn provider_configuration_file(tool: Tool) -> &'static str {
     match tool {
-        Tool::Claude => native_home.join("settings.json"),
-        Tool::Codex => native_home.join("hooks.json"),
+        Tool::Claude => "settings.json",
+        Tool::Codex => "hooks.json",
     }
 }
 
@@ -1476,13 +1333,14 @@ fn tool_name(tool: Tool) -> &'static str {
 mod tests {
     use std::fs;
 
+    use serde_json::json;
     use tempfile::TempDir;
     use workboard_core::Tool;
 
     use super::{
-        ADAPTER_VERSION, INTEGRATION_OWNER, IntegrationObservations, IntegrationOperation,
-        IntegrationPlan, IntegrationRegistration, IntegrationRequest, IntegrationState,
-        replace_configuration, replace_configuration_with, shell_command,
+        INTEGRATION_OWNER, IntegrationObservations, IntegrationOperation, IntegrationPlan,
+        IntegrationRequest, IntegrationState, owned_hook_configuration, replace_configuration,
+        replace_configuration_with, shell_command,
     };
 
     #[test]
@@ -1498,104 +1356,50 @@ mod tests {
     }
 
     #[test]
-    fn claude_install_preserves_unrelated_settings_and_is_idempotent() {
-        let fixture = Fixture::new(Tool::Claude);
-        fs::write(
-            fixture.home.join("settings.json"),
-            r#"{"theme":"dark","hooks":{"Stop":[{"hooks":[{"type":"command","command":"other"}]}]}}"#,
-        )
-        .expect("write settings");
-        let plan = fixture.plan(IntegrationOperation::Install);
-        let first = plan
-            .apply(IntegrationOperation::Install)
-            .expect("install hooks");
-        assert!(first.changed);
-        assert!(first.backup_path.expect("backup").is_file());
+    fn a_provider_home_without_workboard_assets_is_clean() {
+        for tool in [Tool::Claude, Tool::Codex] {
+            let fixture = Fixture::new(tool);
+            let plan = fixture.plan(IntegrationOperation::Status);
+            let status = plan.status(None, &IntegrationObservations::default());
 
-        let installed: serde_json::Value = serde_json::from_slice(
-            &fs::read(fixture.home.join("settings.json")).expect("read settings"),
-        )
-        .expect("parse settings");
-        assert_eq!(installed["theme"], "dark");
-        assert_eq!(
-            installed["hooks"]["Stop"][0]["hooks"][0]["command"],
-            "other"
-        );
-        assert!(installed.to_string().contains(INTEGRATION_OWNER));
-        let workflow_path = fixture
-            .home
-            .join("skills")
-            .join("agent-workboard")
-            .join("SKILL.md");
-        assert!(workflow_path.is_file());
-        assert!(
-            fs::read_to_string(&workflow_path)
-                .expect("read workflow skill")
-                .contains("feature_submit_proposal")
-        );
-        let compatibility_path = fixture
-            .home
-            .join("skills")
-            .join("continue-roadmap")
-            .join("SKILL.md");
-        assert!(compatibility_path.is_file());
-        assert!(
-            fs::read_to_string(&compatibility_path)
-                .expect("read compatibility skill")
-                .contains("Do not plan in this unmanaged session")
-        );
-
-        let second = fixture
-            .plan(IntegrationOperation::Install)
-            .apply(IntegrationOperation::Install)
-            .expect("repeat install");
-        assert!(!second.changed);
-        assert!(second.backup_path.is_none());
+            assert_eq!(
+                status.state,
+                IntegrationState::Clean,
+                "{tool:?} should report a clean provider home"
+            );
+            assert!(
+                status.available_operations.is_empty(),
+                "a clean home offers no mutation"
+            );
+        }
     }
 
     #[test]
-    fn repair_replaces_only_owned_handlers_and_remove_preserves_unrelated_hooks() {
-        let fixture = Fixture::new(Tool::Codex);
-        fixture
-            .plan(IntegrationOperation::Install)
-            .apply(IntegrationOperation::Install)
-            .expect("install hooks");
-        let path = fixture.home.join("hooks.json");
-        let mut installed: serde_json::Value =
-            serde_json::from_slice(&fs::read(&path).expect("read hooks")).expect("parse hooks");
-        installed["hooks"]["Stop"][0]["hooks"][0]["command"] = "broken".into();
-        installed["hooks"]["Stop"][0]["hooks"]
-            .as_array_mut()
-            .expect("handlers")
-            .push(serde_json::json!({"type":"command","command":"other"}));
-        fs::write(
-            &path,
-            format!(
-                "{}\n",
-                serde_json::to_string_pretty(&installed).expect("encode hooks")
-            ),
-        )
-        .expect("change hooks");
+    fn an_earlier_global_install_is_reported_as_residue_and_removed() {
+        let fixture = Fixture::new(Tool::Claude);
+        fixture.install_legacy_global_assets();
 
-        fixture
-            .plan(IntegrationOperation::Repair)
-            .apply(IntegrationOperation::Repair)
-            .expect("repair hooks");
+        let plan = fixture.plan(IntegrationOperation::Status);
+        let status = plan.status(None, &IntegrationObservations::default());
+        assert_eq!(status.state, IntegrationState::ResiduePresent);
+        assert_eq!(
+            status.available_operations,
+            vec![IntegrationOperation::Remove]
+        );
+
         fixture
             .plan(IntegrationOperation::Remove)
             .apply(IntegrationOperation::Remove)
-            .expect("remove hooks");
-        let removed: serde_json::Value =
-            serde_json::from_slice(&fs::read(&path).expect("read hooks")).expect("parse hooks");
-        assert_eq!(removed["hooks"]["Stop"][0]["hooks"][0]["command"], "other");
-        assert!(!removed.to_string().contains(INTEGRATION_OWNER));
+            .expect("remove global residue");
+
         assert!(
             !fixture
                 .home
                 .join("skills")
                 .join("agent-workboard")
                 .join("SKILL.md")
-                .exists()
+                .exists(),
+            "the global workflow skill must not survive removal"
         );
         assert!(
             !fixture
@@ -1603,119 +1407,123 @@ mod tests {
                 .join("skills")
                 .join("continue-roadmap")
                 .join("SKILL.md")
-                .exists()
+                .exists(),
+            "the global compatibility skill must not survive removal"
+        );
+        let settings: serde_json::Value = serde_json::from_slice(
+            &fs::read(fixture.home.join("settings.json")).expect("read settings"),
+        )
+        .expect("parse settings");
+        assert_eq!(
+            settings.pointer("/hooks/SessionStart"),
+            None,
+            "no Workboard hook may remain in a provider-global configuration"
+        );
+
+        let status = fixture
+            .plan(IntegrationOperation::Status)
+            .status(None, &IntegrationObservations::default());
+        assert_eq!(status.state, IntegrationState::Clean);
+    }
+
+    #[test]
+    fn removal_never_touches_a_foreign_skill_or_a_foreign_hook() {
+        let fixture = Fixture::new(Tool::Claude);
+        fixture.install_legacy_global_assets();
+        let foreign_skill = fixture.home.join("skills").join("other").join("SKILL.md");
+        fs::create_dir_all(foreign_skill.parent().expect("skill directory"))
+            .expect("create foreign skill directory");
+        fs::write(&foreign_skill, "# Foreign skill\n").expect("write foreign skill");
+
+        fixture
+            .plan(IntegrationOperation::Remove)
+            .apply(IntegrationOperation::Remove)
+            .expect("remove global residue");
+
+        assert_eq!(
+            fs::read_to_string(&foreign_skill).expect("read foreign skill"),
+            "# Foreign skill\n"
+        );
+        let settings: serde_json::Value = serde_json::from_slice(
+            &fs::read(fixture.home.join("settings.json")).expect("read settings"),
+        )
+        .expect("parse settings");
+        assert_eq!(
+            settings
+                .pointer("/theme")
+                .and_then(serde_json::Value::as_str),
+            Some("dark"),
+            "unrelated provider settings must survive"
+        );
+        assert_eq!(
+            settings
+                .pointer("/hooks/Stop/0/hooks/0/command")
+                .and_then(serde_json::Value::as_str),
+            Some("other"),
+            "a foreign hook must survive"
         );
     }
 
     #[test]
-    fn repairs_owned_workflow_drift_and_never_overwrites_a_foreign_skill() {
-        let fixture = Fixture::new(Tool::Codex);
-        fixture
-            .plan(IntegrationOperation::Install)
-            .apply(IntegrationOperation::Install)
-            .expect("install integration");
-        let workflow_path = fixture
+    fn a_foreign_file_at_the_skill_path_blocks_removal_rather_than_being_deleted() {
+        let fixture = Fixture::new(Tool::Claude);
+        let path = fixture
             .home
             .join("skills")
             .join("agent-workboard")
             .join("SKILL.md");
-        let mut drifted = fs::read_to_string(&workflow_path).expect("read workflow skill");
-        drifted.push_str("\ndrift\n");
-        fs::write(&workflow_path, drifted).expect("drift workflow skill");
-        let repair = fixture.plan(IntegrationOperation::Repair);
-        assert_eq!(
-            repair
-                .status(None, &IntegrationObservations::default())
-                .state,
-            IntegrationState::NeedsRepair
-        );
-        repair
-            .apply(IntegrationOperation::Repair)
-            .expect("repair workflow skill");
-        assert!(
-            !fs::read_to_string(&workflow_path)
-                .expect("read repaired workflow skill")
-                .contains("\ndrift\n")
-        );
+        fs::create_dir_all(path.parent().expect("skill directory")).expect("create directory");
+        fs::write(&path, "# Not ours\n").expect("write foreign file");
 
-        let foreign = Fixture::new(Tool::Claude);
-        let foreign_path = foreign
-            .home
-            .join("skills")
-            .join("agent-workboard")
-            .join("SKILL.md");
-        fs::create_dir_all(foreign_path.parent().expect("skill directory"))
-            .expect("create skill directory");
-        fs::write(&foreign_path, "# Foreign skill\n").expect("write foreign skill");
-        let install = foreign.plan(IntegrationOperation::Install);
+        let plan = fixture.plan(IntegrationOperation::Status);
+        let status = plan.status(None, &IntegrationObservations::default());
+
+        assert!(!status.capability.available);
+        assert_eq!(status.capability.code, "workflow_contract_conflict");
         assert_eq!(
-            install
-                .status(None, &IntegrationObservations::default())
-                .capability
-                .code,
-            "workflow_contract_conflict"
+            fs::read_to_string(&path).expect("read foreign file"),
+            "# Not ours\n"
         );
-        assert!(install.apply(IntegrationOperation::Install).is_err());
-        assert_eq!(
-            fs::read_to_string(&foreign_path).expect("read foreign skill"),
-            "# Foreign skill\n"
-        );
-        assert!(!foreign.home.join("settings.json").exists());
     }
 
     #[test]
     fn reports_malformed_and_disabled_native_configuration_without_mutating_it() {
-        let claude = Fixture::new(Tool::Claude);
-        let path = claude.home.join("settings.json");
+        let fixture = Fixture::new(Tool::Claude);
+        let path = fixture.home.join("settings.json");
         fs::write(&path, "{").expect("write malformed settings");
-        let before = fs::read(&path).expect("read settings");
-        let plan = claude.plan(IntegrationOperation::Status);
-        let observations = IntegrationObservations::default();
-        assert_eq!(
-            plan.status(None, &observations).state,
-            IntegrationState::Unavailable
-        );
-        assert!(!plan.status(None, &observations).capability.available);
-        assert_eq!(fs::read(&path).expect("read settings"), before);
+        let malformed = fixture
+            .plan(IntegrationOperation::Status)
+            .status(None, &IntegrationObservations::default());
+        assert!(!malformed.capability.available);
+        assert_eq!(fs::read_to_string(&path).expect("read settings"), "{");
 
-        let codex = Fixture::new(Tool::Codex);
-        fs::write(
-            codex.home.join("config.toml"),
-            "[features]\nhooks = false\n",
-        )
-        .expect("write config");
-        let plan = codex.plan(IntegrationOperation::Preview);
-        assert_eq!(
-            plan.status(None, &observations).capability.code,
-            "hooks_disabled"
-        );
-        assert!(plan.apply(IntegrationOperation::Install).is_err());
-        assert!(!codex.home.join("hooks.json").exists());
+        fs::write(&path, r#"{"disableAllHooks":true}"#).expect("write disabled settings");
+        let disabled = fixture
+            .plan(IntegrationOperation::Status)
+            .status(None, &IntegrationObservations::default());
+        assert!(!disabled.capability.available);
+        assert_eq!(disabled.capability.code, "hooks_disabled");
     }
 
     #[test]
-    fn unavailable_policy_keeps_owned_configuration_removable() {
-        let fixture = Fixture::new(Tool::Codex);
-        fixture
-            .plan(IntegrationOperation::Install)
-            .apply(IntegrationOperation::Install)
-            .expect("install hooks");
+    fn a_disabled_hook_policy_still_allows_residue_removal() {
+        let fixture = Fixture::new(Tool::Claude);
+        fixture.install_legacy_global_assets();
+        let path = fixture.home.join("settings.json");
+        let mut settings: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).expect("read settings")).expect("parse");
+        settings["disableAllHooks"] = json!(true);
         fs::write(
-            fixture.home.join("config.toml"),
-            "[features]\nhooks = false\n",
+            &path,
+            serde_json::to_vec_pretty(&settings).expect("encode settings"),
         )
-        .expect("disable hooks");
-        let plan = fixture.plan(IntegrationOperation::Status);
-        let registration = IntegrationRegistration {
-            enabled: true,
-            adapter_version: ADAPTER_VERSION.to_owned(),
-            first_observed_at: None,
-            last_observed_at: None,
-        };
+        .expect("write settings");
 
-        let status = plan.status(Some(&registration), &IntegrationObservations::default());
+        let status = fixture
+            .plan(IntegrationOperation::Status)
+            .status(None, &IntegrationObservations::default());
 
-        assert_eq!(status.state, IntegrationState::Unavailable);
+        assert_eq!(status.state, IntegrationState::ResiduePresent);
         assert_eq!(
             status.available_operations,
             vec![IntegrationOperation::Remove]
@@ -1726,70 +1534,30 @@ mod tests {
     fn stale_replacement_is_rejected_and_preserves_the_concurrent_change() {
         let directory = TempDir::new().expect("temp directory");
         let path = directory.path().join("settings.json");
-        fs::write(&path, b"{}\n").expect("write settings");
-        let expected = fs::read(&path).expect("read settings");
-        fs::write(&path, b"{\"changed\":true}\n").expect("change settings");
-        let result = replace_configuration(&path, Some(&expected), b"{\"installed\":true}\n");
-        assert!(matches!(
-            result,
-            Err(crate::AppError::IntegrationConfigurationChanged(_))
-        ));
-        assert_eq!(
-            fs::read(&path).expect("read settings"),
-            b"{\"changed\":true}\n"
-        );
+        fs::write(&path, b"{\"a\":1}").expect("write settings");
+        let concurrent = b"{\"a\":2}";
+        fs::write(&path, concurrent).expect("write concurrent change");
+
+        let outcome = replace_configuration(&path, Some(b"{\"a\":1}"), b"{\"a\":3}");
+
+        assert!(outcome.is_err());
+        assert_eq!(fs::read(&path).expect("read settings"), concurrent);
     }
 
     #[test]
     fn final_replacement_race_restores_the_unreviewed_change() {
         let directory = TempDir::new().expect("temp directory");
         let path = directory.path().join("settings.json");
-        let original = b"{}\n";
-        let concurrent = b"{\"changed\":true}\n";
+        let original = b"{\"a\":1}";
         fs::write(&path, original).expect("write settings");
 
-        let result =
-            replace_configuration_with(&path, Some(original), b"{\"installed\":true}\n", || {
-                fs::write(&path, concurrent).map_err(|source| crate::AppError::IntegrationIo {
-                    operation: "writing concurrent test configuration",
-                    path: path.clone(),
-                    source,
-                })
-            });
+        let outcome = replace_configuration_with(&path, Some(original), b"{\"a\":3}", || {
+            fs::write(&path, b"{\"a\":9}").expect("write racing change");
+            Ok(())
+        });
 
-        assert!(matches!(
-            result,
-            Err(crate::AppError::IntegrationConfigurationChanged(_))
-        ));
-        assert_eq!(fs::read(path).expect("read settings"), concurrent);
-    }
-
-    #[test]
-    fn interrupted_replacement_keeps_the_original_and_its_exact_backup() {
-        let directory = TempDir::new().expect("temp directory");
-        let path = directory.path().join("settings.json");
-        let original = b"{ \"theme\" : \"dark\" }\n";
-        fs::write(&path, original).expect("write settings");
-        let result =
-            replace_configuration_with(&path, Some(original), b"{\"installed\":true}\n", || {
-                Err(crate::AppError::InjectedStorageInterruption)
-            });
-        assert!(matches!(
-            result,
-            Err(crate::AppError::InjectedStorageInterruption)
-        ));
-        assert_eq!(fs::read(&path).expect("read settings"), original);
-        let backup = fs::read_dir(directory.path())
-            .expect("list fixture")
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .find(|entry| {
-                entry
-                    .extension()
-                    .is_some_and(|extension| extension == "bak")
-            })
-            .expect("backup path");
-        assert_eq!(fs::read(backup).expect("read backup"), original);
+        assert!(outcome.is_err());
+        assert_eq!(fs::read(&path).expect("read settings"), b"{\"a\":9}");
     }
 
     struct Fixture {
@@ -1819,6 +1587,51 @@ mod tests {
                 database,
                 tool,
             }
+        }
+
+        /// Reproduces what an Agent Workboard release before launch-scoped injection left behind:
+        /// owner-tagged skills and hooks inside the provider's own global home.
+        fn install_legacy_global_assets(&self) {
+            for name in ["agent-workboard", "continue-roadmap"] {
+                let path = self.home.join("skills").join(name).join("SKILL.md");
+                fs::create_dir_all(path.parent().expect("skill directory"))
+                    .expect("create skill directory");
+                fs::write(
+                    &path,
+                    format!("---\nname: {name}\nmetadata:\n  owner: {INTEGRATION_OWNER}\n---\n"),
+                )
+                .expect("write legacy skill");
+            }
+            let owned = owned_hook_configuration(self.tool, &self.executable, &self.database)
+                .expect("owned hook configuration");
+            let mut settings = json!({
+                "theme": "dark",
+                "hooks": { "Stop": [{ "hooks": [{ "type": "command", "command": "other" }] }] }
+            });
+            let hooks = settings
+                .get_mut("hooks")
+                .and_then(serde_json::Value::as_object_mut)
+                .expect("hooks object");
+            for (event, value) in owned
+                .get("hooks")
+                .and_then(serde_json::Value::as_object)
+                .expect("owned hooks")
+            {
+                hooks
+                    .entry(event.clone())
+                    .or_insert_with(|| json!([]))
+                    .as_array_mut()
+                    .expect("hook array")
+                    .extend(value.as_array().expect("owned hook array").iter().cloned());
+            }
+            fs::write(
+                self.home.join(match self.tool {
+                    Tool::Claude => "settings.json",
+                    Tool::Codex => "hooks.json",
+                }),
+                serde_json::to_vec_pretty(&settings).expect("encode settings"),
+            )
+            .expect("write legacy settings");
         }
 
         fn plan(&self, operation: IntegrationOperation) -> IntegrationPlan {
