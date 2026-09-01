@@ -215,22 +215,10 @@ mod tests {
 
         let unavailable = [
             (
-                CommandOperation::ApproveFeature {
-                    feature_id: FeatureId::generate(),
-                },
-                "publication_policy_unavailable",
-            ),
-            (
-                CommandOperation::RequestFeatureRevision {
-                    feature_id: FeatureId::generate(),
-                },
-                "publication_policy_unavailable",
-            ),
-            (
                 CommandOperation::RejectFeature {
                     feature_id: FeatureId::generate(),
                 },
-                "publication_policy_unavailable",
+                "terminal_rejection_unavailable",
             ),
             (
                 CommandOperation::CheckpointWorkItem {
@@ -298,7 +286,7 @@ mod tests {
     }
 
     #[test]
-    fn typed_client_negotiates_reads_and_advertises_only_saved_views_as_available() {
+    fn typed_client_negotiates_reads_and_advertises_only_accepted_commands() {
         let directory = TempDir::new().expect("temporary directory");
         let (application, workspace_id) = application_fixture(&directory);
         let server = DaemonServer::start_application(application, loopback(), "opaque-token")
@@ -317,14 +305,23 @@ mod tests {
                 .filter(|capability| capability.available)
                 .map(|capability| capability.code)
                 .collect::<Vec<_>>(),
-            vec![CommandCode::SaveBoardView]
+            vec![
+                CommandCode::SaveBoardView,
+                CommandCode::ApproveFeature,
+                CommandCode::RequestFeatureRevision,
+            ]
         );
         assert!(
             client
                 .handshake()
                 .command_capabilities
                 .iter()
-                .filter(|capability| capability.code != CommandCode::SaveBoardView)
+                .filter(|capability| !matches!(
+                    capability.code,
+                    CommandCode::SaveBoardView
+                        | CommandCode::ApproveFeature
+                        | CommandCode::RequestFeatureRevision
+                ))
                 .all(|capability| !capability.available)
         );
         let snapshot = client

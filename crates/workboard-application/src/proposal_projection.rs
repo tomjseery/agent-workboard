@@ -136,7 +136,7 @@ impl WorkboardApplication {
             planner_sessions,
             diagnostics,
             workflow_state: workflow_state(row.workflow_state),
-            available_actions: proposal_actions(row.revision),
+            available_actions: proposal_actions(row.revision, workflow_state(row.workflow_state)),
         })
     }
 
@@ -341,23 +341,46 @@ impl WorkboardApplication {
     }
 }
 
-fn proposal_actions(revision: u64) -> Vec<protocol::AvailableAction> {
+fn proposal_actions(
+    revision: u64,
+    state: protocol::WorkflowState,
+) -> Vec<protocol::AvailableAction> {
     [
         protocol::CommandCode::ApproveFeature,
         protocol::CommandCode::RequestFeatureRevision,
         protocol::CommandCode::RejectFeature,
     ]
     .into_iter()
-    .map(|code| protocol::AvailableAction {
-        code,
-        available: false,
-        unavailable_reason: Some(protocol::UnavailableReason {
-            code: "publication_policy_unavailable".to_owned(),
-            message: "Desktop approval actions are unavailable until the daemon accepts the typed publication policy.".to_owned(),
-        }),
-        expected_revision: Some(revision),
+    .map(|code| {
+        let unavailable_reason = proposal_action_reason(code, state);
+        protocol::AvailableAction {
+            code,
+            available: unavailable_reason.is_none(),
+            unavailable_reason,
+            expected_revision: Some(revision),
+        }
     })
     .collect()
+}
+
+fn proposal_action_reason(
+    code: protocol::CommandCode,
+    state: protocol::WorkflowState,
+) -> Option<protocol::UnavailableReason> {
+    if code == protocol::CommandCode::RejectFeature {
+        return Some(protocol::UnavailableReason {
+            code: "terminal_rejection_unavailable".to_owned(),
+            message: "Rejecting a proposal outright is unavailable; request a revision instead."
+                .to_owned(),
+        });
+    }
+    if state == protocol::WorkflowState::AwaitingApproval {
+        return None;
+    }
+    Some(protocol::UnavailableReason {
+        code: "proposal_not_awaiting_approval".to_owned(),
+        message: "This Feature has no proposal awaiting approval.".to_owned(),
+    })
 }
 
 fn workflow_rank(state: protocol::WorkflowState) -> usize {
@@ -420,6 +443,8 @@ mod tests {
         AssociationIntervalId, ConversationId, DocumentId, EpicId, FeatureId, RepositoryId,
         WorkItemId, WorkflowEventId, WorkflowRunId, WorkspaceId,
     };
+
+    use workboard_client_protocol as protocol;
 
     use crate::workspace::WorkboardApplication;
 
@@ -560,18 +585,37 @@ mod tests {
                 .iter()
                 .any(|warning| warning.code == "proposal_changed")
         );
+        assert_eq!(
+            changed.workflow_state,
+            protocol::WorkflowState::AwaitingApproval
+        );
+        assert_eq!(
+            changed
+                .available_actions
+                .iter()
+                .filter(|action| action.available)
+                .map(|action| action.code)
+                .collect::<Vec<_>>(),
+            vec![
+                protocol::CommandCode::ApproveFeature,
+                protocol::CommandCode::RequestFeatureRevision,
+            ]
+        );
         assert!(
             changed
                 .available_actions
                 .iter()
-                .all(|action| !action.available)
+                .all(|action| action.unavailable_reason.is_none() == action.available)
         );
-        assert!(changed.available_actions.iter().all(|action| {
-            action
-                .unavailable_reason
-                .as_ref()
-                .is_some_and(|reason| reason.code == "publication_policy_unavailable")
-        }));
+        assert_eq!(
+            changed
+                .available_actions
+                .iter()
+                .find(|action| action.code == protocol::CommandCode::RejectFeature)
+                .and_then(|action| action.unavailable_reason.as_ref())
+                .map(|reason| reason.code.as_str()),
+            Some("terminal_rejection_unavailable")
+        );
 
         let reconciliation = application
             .client_feature_proposal(workspace_id, reconciliation_feature)

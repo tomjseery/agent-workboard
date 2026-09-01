@@ -14,10 +14,12 @@ use workboard_core::{ConversationId, LaunchLeaseId, WorkspaceId};
 
 use crate::AppError;
 
-const CURRENT_SCHEMA_VERSION: i64 = 34;
+pub(crate) const CURRENT_SCHEMA_VERSION: i64 = 35;
 const CLIENT_EVENT_JOURNAL_SCHEMA_CHECKSUM: &str = "agent-workboard-client-event-journal-v1";
 const BOARD_VIEW_DEFINITION_SCHEMA_CHECKSUM: &str = "agent-workboard-board-view-definition-v1";
 const WORK_ITEM_DEPENDENCY_SCHEMA_CHECKSUM: &str = "agent-workboard-work-item-dependency-v1";
+const PROPOSAL_REVISION_REQUEST_SCHEMA_CHECKSUM: &str =
+    "agent-workboard-proposal-revision-request-v1";
 const FOUNDATION_SCHEMA_CHECKSUM: &str = "agent-workboard-foundation-v1";
 const LAUNCH_LEASE_SCHEMA_CHECKSUM: &str = "agent-workboard-launch-leases-v1";
 const WORKBOARD_DOMAIN_SCHEMA_CHECKSUM: &str = "agent-workboard-domain-v1";
@@ -2432,6 +2434,39 @@ fn migrate(connection: &Connection) -> Result<(), AppError> {
            ON json_extract(prerequisite.value, '$.proposal.slug') = dependency.value
          WHERE proposal.status = 'published';",
     )?;
+    apply_migration(
+        connection,
+        35,
+        PROPOSAL_REVISION_REQUEST_SCHEMA_CHECKSUM,
+        "CREATE TABLE feature_planning_proposals_v35 (
+             feature_id TEXT PRIMARY KEY REFERENCES features(id) ON DELETE RESTRICT,
+             workflow_run_id TEXT NOT NULL UNIQUE REFERENCES workflow_runs(id) ON DELETE RESTRICT,
+             idempotency_key TEXT NOT NULL UNIQUE CHECK (idempotency_key <> ''),
+             proposal_json TEXT NOT NULL CHECK (proposal_json <> ''),
+             status TEXT NOT NULL CHECK (
+                 status IN (
+                     'awaiting_approval', 'rejected', 'revision_requested',
+                     'publishing', 'published'
+                 )
+             ),
+             submitted_at TEXT NOT NULL,
+             approved_at TEXT,
+             published_commit TEXT,
+             revision_feedback TEXT CHECK (revision_feedback <> ''),
+             revision_requested_at TEXT
+         );
+         INSERT INTO feature_planning_proposals_v35 (
+             feature_id, workflow_run_id, idempotency_key, proposal_json,
+             status, submitted_at, approved_at, published_commit,
+             revision_feedback, revision_requested_at
+         )
+         SELECT feature_id, workflow_run_id, idempotency_key, proposal_json,
+                status, submitted_at, approved_at, published_commit, NULL, NULL
+         FROM feature_planning_proposals;
+         DROP TABLE feature_planning_proposals;
+         ALTER TABLE feature_planning_proposals_v35
+             RENAME TO feature_planning_proposals;",
+    )?;
     Ok(())
 }
 
@@ -4140,7 +4175,7 @@ mod tests {
         assert_eq!(preserved_attestation, valid_attestation);
         assert_eq!(legacy_authority, "immutable_evidence");
         let health = store.health().expect("storage health");
-        assert_eq!(health.schema_version, 34);
+        assert_eq!(health.schema_version, super::CURRENT_SCHEMA_VERSION);
         assert!(health.is_healthy());
         let audited_attestations: Vec<(String, String, String, String)> = store
             .read(|connection| {
@@ -4185,7 +4220,7 @@ mod tests {
             .expect("read upgraded schema 20 attestations");
         assert_eq!(upgraded_attestations, audited_attestations);
         let health = store.health().expect("upgraded storage health");
-        assert_eq!(health.schema_version, 34);
+        assert_eq!(health.schema_version, super::CURRENT_SCHEMA_VERSION);
         assert!(health.is_healthy());
         drop(store);
 

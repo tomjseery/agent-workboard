@@ -558,9 +558,31 @@ fn dispatch_command(
             )
             .map(ResponseResult::BoardView)
             .map_err(CommandFailure::Application),
-        CommandOperation::ApproveFeature { .. }
-        | CommandOperation::RequestFeatureRevision { .. }
-        | CommandOperation::RejectFeature { .. }
+        CommandOperation::ApproveFeature { feature_id } => application
+            .approve_client_feature(
+                core_workspace_id(context.workspace_id),
+                context.expected_revision,
+                &context.idempotency_key,
+                context.request_id,
+                workboard_core::FeatureId::from_uuid(*feature_id.as_uuid()),
+            )
+            .map(proposal_result)
+            .map_err(CommandFailure::Application),
+        CommandOperation::RequestFeatureRevision {
+            feature_id,
+            feedback,
+        } => application
+            .request_client_feature_revision(
+                core_workspace_id(context.workspace_id),
+                context.expected_revision,
+                &context.idempotency_key,
+                context.request_id,
+                workboard_core::FeatureId::from_uuid(*feature_id.as_uuid()),
+                feedback,
+            )
+            .map(proposal_result)
+            .map_err(CommandFailure::Application),
+        CommandOperation::RejectFeature { .. }
         | CommandOperation::CheckpointWorkItem { .. }
         | CommandOperation::StartSession { .. }
         | CommandOperation::ResumeSession { .. }
@@ -570,6 +592,12 @@ fn dispatch_command(
             command_unavailable_reason(command.code()).unwrap_or_else(accepted_capability_reason),
         )),
     }
+}
+
+fn proposal_result(
+    outcome: workboard_application::projection::ProposalCommandOutcome,
+) -> ResponseResult {
+    ResponseResult::FeatureProposal(outcome.proposal)
 }
 
 fn accepted_capability_reason() -> UnavailableReason {
@@ -582,11 +610,10 @@ fn accepted_capability_reason() -> UnavailableReason {
 fn command_unavailable_reason(code: CommandCode) -> Option<UnavailableReason> {
     let (code, message) = match code {
         CommandCode::SaveBoardView => return None,
-        CommandCode::ApproveFeature
-        | CommandCode::RequestFeatureRevision
-        | CommandCode::RejectFeature => (
-            "publication_policy_unavailable",
-            "Desktop approval actions are unavailable until the daemon accepts the typed publication policy.",
+        CommandCode::ApproveFeature | CommandCode::RequestFeatureRevision => return None,
+        CommandCode::RejectFeature => (
+            "terminal_rejection_unavailable",
+            "Rejecting a proposal outright is unavailable; request a revision instead.",
         ),
         CommandCode::CheckpointWorkItem => (
             "structured_checkpoint_unavailable",

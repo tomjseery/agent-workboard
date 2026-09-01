@@ -1274,7 +1274,8 @@
         "value": {
           "type": "request_feature_revision",
           "value": {
-            "featureId": "50000000-0000-0000-0000-000000000001"
+            "featureId": "50000000-0000-0000-0000-000000000001",
+            "feedback": "Split the migration item."
           }
         }
       },

@@ -107,7 +107,7 @@ impl RequestEnvelope {
                     )));
                 }
             }
-            Operation::Command(_) => {
+            Operation::Command(command) => {
                 if self.workspace_id.is_none()
                     || self.expected_revision.is_none()
                     || self.idempotency_key.is_none()
@@ -117,10 +117,47 @@ impl RequestEnvelope {
                         "mutation_fields_required",
                     )));
                 }
+                validate_command(command)?;
             }
         }
         Ok(())
     }
+}
+
+const NEWLINE: char = '\n';
+const TAB: char = '\t';
+
+fn validate_command(command: &CommandOperation) -> Result<(), Box<ProtocolError>> {
+    match command {
+        CommandOperation::RequestFeatureRevision { feedback, .. } => {
+            validate_operator_text("feedback", feedback)
+        }
+        CommandOperation::SaveBoardView { .. }
+        | CommandOperation::ApproveFeature { .. }
+        | CommandOperation::RejectFeature { .. }
+        | CommandOperation::CheckpointWorkItem { .. }
+        | CommandOperation::StartSession { .. }
+        | CommandOperation::ResumeSession { .. }
+        | CommandOperation::FocusSession { .. }
+        | CommandOperation::FollowUpSession { .. }
+        | CommandOperation::RecoverSession { .. } => Ok(()),
+    }
+}
+
+fn validate_operator_text(field: &str, value: &str) -> Result<(), Box<ProtocolError>> {
+    if value.trim().is_empty() {
+        return Err(Box::new(ProtocolError::validation(field, "text_required")));
+    }
+    if value.len() > crate::MAX_OPERATOR_TEXT_BYTES {
+        return Err(Box::new(ProtocolError::validation(field, "text_too_long")));
+    }
+    if value
+        .chars()
+        .any(|character| character.is_control() && character != NEWLINE && character != TAB)
+    {
+        return Err(Box::new(ProtocolError::validation(field, "invalid_text")));
+    }
+    Ok(())
 }
 
 fn validate_read_query(query: &ReadQuery) -> Result<(), Box<ProtocolError>> {
@@ -252,16 +289,37 @@ impl CommandCode {
     rename_all_fields = "camelCase"
 )]
 pub enum CommandOperation {
-    SaveBoardView { definition: BoardViewDefinition },
-    ApproveFeature { feature_id: crate::FeatureId },
-    RequestFeatureRevision { feature_id: crate::FeatureId },
-    RejectFeature { feature_id: crate::FeatureId },
-    CheckpointWorkItem { work_item_id: crate::WorkItemId },
-    StartSession { work_item_id: crate::WorkItemId },
-    ResumeSession { session_id: crate::SessionId },
-    FocusSession { session_id: crate::SessionId },
-    FollowUpSession { session_id: crate::SessionId },
-    RecoverSession { session_id: crate::SessionId },
+    SaveBoardView {
+        definition: BoardViewDefinition,
+    },
+    ApproveFeature {
+        feature_id: crate::FeatureId,
+    },
+    RequestFeatureRevision {
+        feature_id: crate::FeatureId,
+        feedback: String,
+    },
+    RejectFeature {
+        feature_id: crate::FeatureId,
+    },
+    CheckpointWorkItem {
+        work_item_id: crate::WorkItemId,
+    },
+    StartSession {
+        work_item_id: crate::WorkItemId,
+    },
+    ResumeSession {
+        session_id: crate::SessionId,
+    },
+    FocusSession {
+        session_id: crate::SessionId,
+    },
+    FollowUpSession {
+        session_id: crate::SessionId,
+    },
+    RecoverSession {
+        session_id: crate::SessionId,
+    },
 }
 
 impl CommandOperation {

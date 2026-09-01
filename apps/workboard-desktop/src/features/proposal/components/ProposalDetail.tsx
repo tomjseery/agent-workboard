@@ -1,5 +1,6 @@
 import type { FeatureId, WorkspaceId } from "../../../core/generated";
 import { useFeatureProposal } from "../hooks/useProposal";
+import { ApprovalActions } from "./ApprovalActions";
 
 interface ProposalDetailProps {
   workspaceId: WorkspaceId;
@@ -15,7 +16,6 @@ export function ProposalDetail({ workspaceId, featureId }: ProposalDetailProps) 
   }
   if (model.error != null || model.projection === undefined) return <Failure message={model.error?.message ?? "The Feature proposal is unavailable."} onRetry={() => void model.retry()} />;
   const proposal = model.projection;
-  const unavailableReason = proposal.availableActions.find((action) => !action.available)?.unavailableReason;
   return (
     <section aria-labelledby="proposal-title" className="space-y-5 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5">
       <header className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--accent)]">Feature proposal</p><h2 id="proposal-title" className="mt-1 text-2xl font-semibold">{proposal.feature.title}</h2></div><span className="rounded-full border border-[var(--border)] px-3 py-1 text-xs">{proposal.workflowState.replaceAll("_", " ")}</span></header>
@@ -30,7 +30,7 @@ export function ProposalDetail({ workspaceId, featureId }: ProposalDetailProps) 
       <section aria-labelledby="proposal-warnings"><h3 id="proposal-warnings" className="text-lg font-semibold">Warnings</h3>{proposal.warnings.length === 0 ? <p className="mt-2">No warnings.</p> : <ul className="mt-2 space-y-2">{proposal.warnings.map((warning) => <li key={warning.code} role={warning.severity === "error" || warning.severity === "warning" ? "alert" : undefined} className="rounded-lg border border-[var(--warning-muted)] p-3"><span className="font-semibold">{warning.code.replaceAll("_", " ")}:</span> {warning.message}</li>)}</ul>}</section>
       <section aria-labelledby="planner-sessions"><h3 id="planner-sessions" className="text-lg font-semibold">Planner sessions</h3>{proposal.plannerSessions.length === 0 ? <p className="mt-2">No planner sessions are recorded.</p> : <ul className="mt-2 grid gap-2 sm:grid-cols-2">{proposal.plannerSessions.map((session) => <li key={session.id} className="rounded-lg border border-[var(--border)] p-3"><span className="font-semibold">{session.provider}</span><span className="ml-2">{session.liveState.replaceAll("_", " ")}</span><p className="text-xs text-[var(--muted-text)]">{session.bindingState.replaceAll("_", " ")}</p></li>)}</ul>}</section>
       {(proposal.diagnostics.length > 0 || model.diagnostics.length > 0) && <section aria-labelledby="proposal-diagnostics"><h3 id="proposal-diagnostics" className="text-lg font-semibold">Diagnostics</h3><ul className="mt-2 space-y-2">{[...proposal.diagnostics, ...model.diagnostics].map((diagnostic) => <li key={`${diagnostic.code}:${diagnostic.message}`} role="alert" className="rounded-lg border border-[var(--warning-muted)] p-3">{diagnostic.message}</li>)}</ul></section>}
-      {unavailableReason != null && <aside aria-label="Approval availability" className="rounded-xl border border-[var(--border)] p-4"><h3 className="font-semibold">Approval actions unavailable</h3><p className="mt-1">{unavailableReason.message}</p><p className="mt-1 text-xs text-[var(--muted-text)]">{unavailableReason.code}</p></aside>}
+      <ApprovalActions workspaceId={workspaceId} featureId={featureId} actions={proposal.availableActions} revision={proposal.revision} />
     </section>
   );
 }
