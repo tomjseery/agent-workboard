@@ -743,6 +743,10 @@ Current verification:
 - Real-install preflight found the active dogfood database at schema 41 while this release branch supports
   schema 32. Older binaries now fail closed on future schemas while leaving `workboard update` available;
   the candidate must incorporate the accepted later schema migrations before it can dogfood that database.
+- The final updater-enabled clean candidate from `67f1204` has SHA-256
+  `ab3421c2cc120bc52df9d4f9c5ab84d29790a9fe96f487255dac90a156d341ff`. It passed the packaged update smoke
+  test and was installed per user after a schema-41-compatible verified database backup; its deliberate
+  future-schema rejection confirmed that the live state was preserved rather than downgraded.
 
 Next delivery gate: use the unsigned candidate for several days across real create, plan, execute, resume,
 adopt, recovery, and in-place update work; fix observed friction; then request owner acceptance, contract
