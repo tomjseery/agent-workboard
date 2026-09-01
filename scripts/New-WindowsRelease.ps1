@@ -66,6 +66,7 @@ try {
         Copy-Item -LiteralPath (Join-Path $repositoryRoot 'target\release\workboard.exe') -Destination $staging
         Copy-Item -LiteralPath (Join-Path $repositoryRoot 'target\release\workboard-daemon.exe') -Destination $staging
         Copy-Item -LiteralPath (Join-Path $repositoryRoot 'packaging\windows\Install.ps1') -Destination $staging
+        Copy-Item -LiteralPath (Join-Path $repositoryRoot 'packaging\windows\Update.ps1') -Destination $staging
         Copy-Item -LiteralPath (Join-Path $repositoryRoot 'packaging\windows\Uninstall.ps1') -Destination $staging
         Copy-Item -LiteralPath (Join-Path $repositoryRoot 'docs\operations\WINDOWS.md') -Destination $staging
         Copy-Item -LiteralPath (Join-Path $repositoryRoot 'docs\operations\RELEASING.md') -Destination $staging

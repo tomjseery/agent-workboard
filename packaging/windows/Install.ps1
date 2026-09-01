@@ -28,9 +28,15 @@ foreach ($file in $releaseManifest.files) {
 New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
 $previousManifestPath = Join-Path $InstallRoot 'installed-manifest.json'
 $previousPathAdded = $false
+$previousFiles = @()
 if (Test-Path -LiteralPath $previousManifestPath -PathType Leaf) {
     $previous = Get-Content -Raw -LiteralPath $previousManifestPath | ConvertFrom-Json
+    if ($previous.owner -ne 'agent-workboard/windows-install-v1' -or
+        [System.IO.Path]::GetFullPath($previous.installRoot) -ine $InstallRoot) {
+        throw 'The existing install manifest is not owned by this Agent Workboard installation.'
+    }
     $previousPathAdded = $previous.pathAdded -eq $true
+    $previousFiles = @($previous.files)
 }
 
 foreach ($file in $releaseManifest.files) {
@@ -44,6 +50,17 @@ foreach ($file in $releaseManifest.files) {
 }
 foreach ($controlFile in 'release-manifest.json', 'SHA256SUMS') {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $controlFile) -Destination (Join-Path $InstallRoot $controlFile) -Force
+}
+
+$currentFiles = @($releaseManifest.files.path) + 'release-manifest.json' + 'SHA256SUMS' + 'installed-manifest.json'
+foreach ($relative in $previousFiles | Where-Object { $_ -notin $currentFiles }) {
+    $obsolete = [System.IO.Path]::GetFullPath((Join-Path $InstallRoot $relative))
+    if (-not $obsolete.StartsWith($InstallRoot.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Existing install manifest path escapes the installation root: $relative"
+    }
+    if (Test-Path -LiteralPath $obsolete -PathType Leaf) {
+        Remove-Item -LiteralPath $obsolete -Force
+    }
 }
 
 $pathAdded = $previousPathAdded
@@ -65,7 +82,7 @@ $installedManifest = [ordered]@{
     version = $releaseManifest.version
     installRoot = $InstallRoot
     pathAdded = $pathAdded
-    files = @($releaseManifest.files.path) + 'release-manifest.json' + 'SHA256SUMS' + 'installed-manifest.json'
+    files = $currentFiles
 }
 $installedManifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $previousManifestPath -Encoding utf8
 

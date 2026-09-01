@@ -4,6 +4,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
+use std::process::Command as ProcessCommand;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use directories::{ProjectDirs, UserDirs};
@@ -94,6 +95,7 @@ enum Command {
     Workflow(WorkflowArgs),
     Recover(RecoverArgs),
     Diagnostics(DiagnosticsArgs),
+    Update(UpdateArgs),
     Mcp,
     #[command(alias = "snapshot")]
     Show,
@@ -108,6 +110,20 @@ struct DiagnosticsArgs {
     claude_home: Option<PathBuf>,
     #[arg(long)]
     codex_home: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+struct UpdateArgs {
+    #[arg(long)]
+    check: bool,
+    #[arg(long)]
+    version: Option<String>,
+    #[arg(long, hide = true, requires = "checksum")]
+    archive: Option<PathBuf>,
+    #[arg(long, hide = true, requires = "archive")]
+    checksum: Option<PathBuf>,
+    #[arg(long)]
+    force: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -785,6 +801,9 @@ where
 
 fn execute(cli: Cli) -> Result<String, AppError> {
     let current_directory = std::env::current_dir().map_err(AppError::GitIo)?;
+    if let Some(Command::Update(arguments)) = cli.command.as_ref() {
+        return execute_update(arguments, cli.json, &current_directory);
+    }
     if let Some(Command::Import(ImportArgs {
         command:
             ImportCommand::ContextCatalogue {
@@ -2263,6 +2282,7 @@ fn execute(cli: Cli) -> Result<String, AppError> {
                 ),
             )
         }
+        Some(Command::Update(_)) => unreachable!(),
         Some(Command::Show) => {
             let workspace_id = resolve_workspace(&application, cli.workspace)?;
             let snapshot = application.snapshot(workspace_id)?;
@@ -2375,6 +2395,99 @@ fn execute(cli: Cli) -> Result<String, AppError> {
                 },
         })) => unreachable!(),
         Some(Command::Mcp) => unreachable!(),
+    }
+}
+
+fn execute_update(
+    arguments: &UpdateArgs,
+    json: bool,
+    current_directory: &Path,
+) -> Result<String, AppError> {
+    let executable = std::env::current_exe().map_err(AppError::GitIo)?;
+    let install_root = executable.parent().ok_or_else(|| {
+        AppError::Domain("the Workboard installation directory could not be resolved".to_owned())
+    })?;
+    let script = install_root.join("Update.ps1");
+    if !script.is_file() {
+        return Err(AppError::Domain(
+            "self-update is available from an installed Windows release; build a new candidate from source for development builds"
+                .to_owned(),
+        ));
+    }
+
+    let powershell = std::env::var_os("SystemRoot")
+        .map(PathBuf::from)
+        .map(|root| {
+            root.join("System32")
+                .join("WindowsPowerShell")
+                .join("v1.0")
+                .join("powershell.exe")
+        })
+        .filter(|path| path.is_file())
+        .unwrap_or_else(|| PathBuf::from("powershell.exe"));
+    let mut command = ProcessCommand::new(powershell);
+    command
+        .arg("-NoProfile")
+        .arg("-ExecutionPolicy")
+        .arg("Bypass")
+        .arg("-File")
+        .arg(&script)
+        .arg("-CurrentVersion")
+        .arg(env!("CARGO_PKG_VERSION"))
+        .arg("-InstallRoot")
+        .arg(install_root);
+    if arguments.check {
+        command.arg("-Check");
+    } else {
+        command
+            .arg("-ParentProcessId")
+            .arg(std::process::id().to_string());
+    }
+    if let Some(version) = &arguments.version {
+        command.arg("-Version").arg(version);
+    }
+    if let Some(archive) = &arguments.archive {
+        command
+            .arg("-Archive")
+            .arg(absolute(current_directory, archive));
+    }
+    if let Some(checksum) = &arguments.checksum {
+        command
+            .arg("-Checksum")
+            .arg(absolute(current_directory, checksum));
+    }
+    if arguments.force {
+        command.arg("-Force");
+    }
+
+    if arguments.check {
+        let result = command.output().map_err(AppError::GitIo)?;
+        if !result.status.success() {
+            return Err(AppError::Domain(
+                String::from_utf8_lossy(&result.stderr).trim().to_owned(),
+            ));
+        }
+        let message = String::from_utf8_lossy(&result.stdout).trim().to_owned();
+        if json {
+            serde_json::to_string_pretty(&serde_json::json!({ "message": message }))
+                .map_err(Into::into)
+        } else {
+            Ok(message)
+        }
+    } else {
+        command.spawn().map_err(AppError::GitIo)?;
+        if json {
+            serde_json::to_string_pretty(&serde_json::json!({
+                "currentVersion": env!("CARGO_PKG_VERSION"),
+                "updaterStarted": true
+            }))
+            .map_err(Into::into)
+        } else {
+            Ok(
+                "Updater started; this process will exit before the verified release is installed."
+                    .to_owned(),
+            )
+        }
     }
 }
 

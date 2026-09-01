@@ -62,7 +62,25 @@ supplying its one-use confirmation token.
 
 ## Upgrade
 
-Back up first, stop `workboard-daemon.exe` if it is running, extract the newer archive, and run its installer:
+Installed GitHub releases update in place with one command:
+
+```powershell
+workboard update
+```
+
+Use `workboard update --check` to check without installing or `workboard update --version 0.1.1` to select a
+specific published version. The updater downloads the matching Windows archive and published checksum from
+the project's GitHub Release, verifies the archive checksum and every release-manifest entry, stops only the
+daemon running from the same installation, and reruns the per-user installer. The current CLI exits before
+its executable is replaced.
+
+The database, planning store, repository registrations, hierarchy, checkouts, managed-session bundles, and
+provider homes are not package files and are preserved. You do not run `init`, re-add repositories, or
+recreate work after an update. Source checkouts do not self-update; build a fresh candidate when developing
+Workboard itself.
+
+For a manual or pre-release upgrade, back up first, stop `workboard-daemon.exe` if it is running, extract the
+newer archive, and run its installer:
 
 ```powershell
 workboard backup "$HOME\workboard-backups\workboard-before-upgrade.sqlite"

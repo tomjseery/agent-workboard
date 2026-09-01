@@ -717,9 +717,11 @@ Ordered delivery breakdown:
 4. [x] Build the candidate from a clean checkout, install it into an isolated per-user root, exercise the
    packaged CLI and daemon without Node.js or the source checkout, uninstall it, and record verification
    evidence.
-5. Dogfood the unsigned candidate for several days and fix observed workflow friction; only then request
-   owner acceptance to freeze the v0 command, schema, and document contracts and supply future signing
-   credentials.
+5. [ ] Dogfood the unsigned candidate for several days and fix observed workflow friction. The installed
+   application must preserve its database, planning-store registration, repositories, hierarchy, and session
+   history across upgrades and provide a one-command GitHub Release update path; source builds remain a
+   separate developer workflow. Only then request owner acceptance to freeze the v0 command, schema, and
+   document contracts and supply future signing credentials.
 6. After the Windows terminal release is accepted, plan Linux packaging and the optional graphical client as
    separate roadmap deliveries.
 
@@ -735,10 +737,15 @@ Current verification:
   `5f379011a9b09ebbf302bd655f86cb69a7bf256966691c10784e6d150978fe07`; its SBOM contains 199 locked
   components and its unsigned provenance names nine packaged inputs.
 - The hook-input fuzz target completed 300,826 executions in 31 seconds without a crash.
+- The packaged updater passed the reduced-`PATH`, source-free release test: it verified a release archive,
+  replaced the installed files in place, preserved the test database and `-NoPath` choice, and left provider
+  fixtures unchanged through uninstall.
 
 Next delivery gate: use the unsigned candidate for several days across real create, plan, execute, resume,
-adopt, and recovery work; fix observed friction; then request owner acceptance, contract freeze, and signing
-inputs. No command, schema, or document contract is frozen by this delivery.
+adopt, recovery, and in-place update work; fix observed friction; then request owner acceptance, contract
+freeze, and signing inputs. The first real installation confirmed that the existing database and planning
+store survive package installation without redefinition. No command, schema, or document contract is frozen
+by this delivery.
 
 - [x] Add concise installation, upgrade, uninstall, integration-permission, storage, backup, recovery, and
   troubleshooting documentation.
