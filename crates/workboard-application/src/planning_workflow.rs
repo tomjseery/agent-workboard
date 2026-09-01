@@ -382,35 +382,18 @@ impl<'a> PlanningWorkflowService<'a> {
         feature_id: FeatureId,
         approved_at: OffsetDateTime,
     ) -> Result<FeatureProposalOutcome, AppError> {
+        self.store
+            .write(|transaction| approve_proposal_in(transaction, feature_id, approved_at))
+    }
+
+    pub fn request_proposal_revision(
+        &mut self,
+        feature_id: FeatureId,
+        feedback: &str,
+        requested_at: OffsetDateTime,
+    ) -> Result<FeatureProposalOutcome, AppError> {
         self.store.write(|transaction| {
-            let draft = draft_by_feature(transaction, feature_id)?;
-            if draft.state != WorkflowState::AwaitingApproval {
-                return Err(AppError::Domain(
-                    "Feature has no proposal awaiting approval".to_owned(),
-                ));
-            }
-            transition_feature(
-                transaction,
-                &draft,
-                WorkflowState::Publishing,
-                WorkflowActor::User,
-                approved_at,
-                "{}",
-                None,
-            )?;
-            transaction.execute(
-                "UPDATE feature_planning_proposals
-                 SET status = 'publishing', approved_at = ?2
-                 WHERE feature_id = ?1 AND status = 'awaiting_approval'",
-                params![feature_id.to_string(), timestamp(approved_at)],
-            )?;
-            let count = proposal_work_item_count(transaction, feature_id)?;
-            Ok(FeatureProposalOutcome {
-                feature_id,
-                workflow_run_id: draft.workflow_run_id,
-                state: WorkflowState::Publishing,
-                work_item_count: count,
-            })
+            request_proposal_revision_in(transaction, feature_id, feedback, requested_at)
         })
     }
 
@@ -998,6 +981,94 @@ fn append_event(
         ],
     )?;
     Ok(event_id)
+}
+
+pub(crate) fn approve_proposal_in(
+    transaction: &Transaction<'_>,
+    feature_id: FeatureId,
+    approved_at: OffsetDateTime,
+) -> Result<FeatureProposalOutcome, AppError> {
+    let draft = draft_by_feature(transaction, feature_id)?;
+    if draft.state != WorkflowState::AwaitingApproval {
+        return Err(AppError::Domain(
+            "Feature has no proposal awaiting approval".to_owned(),
+        ));
+    }
+    transition_feature(
+        transaction,
+        &draft,
+        WorkflowState::Publishing,
+        WorkflowActor::User,
+        approved_at,
+        "{}",
+        None,
+    )?;
+    transaction.execute(
+        "UPDATE feature_planning_proposals
+         SET status = 'publishing', approved_at = ?2
+         WHERE feature_id = ?1 AND status = 'awaiting_approval'",
+        params![feature_id.to_string(), timestamp(approved_at)],
+    )?;
+    let count = proposal_work_item_count(transaction, feature_id)?;
+    Ok(FeatureProposalOutcome {
+        feature_id,
+        workflow_run_id: draft.workflow_run_id,
+        state: WorkflowState::Publishing,
+        work_item_count: count,
+    })
+}
+
+pub(crate) fn validate_revision_feedback(feedback: &str) -> Result<(), AppError> {
+    if feedback.trim().is_empty()
+        || feedback.len() > 8 * 1024
+        || feedback
+            .chars()
+            .any(|value| value.is_control() && value != '\n' && value != '\t')
+    {
+        return Err(AppError::PlanningDocumentInvalid(
+            "revision feedback is invalid".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn request_proposal_revision_in(
+    transaction: &Transaction<'_>,
+    feature_id: FeatureId,
+    feedback: &str,
+    requested_at: OffsetDateTime,
+) -> Result<FeatureProposalOutcome, AppError> {
+    validate_revision_feedback(feedback)?;
+    let draft = draft_by_feature(transaction, feature_id)?;
+    if draft.state != WorkflowState::AwaitingApproval {
+        return Err(AppError::Domain(
+            "Feature has no proposal awaiting approval".to_owned(),
+        ));
+    }
+    transition_feature(
+        transaction,
+        &draft,
+        WorkflowState::PlanningActive,
+        WorkflowActor::User,
+        requested_at,
+        &serde_json::json!({ "revisionFeedback": feedback }).to_string(),
+        None,
+    )?;
+    transaction.execute(
+        "UPDATE feature_planning_proposals
+         SET status = 'revision_requested',
+             revision_feedback = ?2,
+             revision_requested_at = ?3
+         WHERE feature_id = ?1 AND status = 'awaiting_approval'",
+        params![feature_id.to_string(), feedback, timestamp(requested_at)],
+    )?;
+    let count = proposal_work_item_count(transaction, feature_id)?;
+    Ok(FeatureProposalOutcome {
+        feature_id,
+        workflow_run_id: draft.workflow_run_id,
+        state: WorkflowState::PlanningActive,
+        work_item_count: count,
+    })
 }
 
 fn transition_feature(

@@ -550,7 +550,10 @@ fn incompatible_commands() -> Vec<Value> {
     let commands = [
         json!({ "type": "save_board_view", "value": { "definition": board_view(1) } }),
         json!({ "type": "approve_feature", "value": { "featureId": FEATURE_ID } }),
-        json!({ "type": "request_feature_revision", "value": { "featureId": FEATURE_ID } }),
+        json!({
+            "type": "request_feature_revision",
+            "value": { "featureId": FEATURE_ID, "feedback": "Split the migration item." }
+        }),
         json!({ "type": "reject_feature", "value": { "featureId": FEATURE_ID } }),
         json!({ "type": "checkpoint_work_item", "value": { "workItemId": WORK_ITEM_ID } }),
         json!({ "type": "start_session", "value": { "workItemId": WORK_ITEM_ID } }),

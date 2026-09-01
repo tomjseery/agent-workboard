@@ -9,6 +9,45 @@ use crate::AppError;
 use crate::workspace::WorkboardApplication;
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct ProposalCommandOutcome {
+    pub proposal: protocol::FeatureProposalProjection,
+    pub partial_outcomes: Vec<protocol::PartialOutcome>,
+}
+
+fn proposal_event(
+    workspace_id: core::WorkspaceId,
+    revision: u64,
+    feature_id: core::FeatureId,
+    request_id: protocol::RequestId,
+    partial_outcomes: Vec<protocol::PartialOutcome>,
+) -> protocol::EventEnvelope {
+    protocol::EventEnvelope {
+        protocol_version: protocol::CURRENT_PROTOCOL_VERSION,
+        event_version: 1,
+        workspace_id: wire_workspace_id(workspace_id),
+        sequence: revision,
+        event_id: protocol::EventId::generate(),
+        occurred_at: OffsetDateTime::now_utc(),
+        owner: protocol::EntityRef::Feature(wire_feature_id(feature_id)),
+        entity_revision: revision,
+        kind: protocol::EventKind::ProposalChanged,
+        payload: None,
+        invalidation_scope: Some(protocol::InvalidationScope {
+            queries: vec![
+                protocol::ReadQueryCode::FeatureProposal,
+                protocol::ReadQueryCode::ApprovalQueue,
+                protocol::ReadQueryCode::Board,
+                protocol::ReadQueryCode::Attention,
+                protocol::ReadQueryCode::WorkspaceHierarchy,
+            ],
+            owners: vec![protocol::EntityRef::Feature(wire_feature_id(feature_id))],
+        }),
+        operation_correlation_id: request_id,
+        partial_outcomes,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum ReplayResult {
     Events(Vec<protocol::EventEnvelope>),
     Resync(protocol::ResyncRequirement),
@@ -381,6 +420,110 @@ impl WorkboardApplication {
         Ok(projected.value)
     }
 
+    pub fn approve_client_feature(
+        &mut self,
+        workspace_id: core::WorkspaceId,
+        expected_revision: u64,
+        idempotency_key: &str,
+        request_id: protocol::RequestId,
+        feature_id: core::FeatureId,
+    ) -> Result<ProposalCommandOutcome, AppError> {
+        let approved_at = OffsetDateTime::now_utc();
+        self.store.write_projected(
+            workspace_id,
+            expected_revision,
+            idempotency_key,
+            "approve_feature",
+            |transaction| {
+                crate::planning_workflow::approve_proposal_in(transaction, feature_id, approved_at)
+                    .map(|_| ())
+            },
+            |revision, ()| {
+                proposal_event(workspace_id, revision, feature_id, request_id, Vec::new())
+            },
+        )?;
+        let publication = self
+            .planning_workflows()
+            .publish_approved(feature_id, approved_at);
+        let partial_outcomes = match &publication {
+            Ok(_) => Vec::new(),
+            Err(error) => vec![protocol::PartialOutcome {
+                owner: Some(protocol::EntityRef::Feature(wire_feature_id(feature_id))),
+                code: error.code().to_owned(),
+                succeeded: false,
+                message: error.to_string(),
+                reconciliation_required: true,
+                evidence: Vec::new(),
+            }],
+        };
+        let published_revision = self.projection_revision(workspace_id)?;
+        self.store.write_projected(
+            workspace_id,
+            published_revision,
+            &format!("{idempotency_key}:publication"),
+            "approve_feature_publication",
+            |_| Ok(()),
+            |revision, ()| {
+                proposal_event(
+                    workspace_id,
+                    revision,
+                    feature_id,
+                    request_id,
+                    partial_outcomes.clone(),
+                )
+            },
+        )?;
+        Ok(ProposalCommandOutcome {
+            proposal: self.client_feature_proposal(workspace_id, feature_id)?,
+            partial_outcomes: match publication {
+                Ok(_) => Vec::new(),
+                Err(error) => vec![protocol::PartialOutcome {
+                    owner: Some(protocol::EntityRef::Feature(wire_feature_id(feature_id))),
+                    code: error.code().to_owned(),
+                    succeeded: false,
+                    message: error.to_string(),
+                    reconciliation_required: true,
+                    evidence: Vec::new(),
+                }],
+            },
+        })
+    }
+
+    pub fn request_client_feature_revision(
+        &mut self,
+        workspace_id: core::WorkspaceId,
+        expected_revision: u64,
+        idempotency_key: &str,
+        request_id: protocol::RequestId,
+        feature_id: core::FeatureId,
+        feedback: &str,
+    ) -> Result<ProposalCommandOutcome, AppError> {
+        crate::planning_workflow::validate_revision_feedback(feedback)?;
+        let requested_at = OffsetDateTime::now_utc();
+        self.store.write_projected(
+            workspace_id,
+            expected_revision,
+            idempotency_key,
+            "request_feature_revision",
+            |transaction| {
+                crate::planning_workflow::request_proposal_revision_in(
+                    transaction,
+                    feature_id,
+                    feedback,
+                    requested_at,
+                )
+                .map(|_| ())
+            },
+            |revision, ()| {
+                proposal_event(workspace_id, revision, feature_id, request_id, Vec::new())
+            },
+        )?;
+        Ok(ProposalCommandOutcome {
+            proposal: self.client_feature_proposal(workspace_id, feature_id)?,
+            partial_outcomes: Vec::new(),
+        })
+    }
+
     pub fn replay_client_events(
         &self,
         workspace_id: core::WorkspaceId,
@@ -711,6 +854,10 @@ fn map_snapshot(snapshot: core::WorkspaceSnapshot) -> protocol::BoardSnapshot {
             })
             .collect(),
     }
+}
+
+fn wire_feature_id(id: core::FeatureId) -> protocol::FeatureId {
+    protocol::FeatureId::from_uuid(*id.as_uuid())
 }
 
 fn wire_workspace_id(id: core::WorkspaceId) -> protocol::WorkspaceId {
