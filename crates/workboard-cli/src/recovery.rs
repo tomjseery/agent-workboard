@@ -294,6 +294,23 @@ fn recover_entry(
             }
         }
     };
+    let capability =
+        match crate::capability_inputs(application, entry.tool, &entry.repository_id.to_string()) {
+            Ok(capability) => capability,
+            Err(error) => {
+                let code = error.code().to_owned();
+                return record(
+                    application,
+                    attempt_id,
+                    entry,
+                    RecoveryOutcomeStatus::Failed,
+                    None,
+                    Some(&code),
+                    &error.to_string(),
+                    results,
+                );
+            }
+        };
     let prepared = match application
         .session_launch()
         .begin(BeginManagedSessionLaunch {
@@ -319,12 +336,18 @@ fn recover_entry(
             created_at: now,
             expires_at: now + time::Duration::minutes(2),
             resume_context: context,
+            profile: {
+                let mut profile = entry.profile.clone();
+                profile.source = workboard_core::LaunchProfileSource::ResumePreserved;
+                profile
+            },
             initial_prompt: replacing.then(|| {
                 format!(
                     "Continue {} as a confirmed replacement for unresumable native session {}. Read the assigned Workboard hierarchy and preserve its existing history.",
                     entry.tab_title, entry.native_id
                 )
             }),
+            capability,
         }) {
         Ok(prepared) => prepared,
         Err(error) => {

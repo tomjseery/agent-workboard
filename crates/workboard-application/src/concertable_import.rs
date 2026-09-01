@@ -4626,6 +4626,7 @@ mod tests {
     }
 
     fn restore_schema_30_import_database(connection: &Connection) {
+        crate::storage::drop_workspace_planning_schema(connection);
         connection
             .execute_batch(
                 "DROP TABLE checkout_reconciliation_events;

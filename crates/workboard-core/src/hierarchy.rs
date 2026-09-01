@@ -214,6 +214,7 @@ pub struct WorkItem {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "id", rename_all = "snake_case")]
 pub enum HierarchyOwner {
+    Workspace(WorkspaceId),
     Epic(EpicId),
     Feature(FeatureId),
     WorkItem(WorkItemId),
@@ -247,7 +248,7 @@ pub enum CheckoutAvailability {
     Replaced,
 }
 
-pub const CHECKOUT_READINESS_SCHEMA_VERSION: u32 = 1;
+pub const CHECKOUT_READINESS_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

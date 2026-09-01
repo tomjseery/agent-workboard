@@ -84,6 +84,16 @@ pub struct FeatureProposalOutcome {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FeatureProposalDecisionOutcome {
+    pub feature_id: FeatureId,
+    pub workflow_run_id: WorkflowRunId,
+    pub generation: u32,
+    pub decision: String,
+    pub reason: String,
+    pub state: WorkflowState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FeaturePublicationOutcome {
     pub feature_id: FeatureId,
     pub workflow_run_id: WorkflowRunId,
@@ -323,7 +333,8 @@ impl<'a> PlanningWorkflowService<'a> {
                      status = excluded.status,
                      submitted_at = excluded.submitted_at,
                      approved_at = NULL,
-                     published_commit = NULL",
+                     published_commit = NULL,
+                     generation = feature_planning_proposals.generation + 1",
                 params![
                     feature_id.to_string(),
                     draft.workflow_run_id.to_string(),
@@ -341,10 +352,116 @@ impl<'a> PlanningWorkflowService<'a> {
         })
     }
 
+    pub fn request_proposal_revision(
+        &mut self,
+        feature_id: FeatureId,
+        feedback: &str,
+        requested_at: OffsetDateTime,
+    ) -> Result<FeatureProposalDecisionOutcome, AppError> {
+        validate_decision_reason(feedback)?;
+        self.store.write(|transaction| {
+            let draft = draft_by_feature(transaction, feature_id)?;
+            if draft.state != WorkflowState::AwaitingApproval {
+                return Err(AppError::Domain(
+                    "Feature has no proposal awaiting approval".to_owned(),
+                ));
+            }
+            let generation = proposal_generation(transaction, feature_id)?;
+            let payload = serde_json::to_string(&serde_json::json!({
+                "decision": "request_revision",
+                "generation": generation,
+                "feedback": feedback,
+            }))?;
+            transition_feature(
+                transaction,
+                &draft,
+                WorkflowState::PlanningActive,
+                WorkflowActor::User,
+                requested_at,
+                &payload,
+                None,
+            )?;
+            transaction.execute(
+                "UPDATE feature_planning_proposals SET status = 'rejected'
+                 WHERE feature_id = ?1 AND status = 'awaiting_approval'",
+                [feature_id.to_string()],
+            )?;
+            insert_proposal_decision(
+                transaction,
+                feature_id,
+                generation,
+                "request_revision",
+                feedback,
+                requested_at,
+            )?;
+            Ok(FeatureProposalDecisionOutcome {
+                feature_id,
+                workflow_run_id: draft.workflow_run_id,
+                generation,
+                decision: "request_revision".to_owned(),
+                reason: feedback.to_owned(),
+                state: WorkflowState::PlanningActive,
+            })
+        })
+    }
+
     pub fn reject_proposal(
         &mut self,
         feature_id: FeatureId,
+        reason: &str,
         rejected_at: OffsetDateTime,
+    ) -> Result<FeatureProposalDecisionOutcome, AppError> {
+        validate_decision_reason(reason)?;
+        self.store.write(|transaction| {
+            let draft = draft_by_feature(transaction, feature_id)?;
+            if draft.state != WorkflowState::AwaitingApproval {
+                return Err(AppError::Domain(
+                    "Feature has no proposal awaiting approval".to_owned(),
+                ));
+            }
+            let generation = proposal_generation(transaction, feature_id)?;
+            let payload = serde_json::to_string(&serde_json::json!({
+                "decision": "reject",
+                "generation": generation,
+                "reason": reason,
+            }))?;
+            transition_feature(
+                transaction,
+                &draft,
+                WorkflowState::Cancelled,
+                WorkflowActor::User,
+                rejected_at,
+                &payload,
+                None,
+            )?;
+            transaction.execute(
+                "UPDATE feature_planning_proposals SET status = 'rejected'
+                 WHERE feature_id = ?1 AND status = 'awaiting_approval'",
+                [feature_id.to_string()],
+            )?;
+            insert_proposal_decision(
+                transaction,
+                feature_id,
+                generation,
+                "reject",
+                reason,
+                rejected_at,
+            )?;
+            Ok(FeatureProposalDecisionOutcome {
+                feature_id,
+                workflow_run_id: draft.workflow_run_id,
+                generation,
+                decision: "reject".to_owned(),
+                reason: reason.to_owned(),
+                state: WorkflowState::Cancelled,
+            })
+        })
+    }
+
+    pub fn approve_proposal(
+        &mut self,
+        feature_id: FeatureId,
+        approved_at: OffsetDateTime,
     ) -> Result<FeatureProposalOutcome, AppError> {
         self.store.write(|transaction| {
             let draft = draft_by_feature(transaction, feature_id)?;
@@ -356,44 +473,25 @@ impl<'a> PlanningWorkflowService<'a> {
             transition_feature(
                 transaction,
                 &draft,
-                WorkflowState::PlanningActive,
+                WorkflowState::Publishing,
                 WorkflowActor::User,
-                rejected_at,
+                approved_at,
                 "{}",
                 None,
             )?;
             transaction.execute(
-                "UPDATE feature_planning_proposals SET status = 'rejected'
+                "UPDATE feature_planning_proposals
+                 SET status = 'publishing', approved_at = ?2
                  WHERE feature_id = ?1 AND status = 'awaiting_approval'",
-                [feature_id.to_string()],
+                params![feature_id.to_string(), timestamp(approved_at)],
             )?;
             let count = proposal_work_item_count(transaction, feature_id)?;
             Ok(FeatureProposalOutcome {
                 feature_id,
                 workflow_run_id: draft.workflow_run_id,
-                state: WorkflowState::PlanningActive,
+                state: WorkflowState::Publishing,
                 work_item_count: count,
             })
-        })
-    }
-
-    pub fn approve_proposal(
-        &mut self,
-        feature_id: FeatureId,
-        approved_at: OffsetDateTime,
-    ) -> Result<FeatureProposalOutcome, AppError> {
-        self.store
-            .write(|transaction| approve_proposal_in(transaction, feature_id, approved_at))
-    }
-
-    pub fn request_proposal_revision(
-        &mut self,
-        feature_id: FeatureId,
-        feedback: &str,
-        requested_at: OffsetDateTime,
-    ) -> Result<FeatureProposalOutcome, AppError> {
-        self.store.write(|transaction| {
-            request_proposal_revision_in(transaction, feature_id, feedback, requested_at)
         })
     }
 
@@ -442,7 +540,7 @@ impl<'a> PlanningWorkflowService<'a> {
                 &stored[0],
                 &at,
             )?;
-            for item in &publication.proposal.work_items {
+            for (proposal_order, item) in publication.proposal.work_items.iter().enumerate() {
                 let key = WorkItemKey::new(format!(
                     "{}/{}/{}",
                     publication.epic_slug, publication.draft.slug, item.proposal.slug
@@ -450,8 +548,9 @@ impl<'a> PlanningWorkflowService<'a> {
                 .map_err(|error| AppError::Domain(error.to_string()))?;
                 transaction.execute(
                     "INSERT INTO work_items (
-                         id, feature_id, key, slug, title, status, created_at
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, 'ready', ?6)",
+                         id, feature_id, key, slug, title, status, created_at,
+                         proposal_order
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, 'ready', ?6, ?7)",
                     params![
                         item.work_item_id.to_string(),
                         feature_id.to_string(),
@@ -459,6 +558,8 @@ impl<'a> PlanningWorkflowService<'a> {
                         item.proposal.slug.as_str(),
                         item.proposal.title,
                         at,
+                        i64::try_from(proposal_order)
+                            .map_err(|error| AppError::Domain(error.to_string()))?,
                     ],
                 )?;
                 for repository_id in &item.proposal.repository_ids {
@@ -470,21 +571,29 @@ impl<'a> PlanningWorkflowService<'a> {
                 }
             }
             for item in &publication.proposal.work_items {
-                for dependency in &item.proposal.dependencies {
+                for (dependency_order, dependency) in item.proposal.dependencies.iter().enumerate()
+                {
                     let dependency_id = publication
                         .proposal
                         .work_items
                         .iter()
-                        .find(|candidate| candidate.proposal.slug == *dependency)
+                        .find(|candidate| &candidate.proposal.slug == dependency)
                         .map(|candidate| candidate.work_item_id)
                         .ok_or_else(|| {
-                            AppError::Domain("Work-item dependency is missing".to_owned())
+                            AppError::PlanningDocumentInvalid(format!(
+                                "Work-item dependency {dependency} is missing"
+                            ))
                         })?;
                     transaction.execute(
                         "INSERT INTO work_item_dependencies (
-                             work_item_id, depends_on_work_item_id
-                         ) VALUES (?1, ?2)",
-                        params![item.work_item_id.to_string(), dependency_id.to_string()],
+                             work_item_id, dependency_work_item_id, dependency_order
+                         ) VALUES (?1, ?2, ?3)",
+                        params![
+                            item.work_item_id.to_string(),
+                            dependency_id.to_string(),
+                            i64::try_from(dependency_order)
+                                .map_err(|error| AppError::Domain(error.to_string()))?,
+                        ],
                     )?;
                 }
             }
@@ -751,6 +860,9 @@ pub(crate) fn activate_planning_for_binding(
         return Ok(());
     };
     let draft = draft_by_feature(transaction, feature_id)?;
+    if draft.state == WorkflowState::Planned {
+        return Ok(());
+    }
     if draft.state == WorkflowState::PlanningActive {
         return Ok(());
     }
@@ -983,94 +1095,6 @@ fn append_event(
     Ok(event_id)
 }
 
-pub(crate) fn approve_proposal_in(
-    transaction: &Transaction<'_>,
-    feature_id: FeatureId,
-    approved_at: OffsetDateTime,
-) -> Result<FeatureProposalOutcome, AppError> {
-    let draft = draft_by_feature(transaction, feature_id)?;
-    if draft.state != WorkflowState::AwaitingApproval {
-        return Err(AppError::Domain(
-            "Feature has no proposal awaiting approval".to_owned(),
-        ));
-    }
-    transition_feature(
-        transaction,
-        &draft,
-        WorkflowState::Publishing,
-        WorkflowActor::User,
-        approved_at,
-        "{}",
-        None,
-    )?;
-    transaction.execute(
-        "UPDATE feature_planning_proposals
-         SET status = 'publishing', approved_at = ?2
-         WHERE feature_id = ?1 AND status = 'awaiting_approval'",
-        params![feature_id.to_string(), timestamp(approved_at)],
-    )?;
-    let count = proposal_work_item_count(transaction, feature_id)?;
-    Ok(FeatureProposalOutcome {
-        feature_id,
-        workflow_run_id: draft.workflow_run_id,
-        state: WorkflowState::Publishing,
-        work_item_count: count,
-    })
-}
-
-pub(crate) fn validate_revision_feedback(feedback: &str) -> Result<(), AppError> {
-    if feedback.trim().is_empty()
-        || feedback.len() > 8 * 1024
-        || feedback
-            .chars()
-            .any(|value| value.is_control() && value != '\n' && value != '\t')
-    {
-        return Err(AppError::PlanningDocumentInvalid(
-            "revision feedback is invalid".to_owned(),
-        ));
-    }
-    Ok(())
-}
-
-pub(crate) fn request_proposal_revision_in(
-    transaction: &Transaction<'_>,
-    feature_id: FeatureId,
-    feedback: &str,
-    requested_at: OffsetDateTime,
-) -> Result<FeatureProposalOutcome, AppError> {
-    validate_revision_feedback(feedback)?;
-    let draft = draft_by_feature(transaction, feature_id)?;
-    if draft.state != WorkflowState::AwaitingApproval {
-        return Err(AppError::Domain(
-            "Feature has no proposal awaiting approval".to_owned(),
-        ));
-    }
-    transition_feature(
-        transaction,
-        &draft,
-        WorkflowState::PlanningActive,
-        WorkflowActor::User,
-        requested_at,
-        &serde_json::json!({ "revisionFeedback": feedback }).to_string(),
-        None,
-    )?;
-    transaction.execute(
-        "UPDATE feature_planning_proposals
-         SET status = 'revision_requested',
-             revision_feedback = ?2,
-             revision_requested_at = ?3
-         WHERE feature_id = ?1 AND status = 'awaiting_approval'",
-        params![feature_id.to_string(), feedback, timestamp(requested_at)],
-    )?;
-    let count = proposal_work_item_count(transaction, feature_id)?;
-    Ok(FeatureProposalOutcome {
-        feature_id,
-        workflow_run_id: draft.workflow_run_id,
-        state: WorkflowState::PlanningActive,
-        work_item_count: count,
-    })
-}
-
 fn transition_feature(
     transaction: &Transaction<'_>,
     draft: &FeaturePlanningDraft,
@@ -1116,9 +1140,9 @@ fn insert_document(
     let (feature_id, work_item_id, kind) = match owner {
         HierarchyOwner::Feature(id) => (Some(id.to_string()), None, "feature"),
         HierarchyOwner::WorkItem(id) => (None, Some(id.to_string()), "work_item"),
-        HierarchyOwner::Epic(_) => {
+        HierarchyOwner::Epic(_) | HierarchyOwner::Workspace(_) => {
             return Err(AppError::Domain(
-                "Feature publication cannot create an Epic document".to_owned(),
+                "Feature publication cannot create an Epic or workspace document".to_owned(),
             ));
         }
     };
@@ -1200,6 +1224,50 @@ fn proposal_work_item_count(
     )
 }
 
+fn proposal_generation(
+    transaction: &Transaction<'_>,
+    feature_id: FeatureId,
+) -> Result<u32, AppError> {
+    let generation = transaction.query_row(
+        "SELECT generation FROM feature_planning_proposals WHERE feature_id = ?1",
+        [feature_id.to_string()],
+        |row| row.get::<_, u32>(0),
+    )?;
+    Ok(generation)
+}
+
+fn insert_proposal_decision(
+    transaction: &Transaction<'_>,
+    feature_id: FeatureId,
+    generation: u32,
+    decision: &str,
+    reason: &str,
+    decided_at: OffsetDateTime,
+) -> Result<(), AppError> {
+    transaction.execute(
+        "INSERT INTO feature_proposal_decisions (
+             feature_id, generation, decision, reason, decided_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            feature_id.to_string(),
+            generation,
+            decision,
+            reason,
+            timestamp(decided_at),
+        ],
+    )?;
+    Ok(())
+}
+
+fn validate_decision_reason(value: &str) -> Result<(), AppError> {
+    if value.trim().is_empty() || value.len() > 8 * 1024 || value.chars().any(char::is_control) {
+        return Err(AppError::Domain(
+            "Proposal feedback or rejection reason is invalid".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_proposal(proposal: &FeatureProposal) -> Result<(), AppError> {
     let encoded = serde_json::to_vec(proposal)?;
     if encoded.len() > MAX_PROPOSAL_BYTES
@@ -1256,22 +1324,13 @@ fn validate_proposal(proposal: &FeatureProposal) -> Result<(), AppError> {
                 "Work-item dependency is missing or self-referential".to_owned(),
             ));
         }
+        if item.dependencies.iter().collect::<HashSet<_>>().len() != item.dependencies.len() {
+            return Err(AppError::PlanningDocumentInvalid(
+                "Work-item dependencies must be unique".to_owned(),
+            ));
+        }
     }
-    let dependencies = proposal
-        .work_items
-        .iter()
-        .map(|item| (item.slug.clone(), item.dependencies.clone()))
-        .collect::<HashMap<_, _>>();
-    let mut visiting = HashSet::new();
-    let mut visited = HashSet::new();
-    if dependencies
-        .keys()
-        .any(|slug| !dependency_branch_is_acyclic(slug, &dependencies, &mut visiting, &mut visited))
-    {
-        return Err(AppError::PlanningDocumentInvalid(
-            "Work-item dependencies must form an acyclic graph".to_owned(),
-        ));
-    }
+    validate_dependency_graph(proposal)?;
     if proposal
         .first_work_item_slug
         .as_ref()
@@ -1284,30 +1343,40 @@ fn validate_proposal(proposal: &FeatureProposal) -> Result<(), AppError> {
     Ok(())
 }
 
-fn dependency_branch_is_acyclic(
+fn validate_dependency_graph(proposal: &FeatureProposal) -> Result<(), AppError> {
+    let graph = proposal
+        .work_items
+        .iter()
+        .map(|item| (item.slug.clone(), item.dependencies.clone()))
+        .collect::<HashMap<_, _>>();
+    let mut visiting = HashSet::new();
+    let mut visited = HashSet::new();
+    for slug in graph.keys() {
+        visit_dependency(slug, &graph, &mut visiting, &mut visited)?;
+    }
+    Ok(())
+}
+
+fn visit_dependency(
     slug: &Slug,
-    dependencies: &HashMap<Slug, Vec<Slug>>,
+    graph: &HashMap<Slug, Vec<Slug>>,
     visiting: &mut HashSet<Slug>,
     visited: &mut HashSet<Slug>,
-) -> bool {
+) -> Result<(), AppError> {
     if visited.contains(slug) {
-        return true;
+        return Ok(());
     }
     if !visiting.insert(slug.clone()) {
-        return false;
+        return Err(AppError::PlanningDocumentInvalid(
+            "Work-item dependencies must be acyclic".to_owned(),
+        ));
     }
-    let valid = dependencies
-        .get(slug)
-        .into_iter()
-        .flatten()
-        .all(|dependency| {
-            dependency_branch_is_acyclic(dependency, dependencies, visiting, visited)
-        });
+    for dependency in graph.get(slug).into_iter().flatten() {
+        visit_dependency(dependency, graph, visiting, visited)?;
+    }
     visiting.remove(slug);
-    if valid {
-        visited.insert(slug.clone());
-    }
-    valid
+    visited.insert(slug.clone());
+    Ok(())
 }
 
 fn validate_title(value: &str) -> Result<(), AppError> {
@@ -1394,11 +1463,10 @@ mod tests {
         WorkflowState,
     };
 
-    use super::{
-        CreateFeaturePlanning, FeatureProposal, ProposedWorkItem, dependency_branch_is_acyclic,
-    };
+    use super::{CreateFeaturePlanning, FeatureProposal, ProposedWorkItem};
     use crate::AppError;
     use crate::checkout::PrepareFeatureCheckout;
+    use crate::feature_work_item_planning::ProposeFeatureWorkItems;
     use crate::hooks::HookIngestionMutation;
     use crate::planning_store::PlanningStore;
     use crate::session_launch::BeginManagedSessionLaunch;
@@ -1420,20 +1488,26 @@ mod tests {
         at: OffsetDateTime,
     }
 
-    #[test]
-    fn dependency_cycles_are_rejected_before_publication() {
-        let first = Slug::new("first").expect("first slug");
-        let second = Slug::new("second").expect("second slug");
-        let dependencies = std::collections::HashMap::from([
-            (first.clone(), vec![second.clone()]),
-            (second, vec![first.clone()]),
-        ]);
-        assert!(!dependency_branch_is_acyclic(
-            &first,
-            &dependencies,
-            &mut std::collections::HashSet::new(),
-            &mut std::collections::HashSet::new(),
-        ));
+    fn planning_capability_fixture(
+        fixture: &Fixture,
+    ) -> crate::session_launch::CapabilityLaunchInputs {
+        let root = fixture._directory.path();
+        let provider_home = root.join("provider-home");
+        std::fs::create_dir_all(&provider_home).expect("provider home");
+        std::fs::write(provider_home.join("auth.json"), b"{}").expect("provider credential");
+        std::fs::write(provider_home.join(".credentials.json"), b"{}")
+            .expect("provider credential");
+        let executable = root.join("workboard.exe");
+        if !executable.exists() {
+            std::fs::write(&executable, b"").expect("executable fixture");
+        }
+        crate::session_launch::CapabilityLaunchInputs {
+            bundle_parent: root.join("managed-sessions"),
+            provider_home,
+            workboard_executable: executable,
+            database: fixture.app.database_path().to_path_buf(),
+            repository: "fixture".to_owned(),
+        }
     }
 
     struct ActivePlanning {
@@ -1581,6 +1655,7 @@ mod tests {
                 fixture.at + time::Duration::seconds(1),
             )
             .expect("mark planning launch pending");
+        let capability = planning_capability_fixture(fixture);
         let prepared = fixture
             .app
             .session_launch()
@@ -1599,7 +1674,12 @@ mod tests {
                 created_at: fixture.at + time::Duration::seconds(2),
                 expires_at: fixture.at + time::Duration::minutes(2),
                 resume_context: None,
+                profile: workboard_core::LaunchProfile::suggested(
+                    tool,
+                    ManagedSessionRole::FeaturePlanning,
+                ),
                 initial_prompt: Some(super::planner_bootstrap_prompt(&draft)),
+                capability,
             })
             .expect("prepare planner launch");
         let launch_token = prepared.prepared.launch.launch_token().to_owned();
@@ -1705,14 +1785,17 @@ mod tests {
             .expect("repeat proposal");
         assert_eq!(first, repeated);
         assert_eq!(first.state, WorkflowState::AwaitingApproval);
-        fixture
+        let revision = fixture
             .app
             .planning_workflows()
-            .reject_proposal(
+            .request_proposal_revision(
                 active.draft.feature_id,
+                "Clarify the verification boundary",
                 fixture.at + time::Duration::minutes(5),
             )
-            .expect("reject proposal");
+            .expect("request proposal revision");
+        assert_eq!(revision.generation, 1);
+        assert_eq!(revision.state, WorkflowState::PlanningActive);
         fixture
             .app
             .planning_workflows()
@@ -1780,6 +1863,44 @@ mod tests {
                 .count(),
             2
         );
+        let dependencies = fixture
+            .app
+            .store
+            .read(|connection| {
+                connection
+                    .query_row(
+                        "SELECT item.proposal_order, dependency.proposal_order
+                     FROM work_item_dependencies edge
+                     JOIN work_items item ON item.id = edge.work_item_id
+                     JOIN work_items dependency ON dependency.id = edge.dependency_work_item_id",
+                        [],
+                        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+                    )
+                    .map_err(Into::into)
+            })
+            .expect("published dependency");
+        assert_eq!(dependencies, (1, 0));
+        let decision = fixture
+            .app
+            .store
+            .read(|connection| {
+                connection
+                    .query_row(
+                        "SELECT decision, reason FROM feature_proposal_decisions
+                         WHERE feature_id = ?1 AND generation = 1",
+                        [active.draft.feature_id.to_string()],
+                        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                    )
+                    .map_err(Into::into)
+            })
+            .expect("durable proposal decision");
+        assert_eq!(
+            decision,
+            (
+                "request_revision".to_owned(),
+                "Clarify the verification boundary".to_owned()
+            )
+        );
         let published_count = git(
             &fixture.planning_store,
             &["rev-list", "--count", &published.commit],
@@ -1787,6 +1908,169 @@ mod tests {
         .parse::<u32>()
         .expect("published commit count");
         assert_eq!(published_count, before_count + 1);
+    }
+
+    #[test]
+    fn published_feature_planner_adds_approval_gated_work_items_without_execution_assignment() {
+        let mut fixture = fixture();
+        let active = activate_planning(&mut fixture, Tool::Claude);
+        fixture
+            .app
+            .planning_workflows()
+            .submit_proposal(
+                active.draft.feature_id,
+                &active.workflow_token,
+                proposal(&active, fixture.repository_id),
+                "initial-feature-proposal",
+                fixture.at + time::Duration::minutes(3),
+            )
+            .expect("submit initial proposal");
+        fixture
+            .app
+            .planning_workflows()
+            .approve_proposal(
+                active.draft.feature_id,
+                fixture.at + time::Duration::minutes(4),
+            )
+            .expect("approve initial proposal");
+        fixture
+            .app
+            .planning_workflows()
+            .publish_approved(
+                active.draft.feature_id,
+                fixture.at + time::Duration::minutes(5),
+            )
+            .expect("publish initial Feature");
+
+        let hierarchy = fixture
+            .app
+            .assigned_hierarchy(
+                &active.workflow_token,
+                fixture.at + time::Duration::minutes(6),
+            )
+            .expect("read assigned hierarchy");
+        let feature_hash = hierarchy
+            .documents
+            .iter()
+            .find(|document| {
+                document.document.owner == HierarchyOwner::Feature(active.draft.feature_id)
+            })
+            .map(|document| document.document.content_hash.clone())
+            .expect("Feature document hash");
+        let request = ProposeFeatureWorkItems {
+            feature_id: active.draft.feature_id,
+            work_items: vec![ProposedWorkItem {
+                slug: Slug::new("docs").expect("Work-item slug"),
+                title: "Availability documentation".to_owned(),
+                body: "# Availability documentation\n\nDocument the endpoint.\n".to_owned(),
+                repository_ids: vec![fixture.repository_id],
+                dependencies: vec![Slug::new("api").expect("dependency slug")],
+            }],
+            expected_feature_content_hash: feature_hash,
+            expected_repository_head: active.draft.repository_head,
+            idempotency_key: "add-docs-work-item".to_owned(),
+            proposed_at: fixture.at + time::Duration::minutes(6),
+        };
+        let proposed = fixture
+            .app
+            .feature_work_item_planning()
+            .propose(&active.workflow_token, request.clone())
+            .expect("propose additional Work item");
+        let repeated = fixture
+            .app
+            .feature_work_item_planning()
+            .propose(&active.workflow_token, request)
+            .expect("repeat proposal");
+        assert_eq!(repeated.id, proposed.id);
+
+        let before = fixture
+            .app
+            .snapshot(fixture.workspace_id)
+            .expect("snapshot");
+        assert!(
+            !before
+                .work_items
+                .iter()
+                .any(|item| item.slug.as_str() == "docs")
+        );
+        let publication = fixture
+            .app
+            .feature_work_item_planning()
+            .approve(&proposed.id, fixture.at + time::Duration::minutes(7))
+            .expect("approve additional Work item");
+        let repeated_publication = fixture
+            .app
+            .feature_work_item_planning()
+            .approve(&proposed.id, fixture.at + time::Duration::minutes(8))
+            .expect("repeat approval");
+        assert_eq!(repeated_publication, publication);
+        let after = fixture
+            .app
+            .snapshot(fixture.workspace_id)
+            .expect("snapshot");
+        let item = after
+            .work_items
+            .iter()
+            .find(|item| item.slug.as_str() == "docs")
+            .expect("published Work item");
+        assert_eq!(item.status, workboard_core::WorkItemStatus::Backlog);
+        assert_eq!(item.repository_ids, vec![fixture.repository_id]);
+        assert!(
+            fixture
+                .app
+                .work_item_projection(item.id)
+                .expect("projection")
+                .sessions
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn terminal_rejection_cancels_the_feature_and_preserves_the_reason() {
+        let mut fixture = fixture();
+        let active = activate_planning(&mut fixture, Tool::Claude);
+        fixture
+            .app
+            .planning_workflows()
+            .submit_proposal(
+                active.draft.feature_id,
+                &active.workflow_token,
+                proposal(&active, fixture.repository_id),
+                "proposal-to-reject",
+                fixture.at + time::Duration::minutes(3),
+            )
+            .expect("submit proposal");
+        let rejected = fixture
+            .app
+            .planning_workflows()
+            .reject_proposal(
+                active.draft.feature_id,
+                "The proposed scope is no longer wanted",
+                fixture.at + time::Duration::minutes(4),
+            )
+            .expect("reject proposal");
+        assert_eq!(rejected.state, WorkflowState::Cancelled);
+        assert_eq!(rejected.generation, 1);
+        assert!(matches!(
+            fixture.app.planning_workflows().submit_proposal(
+                active.draft.feature_id,
+                &active.workflow_token,
+                proposal(&active, fixture.repository_id),
+                "proposal-after-rejection",
+                fixture.at + time::Duration::minutes(5),
+            ),
+            Err(AppError::WorkflowOperationUnauthorized)
+        ));
+        let snapshot = fixture
+            .app
+            .snapshot(fixture.workspace_id)
+            .expect("snapshot");
+        let feature = snapshot
+            .features
+            .iter()
+            .find(|feature| feature.id == active.draft.feature_id)
+            .expect("rejected Feature");
+        assert_eq!(feature.state, WorkflowState::Cancelled);
     }
 
     #[test]
@@ -1886,6 +2170,33 @@ mod tests {
                 &active.workflow_token,
                 invalid,
                 "invalid-proposal",
+                fixture.at + time::Duration::minutes(3),
+            ),
+            Err(AppError::PlanningDocumentInvalid(_))
+        ));
+        let mut cyclic = proposal(&active, fixture.repository_id);
+        cyclic.work_items[0].dependencies = vec![cyclic.work_items[1].slug.clone()];
+        assert!(matches!(
+            fixture.app.planning_workflows().submit_proposal(
+                active.draft.feature_id,
+                &active.workflow_token,
+                cyclic,
+                "cyclic-proposal",
+                fixture.at + time::Duration::minutes(3),
+            ),
+            Err(AppError::PlanningDocumentInvalid(_))
+        ));
+        let mut duplicate = proposal(&active, fixture.repository_id);
+        let duplicate_dependency = duplicate.work_items[0].slug.clone();
+        duplicate.work_items[1]
+            .dependencies
+            .push(duplicate_dependency);
+        assert!(matches!(
+            fixture.app.planning_workflows().submit_proposal(
+                active.draft.feature_id,
+                &active.workflow_token,
+                duplicate,
+                "duplicate-dependency-proposal",
                 fixture.at + time::Duration::minutes(3),
             ),
             Err(AppError::PlanningDocumentInvalid(_))

@@ -38,6 +38,22 @@ pub fn resolve(
     {
         return SelectionResult::Selected(candidate.clone());
     }
+    let id_prefix_matches = candidates
+        .iter()
+        .filter(|candidate| {
+            candidate
+                .id
+                .get(..query.len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(query))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if let [candidate] = id_prefix_matches.as_slice() {
+        return SelectionResult::Selected(candidate.clone());
+    }
+    if id_prefix_matches.len() > 1 {
+        return SelectionResult::Picker(rank_all(id_prefix_matches));
+    }
     let exact: Vec<_> = candidates
         .iter()
         .filter(|candidate| {
@@ -154,6 +170,31 @@ mod tests {
             resolve(Some("id-1"), [only.clone(), candidate(2, "Other")]),
             SelectionResult::Selected(only)
         );
+    }
+
+    #[test]
+    fn unique_short_ids_resolve_and_ambiguous_prefixes_open_the_picker() {
+        let first = SelectionCandidate {
+            id: "abcdef12-1111-2222-3333-444444444444".to_owned(),
+            key: None,
+            label: "First".to_owned(),
+            metadata: String::new(),
+        };
+        let second = SelectionCandidate {
+            id: "abcdef34-1111-2222-3333-444444444444".to_owned(),
+            key: None,
+            label: "Second".to_owned(),
+            metadata: String::new(),
+        };
+
+        assert_eq!(
+            resolve(Some("abcdef12"), [first.clone(), second.clone()]),
+            SelectionResult::Selected(first)
+        );
+        assert!(matches!(
+            resolve(Some("abcdef"), [second.clone(), second]),
+            SelectionResult::Picker(_)
+        ));
     }
 
     #[test]

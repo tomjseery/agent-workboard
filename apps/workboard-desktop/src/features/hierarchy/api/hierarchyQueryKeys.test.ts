@@ -16,7 +16,7 @@ describe("hierarchy query ownership", () => {
 
   it("covers every published hierarchy and owner discriminant", () => {
     expect(Object.keys(hierarchyNodeLabels)).toEqual(["repository", "epic", "feature", "work_item"]);
-    expect(Object.keys(ownerLabels)).toEqual(["epic", "feature", "work_item"]);
+    expect(Object.keys(ownerLabels)).toEqual(["workspace", "epic", "feature", "work_item"]);
     expect(Object.keys(entityPresentations)).toEqual(["repository", "epic", "feature", "work_item"]);
   });
 });

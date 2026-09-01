@@ -7,6 +7,11 @@ use crate::{ConversationRef, Tool};
 
 pub const WORKBOARD_LAUNCH_TOKEN_ENV: &str = "WORKBOARD_LAUNCH_TOKEN";
 pub const WORKBOARD_WORKFLOW_TOKEN_ENV: &str = "WORKBOARD_WORKFLOW_TOKEN";
+pub const WORKBOARD_SESSION_ROLE_ENV: &str = "WORKBOARD_SESSION_ROLE";
+pub const WORKBOARD_OWNER_ENV: &str = "WORKBOARD_OWNER";
+pub const WORKBOARD_REPOSITORY_ENV: &str = "WORKBOARD_REPOSITORY";
+pub const WORKBOARD_CHECKOUT_ENV: &str = "WORKBOARD_CHECKOUT";
+pub const WORKBOARD_BUNDLE_ENV: &str = "WORKBOARD_CAPABILITY_BUNDLE";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandSpec {
@@ -64,6 +69,8 @@ pub struct ManagedLaunchRequest {
     pub terminal_window: Option<String>,
     pub launch_token: String,
     pub workflow_token: Option<String>,
+    pub capability_environment: Vec<(String, String)>,
+    pub profile_arguments: Vec<OsString>,
     pub initial_prompt: Option<String>,
 }
 
@@ -75,6 +82,7 @@ pub struct ManagedLaunchSpec {
     title: String,
     launch_token: String,
     workflow_token: Option<String>,
+    capability_environment: Vec<(String, String)>,
 }
 
 impl ManagedLaunchSpec {
@@ -90,6 +98,8 @@ impl ManagedLaunchSpec {
             terminal_window,
             launch_token,
             workflow_token,
+            capability_environment,
+            profile_arguments,
             initial_prompt,
         } = request;
         validate_path(&working_directory)?;
@@ -101,6 +111,18 @@ impl ManagedLaunchSpec {
             .is_some_and(|token| token.is_empty() || token.chars().any(char::is_control))
         {
             return Err(LaunchSpecError::UnsafeLaunchToken);
+        }
+        for (name, value) in &capability_environment {
+            if name.is_empty()
+                || !name
+                    .chars()
+                    .all(|character| character.is_ascii_uppercase() || character == '_')
+            {
+                return Err(LaunchSpecError::UnsafeCapabilityEnvironment);
+            }
+            if value.is_empty() || value.chars().any(char::is_control) {
+                return Err(LaunchSpecError::UnsafeCapabilityEnvironment);
+            }
         }
         if terminal_window.as_deref().is_some_and(|window| {
             window.is_empty() || window.len() > 120 || window.chars().any(char::is_control)
@@ -115,7 +137,16 @@ impl ManagedLaunchSpec {
         }) {
             return Err(LaunchSpecError::UnsafeInitialPrompt);
         }
-        let native_arguments = match (tool, mode, initial_prompt) {
+        if profile_arguments.iter().any(|argument| {
+            argument.is_empty()
+                || argument
+                    .to_str()
+                    .is_none_or(|value| value.chars().any(char::is_control))
+        }) {
+            return Err(LaunchSpecError::UnsafeProfileArgument);
+        }
+        let mut native_arguments = profile_arguments;
+        native_arguments.extend(match (tool, mode, initial_prompt) {
             (Tool::Claude, ManagedLaunchMode::New, prompt) => {
                 prompt.map(OsString::from).into_iter().collect()
             }
@@ -145,7 +176,7 @@ impl ManagedLaunchSpec {
             (_, ManagedLaunchMode::Resume(_), Some(_)) => {
                 return Err(LaunchSpecError::UnsafeInitialPrompt);
             }
-        };
+        });
         let native = CommandSpec::new(native_executable, native_arguments);
         if terminal_executable.as_os_str().is_empty() {
             return Err(LaunchSpecError::EmptyExecutable);
@@ -166,6 +197,7 @@ impl ManagedLaunchSpec {
             title,
             launch_token,
             workflow_token,
+            capability_environment,
         })
     }
 
@@ -193,6 +225,10 @@ impl ManagedLaunchSpec {
         self.workflow_token.as_deref()
     }
 
+    pub fn capability_environment(&self) -> &[(String, String)] {
+        &self.capability_environment
+    }
+
     pub fn direct_child_command(&self) -> Command {
         let mut command = Command::new(self.terminal.executable());
         command
@@ -203,6 +239,9 @@ impl ManagedLaunchSpec {
             .env(WORKBOARD_LAUNCH_TOKEN_ENV, &self.launch_token);
         if let Some(token) = &self.workflow_token {
             command.env(WORKBOARD_WORKFLOW_TOKEN_ENV, token);
+        }
+        for (name, value) in &self.capability_environment {
+            command.env(name, value);
         }
         command
     }
@@ -328,6 +367,8 @@ pub enum LaunchSpecError {
     UnsafeLaunchToken,
     UnsafeInitialPrompt,
     UnsafeTerminalWindow,
+    UnsafeCapabilityEnvironment,
+    UnsafeProfileArgument,
 }
 
 impl Display for LaunchSpecError {
@@ -352,6 +393,12 @@ impl Display for LaunchSpecError {
             Self::UnsafeTerminalWindow => {
                 formatter.write_str("terminal window identity is empty or unsafe")
             }
+            Self::UnsafeCapabilityEnvironment => {
+                formatter.write_str("capability environment name or value is empty or unsafe")
+            }
+            Self::UnsafeProfileArgument => {
+                formatter.write_str("launch profile argument is empty or unsafe")
+            }
         }
     }
 }
@@ -365,7 +412,7 @@ pub fn sanitise_terminal_title(value: &str) -> String {
         .take(120)
         .collect::<String>();
     if title.trim().is_empty() {
-        title = "Agent Workboard".to_owned();
+        title = crate::PRODUCT_NAME.to_owned();
     }
     title
 }
@@ -420,6 +467,11 @@ mod tests {
             terminal_window: Some("workboard-feature-feature-123".to_owned()),
             launch_token: "opaque-token".to_owned(),
             workflow_token: Some("workflow-token".to_owned()),
+            capability_environment: vec![(
+                "CLAUDE_CONFIG_DIR".to_owned(),
+                "C:/bundles/session".to_owned(),
+            )],
+            profile_arguments: Vec::new(),
             initial_prompt: Some("Use the managed Feature planning workflow.".to_owned()),
         })
         .expect("new managed launch");
@@ -467,6 +519,13 @@ mod tests {
                 .get_envs()
                 .any(|(name, value)| name == std::ffi::OsStr::new("TERM") && value.is_none())
         );
+        assert_eq!(
+            command
+                .get_envs()
+                .find(|(name, _)| *name == std::ffi::OsStr::new("CLAUDE_CONFIG_DIR"))
+                .and_then(|(_, value)| value),
+            Some(std::ffi::OsStr::new("C:/bundles/session"))
+        );
 
         let resumed = ManagedLaunchSpec::new(ManagedLaunchRequest {
             terminal_kind: TerminalKind::WindowsTerminal,
@@ -479,6 +538,8 @@ mod tests {
             terminal_window: Some("workboard-feature-feature-123".to_owned()),
             launch_token: "opaque-token".to_owned(),
             workflow_token: None,
+            capability_environment: Vec::new(),
+            profile_arguments: Vec::new(),
             initial_prompt: None,
         })
         .expect("managed resume");
@@ -586,6 +647,40 @@ mod tests {
             ),
             Err(LaunchSpecError::UnsafeNativeId)
         );
+    }
+
+    #[test]
+    fn rejects_an_unsafe_capability_environment() {
+        let directory = absolute_fixture_path("managed-worktree");
+        let request = |name: &str, value: &str| ManagedLaunchRequest {
+            terminal_kind: TerminalKind::WindowsTerminal,
+            terminal_executable: "wt.exe".into(),
+            native_executable: "claude.exe".into(),
+            tool: Tool::Claude,
+            mode: ManagedLaunchMode::New,
+            working_directory: directory.clone(),
+            title: "Planning".to_owned(),
+            terminal_window: None,
+            launch_token: "opaque-token".to_owned(),
+            workflow_token: None,
+            capability_environment: vec![(name.to_owned(), value.to_owned())],
+            profile_arguments: Vec::new(),
+            initial_prompt: None,
+        };
+
+        for (name, value) in [
+            ("claude_config_dir", "C:/bundles/session"),
+            ("CLAUDE-CONFIG-DIR", "C:/bundles/session"),
+            ("", "C:/bundles/session"),
+            ("CLAUDE_CONFIG_DIR", ""),
+            ("CLAUDE_CONFIG_DIR", "C:/bundles\u{1b}[31m"),
+        ] {
+            assert_eq!(
+                ManagedLaunchSpec::new(request(name, value)),
+                Err(LaunchSpecError::UnsafeCapabilityEnvironment),
+                "{name}={value} should be rejected"
+            );
+        }
     }
 
     #[test]

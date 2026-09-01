@@ -293,7 +293,7 @@ impl WorkboardApplication {
             let mut evidence = ProjectionEvidence::default();
             let scope = workspace_id.to_string();
             let mut dependencies = connection.prepare(
-                "SELECT dependency.work_item_id, dependency.depends_on_work_item_id
+                "SELECT dependency.work_item_id, dependency.dependency_work_item_id
                  FROM work_item_dependencies dependency
                  JOIN work_items item ON item.id = dependency.work_item_id
                  JOIN features feature ON feature.id = item.feature_id
