@@ -96,6 +96,7 @@ impl WorkboardApplication {
             .into_iter()
             .map(|id| self.client_session_observability(workspace_id, id))
             .collect::<Result<Vec<_>, _>>()?;
+        let session_actions = session_action_inputs(&sessions);
 
         let structured_evidence = protocol::ClassifiedEvidence {
             state: protocol::EvidenceState::NotLoaded,
@@ -157,15 +158,7 @@ impl WorkboardApplication {
             checkpoint_history,
             sessions,
             diagnostics,
-            available_actions: vec![protocol::AvailableAction {
-                code: protocol::CommandCode::CheckpointWorkItem,
-                available: false,
-                unavailable_reason: Some(protocol::UnavailableReason {
-                    code: "structured_checkpoint_unavailable".to_owned(),
-                    message: "Structured checkpoint editing is unavailable because the daemon has not accepted a revision-checked atomic structured checkpoint operation.".to_owned(),
-                }),
-                expected_revision: Some(revision),
-            }],
+            available_actions: work_item_actions(revision, &session_actions),
         })
     }
 
@@ -414,10 +407,99 @@ fn status_label(status: core::WorkItemStatus) -> &'static str {
     }
 }
 
+struct SessionActionInputs {
+    has_resumable: bool,
+    has_live: bool,
+}
+
+fn session_action_inputs(
+    sessions: &[protocol::SessionObservabilityProjection],
+) -> SessionActionInputs {
+    SessionActionInputs {
+        has_resumable: sessions.iter().any(|session| {
+            matches!(
+                session.resumability,
+                protocol::SessionResumability::Validated
+                    | protocol::SessionResumability::PreflightPassed
+            ) && session.liveness.state != protocol::SessionLiveState::Active
+        }),
+        has_live: sessions
+            .iter()
+            .any(|session| session.liveness.state == protocol::SessionLiveState::Active),
+    }
+}
+
+fn work_item_actions(
+    revision: u64,
+    sessions: &SessionActionInputs,
+) -> Vec<protocol::AvailableAction> {
+    let unavailable = |code: &str, message: &str| {
+        Some(protocol::UnavailableReason {
+            code: code.to_owned(),
+            message: message.to_owned(),
+        })
+    };
+    [
+        protocol::CommandCode::CheckpointWorkItem,
+        protocol::CommandCode::StartSession,
+        protocol::CommandCode::ResumeSession,
+        protocol::CommandCode::FocusSession,
+        protocol::CommandCode::FollowUpSession,
+        protocol::CommandCode::RecoverSession,
+    ]
+    .into_iter()
+    .map(|code| {
+        let unavailable_reason = match code {
+            protocol::CommandCode::CheckpointWorkItem => unavailable(
+                "structured_checkpoint_unavailable",
+                "Structured checkpoint editing is unavailable because the daemon has not accepted a revision-checked atomic structured checkpoint operation.",
+            ),
+            protocol::CommandCode::StartSession if sessions.has_live => unavailable(
+                "writer_session_active",
+                "A session is already writing in this Work item's checkout. Resume it, or close it before starting another.",
+            ),
+            protocol::CommandCode::StartSession => None,
+            protocol::CommandCode::ResumeSession if sessions.has_resumable => None,
+            protocol::CommandCode::ResumeSession if sessions.has_live => unavailable(
+                "session_already_live",
+                "The bound session is already running. Workboard will not launch a duplicate.",
+            ),
+            protocol::CommandCode::ResumeSession => unavailable(
+                "no_resumable_session",
+                "This Work item has no session with validated resume evidence.",
+            ),
+            protocol::CommandCode::FocusSession => unavailable(
+                "session_focus_unavailable",
+                "Focusing a running session is unavailable; Workboard cannot yet activate a terminal window.",
+            ),
+            protocol::CommandCode::FollowUpSession => unavailable(
+                "session_follow_up_unavailable",
+                "Sending a follow-up is unavailable; Workboard cannot yet deliver a prompt to a live session.",
+            ),
+            protocol::CommandCode::RecoverSession => unavailable(
+                "session_recovery_unavailable",
+                "Recovery is unavailable from Desktop; it must preview before executing.",
+            ),
+            _ => unavailable(
+                "upstream_capability_not_accepted",
+                "the authoritative Workboard operation has not been accepted",
+            ),
+        };
+        protocol::AvailableAction {
+            code,
+            available: unavailable_reason.is_none(),
+            unavailable_reason,
+            expected_revision: Some(revision),
+        }
+    })
+    .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use rusqlite::params;
     use tempfile::TempDir;
+    use workboard_client_protocol as protocol;
     use workboard_core::{DocumentId, EpicId, FeatureId, RepositoryId, WorkItemId, WorkspaceId};
 
     use crate::workspace::WorkboardApplication;
@@ -486,14 +568,51 @@ mod tests {
         assert!(detail.checkpoint_history.is_empty());
         assert!(detail.sessions.is_empty());
         assert!(detail.checkouts.is_empty());
-        assert_eq!(detail.available_actions.len(), 1);
-        assert!(!detail.available_actions[0].available);
-        assert_eq!(
-            detail.available_actions[0]
+        let reason = |code: protocol::CommandCode| {
+            detail
+                .available_actions
+                .iter()
+                .find(|action| action.code == code)
+                .expect("advertised action")
                 .unavailable_reason
                 .as_ref()
-                .map(|reason| reason.code.as_str()),
+                .map(|reason| reason.code.as_str())
+        };
+        assert!(
+            detail
+                .available_actions
+                .iter()
+                .all(|action| action.unavailable_reason.is_none() == action.available)
+        );
+        assert_eq!(
+            detail
+                .available_actions
+                .iter()
+                .filter(|action| action.available)
+                .map(|action| action.code)
+                .collect::<Vec<_>>(),
+            vec![protocol::CommandCode::StartSession],
+            "a Work item with no bound session offers Start and nothing else"
+        );
+        assert_eq!(
+            reason(protocol::CommandCode::ResumeSession),
+            Some("no_resumable_session")
+        );
+        assert_eq!(
+            reason(protocol::CommandCode::CheckpointWorkItem),
             Some("structured_checkpoint_unavailable")
+        );
+        assert_eq!(
+            reason(protocol::CommandCode::FocusSession),
+            Some("session_focus_unavailable")
+        );
+        assert_eq!(
+            reason(protocol::CommandCode::FollowUpSession),
+            Some("session_follow_up_unavailable")
+        );
+        assert_eq!(
+            reason(protocol::CommandCode::RecoverSession),
+            Some("session_recovery_unavailable")
         );
     }
 }

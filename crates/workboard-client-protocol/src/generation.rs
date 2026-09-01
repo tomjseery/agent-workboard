@@ -556,7 +556,14 @@ fn incompatible_commands() -> Vec<Value> {
         }),
         json!({ "type": "reject_feature", "value": { "featureId": FEATURE_ID } }),
         json!({ "type": "checkpoint_work_item", "value": { "workItemId": WORK_ITEM_ID } }),
-        json!({ "type": "start_session", "value": { "workItemId": WORK_ITEM_ID } }),
+        json!({
+            "type": "start_session",
+            "value": {
+                "workItemId": WORK_ITEM_ID,
+                "repositoryId": REPOSITORY_ID,
+                "provider": "codex"
+            }
+        }),
         json!({ "type": "resume_session", "value": { "sessionId": SESSION_ID } }),
         json!({ "type": "focus_session", "value": { "sessionId": SESSION_ID } }),
         json!({ "type": "follow_up_session", "value": { "sessionId": SESSION_ID } }),
