@@ -294,6 +294,23 @@ fn recover_entry(
             }
         }
     };
+    let capability =
+        match crate::capability_inputs(application, entry.tool, &entry.repository_id.to_string()) {
+            Ok(capability) => capability,
+            Err(error) => {
+                let code = error.code().to_owned();
+                return record(
+                    application,
+                    attempt_id,
+                    entry,
+                    RecoveryOutcomeStatus::Failed,
+                    None,
+                    Some(&code),
+                    &error.to_string(),
+                    results,
+                );
+            }
+        };
     let prepared = match application
         .session_launch()
         .begin(BeginManagedSessionLaunch {
@@ -325,6 +342,7 @@ fn recover_entry(
                     entry.tab_title, entry.native_id
                 )
             }),
+            capability,
         }) {
         Ok(prepared) => prepared,
         Err(error) => {

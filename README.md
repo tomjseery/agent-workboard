@@ -7,6 +7,31 @@ terminal experience.
 The installed executable is `workboard`. The first implementation target is Windows Terminal and PowerShell,
 with provider-neutral Rust application boundaries kept independent of terminal rendering.
 
+## Managed capability isolation
+
+Workboard skills, hooks, tokens, and assignments are never installed globally. They are injected only into a
+CLI launched or explicitly adopted by Workboard, using a temporary bundle restricted to that managed session's
+role. A normally opened Claude or Codex CLI has no Workboard capabilities. This normative boundary, including
+the managed planning entry point and acceptance requirements, is defined in
+[`docs/architecture/MANAGED_SESSION_CAPABILITY_INJECTION.md`](docs/architecture/MANAGED_SESSION_CAPABILITY_INJECTION.md).
+
+## Plan in a managed session
+
+Open a workspace-planning CLI scoped to one repository. It is not assigned to an Epic, Feature, or Work item:
+
+```powershell
+workboard plan --repository concertable --tool claude
+```
+
+The session receives only the workspace-planning skills — research import, Epic proposal, and Feature
+proposal — and submits typed proposals. It cannot create hierarchy itself. Review and decide explicitly:
+
+```powershell
+workboard plan proposals
+workboard plan approve <proposal>
+workboard plan reject <proposal>
+```
+
 ## Recover a managed working set
 
 Preview the complete saved working set before launching anything:

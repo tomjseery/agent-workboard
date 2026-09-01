@@ -5,8 +5,8 @@ use workboard_core::Tool;
 
 use crate::AppError;
 use crate::integration::{
-    ADAPTER_VERSION, IntegrationObservations, IntegrationOperation, IntegrationPlan,
-    IntegrationRegistration, IntegrationRequest, IntegrationResponse,
+    IntegrationObservations, IntegrationOperation, IntegrationPlan, IntegrationRegistration,
+    IntegrationRequest, IntegrationResponse,
 };
 use crate::storage::SqliteStore;
 
@@ -210,10 +210,6 @@ impl<'a> IntegrationService<'a> {
         token: &str,
         now: OffsetDateTime,
     ) -> Result<(), AppError> {
-        let enabled = matches!(
-            operation,
-            IntegrationOperation::Install | IntegrationOperation::Repair
-        );
         let now = timestamp(now);
         self.store.write(|transaction| {
             transaction.execute(
@@ -226,42 +222,20 @@ impl<'a> IntegrationService<'a> {
                     "DELETE FROM integration_registrations WHERE provider = ?1",
                     [tool_name(tool)],
                 )?;
-            } else {
-                transaction.execute(
-                    "INSERT INTO integration_registrations (
-                         provider, enabled, adapter_version, first_observed_at, last_observed_at
-                     ) VALUES (?1, ?2, ?3, ?4, ?4)
-                     ON CONFLICT(provider) DO UPDATE SET
-                         enabled = excluded.enabled,
-                         adapter_version = excluded.adapter_version,
-                         last_observed_at = excluded.last_observed_at",
-                    rusqlite::params![tool_name(tool), i64::from(enabled), ADAPTER_VERSION, now,],
-                )?;
             }
             Ok(())
         })
     }
 }
 
-fn mutation_operation(operation: Option<IntegrationOperation>) -> IntegrationOperation {
-    match operation {
-        Some(
-            operation @ (IntegrationOperation::Install
-            | IntegrationOperation::Repair
-            | IntegrationOperation::Disable
-            | IntegrationOperation::Remove),
-        ) => operation,
-        _ => IntegrationOperation::Install,
-    }
+const fn mutation_operation(_operation: Option<IntegrationOperation>) -> IntegrationOperation {
+    IntegrationOperation::Remove
 }
 
 fn operation_name(operation: IntegrationOperation) -> &'static str {
     match operation {
         IntegrationOperation::Status => "status",
         IntegrationOperation::Preview => "preview",
-        IntegrationOperation::Install => "install",
-        IntegrationOperation::Repair => "repair",
-        IntegrationOperation::Disable => "disable",
         IntegrationOperation::Remove => "remove",
     }
 }
@@ -329,6 +303,24 @@ mod tests {
             }
         }
 
+        /// What a release before launch-scoped injection left in the provider-global home.
+        fn install_legacy_residue(&self) {
+            let path = self
+                .home
+                .join("skills")
+                .join("agent-workboard")
+                .join("SKILL.md");
+            fs::create_dir_all(path.parent().expect("skill directory")).expect("skill directory");
+            fs::write(
+                &path,
+                format!(
+                    "---\nname: agent-workboard\nmetadata:\n  owner: {}\n---\n",
+                    crate::integration::INTEGRATION_OWNER
+                ),
+            )
+            .expect("write legacy skill");
+        }
+
         fn request(
             &self,
             operation: IntegrationOperation,
@@ -347,11 +339,34 @@ mod tests {
     }
 
     #[test]
-    fn preview_confirmation_is_required_once_and_install_is_registered() {
+    fn there_is_no_operation_that_installs_workboard_assets_globally() {
         let mut fixture = Fixture::new();
+        let request = fixture.request(IntegrationOperation::Status, None, None);
+        let observed_at = fixture.observed_at;
+        let status = IntegrationService::new(&mut fixture.store)
+            .execute(request, observed_at)
+            .expect("integration status");
+
+        assert!(matches!(
+            status,
+            IntegrationResponse::Status { ref status }
+                if status.state == IntegrationState::Clean
+                    && status.available_operations.is_empty()
+        ));
+        assert!(
+            !fixture.home.join("settings.json").exists(),
+            "reading status must never write into a provider-global home"
+        );
+        assert!(!fixture.home.join("skills").exists());
+    }
+
+    #[test]
+    fn preview_confirmation_is_required_once_before_residue_is_removed() {
+        let mut fixture = Fixture::new();
+        fixture.install_legacy_residue();
         let preview_request = fixture.request(
             IntegrationOperation::Preview,
-            Some(IntegrationOperation::Install),
+            Some(IntegrationOperation::Remove),
             None,
         );
         let preview = IntegrationService::new(&mut fixture.store)
@@ -362,7 +377,7 @@ mod tests {
             _ => panic!("expected preview"),
         };
         let wrong = fixture.request(
-            IntegrationOperation::Install,
+            IntegrationOperation::Remove,
             None,
             Some("wrong-token".to_owned()),
         );
@@ -370,17 +385,26 @@ mod tests {
             IntegrationService::new(&mut fixture.store).execute(wrong, fixture.observed_at),
             Err(AppError::IntegrationConfirmationInvalid(_))
         ));
-        let install = fixture.request(IntegrationOperation::Install, None, Some(token.clone()));
-        let installed = IntegrationService::new(&mut fixture.store)
-            .execute(install, fixture.observed_at)
-            .expect("install integration");
+        let remove = fixture.request(IntegrationOperation::Remove, None, Some(token.clone()));
+        let removed = IntegrationService::new(&mut fixture.store)
+            .execute(remove, fixture.observed_at)
+            .expect("remove residue");
         assert!(matches!(
-            installed,
+            removed,
             IntegrationResponse::Mutation { ref outcome }
-                if outcome.status.state == IntegrationState::Installed
+                if outcome.status.state == IntegrationState::Clean
         ));
-        assert!(fixture.home.join("settings.json").is_file());
-        let repeated = fixture.request(IntegrationOperation::Install, None, Some(token));
+        // The skill is gone; a reviewable backup stays beside it so removal is recoverable.
+        assert!(
+            !fixture
+                .home
+                .join("skills")
+                .join("agent-workboard")
+                .join("SKILL.md")
+                .exists()
+        );
+
+        let repeated = fixture.request(IntegrationOperation::Remove, None, Some(token));
         assert!(matches!(
             IntegrationService::new(&mut fixture.store).execute(repeated, fixture.observed_at),
             Err(AppError::IntegrationConfirmationInvalid(_))
@@ -390,9 +414,10 @@ mod tests {
     #[test]
     fn expired_confirmation_cannot_mutate_native_configuration() {
         let mut fixture = Fixture::new();
+        fixture.install_legacy_residue();
         let preview_request = fixture.request(
             IntegrationOperation::Preview,
-            Some(IntegrationOperation::Install),
+            Some(IntegrationOperation::Remove),
             None,
         );
         let preview = IntegrationService::new(&mut fixture.store)
@@ -402,12 +427,20 @@ mod tests {
             IntegrationResponse::Preview { preview } => preview.confirmation_token,
             _ => panic!("expected preview"),
         };
-        let install = fixture.request(IntegrationOperation::Install, None, Some(token));
+        let remove = fixture.request(IntegrationOperation::Remove, None, Some(token));
         assert!(matches!(
             IntegrationService::new(&mut fixture.store)
-                .execute(install, fixture.observed_at + time::Duration::minutes(6),),
+                .execute(remove, fixture.observed_at + time::Duration::minutes(6),),
             Err(AppError::IntegrationConfirmationInvalid(_))
         ));
-        assert!(!fixture.home.join("settings.json").exists());
+        assert!(
+            fixture
+                .home
+                .join("skills")
+                .join("agent-workboard")
+                .join("SKILL.md")
+                .is_file(),
+            "an expired confirmation must leave the reviewed state untouched"
+        );
     }
 }

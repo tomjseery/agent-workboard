@@ -32,8 +32,9 @@ pub use identity::{
 };
 pub use launch::{
     CommandSpec, LaunchSpecError, ManagedLaunchMode, ManagedLaunchRequest, ManagedLaunchSpec,
-    ResumeLaunchSpec, TerminalKind, WORKBOARD_LAUNCH_TOKEN_ENV, WORKBOARD_WORKFLOW_TOKEN_ENV,
-    sanitise_terminal_title,
+    ResumeLaunchSpec, TerminalKind, WORKBOARD_BUNDLE_ENV, WORKBOARD_CHECKOUT_ENV,
+    WORKBOARD_LAUNCH_TOKEN_ENV, WORKBOARD_OWNER_ENV, WORKBOARD_REPOSITORY_ENV,
+    WORKBOARD_SESSION_ROLE_ENV, WORKBOARD_WORKFLOW_TOKEN_ENV, sanitise_terminal_title,
 };
 pub use live::{
     ConversationLifecycle, LiveEvidenceSource, LiveStatus, ProcessIdentity, ProcessIdentityError,
