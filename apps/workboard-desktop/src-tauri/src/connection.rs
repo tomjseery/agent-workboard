@@ -15,6 +15,10 @@ const CONNECT_DELAY: Duration = Duration::from_millis(50);
 
 pub(crate) trait DaemonStarter: Send + Sync {
     fn start(&self, database: &Path) -> Result<(), BridgeError>;
+
+    fn refusal(&self) -> Option<String> {
+        None
+    }
 }
 
 struct ProcessDaemonStarter {
@@ -52,7 +56,7 @@ impl DaemonStarter for ProcessDaemonStarter {
             .arg(database)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stderr(Stdio::piped());
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -61,6 +65,21 @@ impl DaemonStarter for ProcessDaemonStarter {
         let child = command.spawn().map_err(|_| BridgeError::disconnected())?;
         *self.child.lock().expect("daemon child lock") = Some(child);
         Ok(())
+    }
+
+    fn refusal(&self) -> Option<String> {
+        use std::io::Read;
+
+        let mut guard = self.child.lock().expect("daemon child lock");
+        let child = guard.as_mut()?;
+        if !matches!(child.try_wait(), Ok(Some(_))) {
+            return None;
+        }
+        let mut stderr = child.stderr.take()?;
+        let mut text = String::new();
+        stderr.read_to_string(&mut text).ok()?;
+        let text = text.trim();
+        (!text.is_empty()).then(|| text.to_owned())
     }
 }
 
@@ -181,7 +200,16 @@ impl ConnectionManager {
                 Err(_) => {}
             }
         }
-        Err(BridgeError::disconnected())
+        Err(self
+            .inner
+            .starter
+            .refusal()
+            .map_or_else(BridgeError::disconnected, |refusal| {
+                BridgeError::new(
+                    "daemon_unavailable",
+                    &format!("Workboard could not start: {refusal}"),
+                )
+            }))
     }
 
     pub fn invalidate(&self, client: &Arc<ConnectedClient>) {
