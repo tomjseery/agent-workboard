@@ -30,8 +30,9 @@ mod tests {
     use workboard_application::workspace::WorkboardApplication;
     use workboard_client::{EndpointDescriptor as ClientEndpoint, SubscriptionUpdate};
     use workboard_client_protocol::{
-        CURRENT_PROTOCOL_VERSION, CommandCode, EntityRef, EventCursor, EventEnvelope, EventId,
-        EventKind, EventPayload, InvalidationScope, ReadQueryCode, RequestId, ResyncReason,
+        CURRENT_PROTOCOL_VERSION, CommandCode, CommandOperation, EntityRef, EventCursor,
+        EventEnvelope, EventId, EventKind, EventPayload, FeatureId, InvalidationScope,
+        ReadQueryCode, RequestId, ResyncReason, SessionId, WorkItemId,
         WorkspaceId as ClientWorkspaceId,
     };
     use workboard_core::{RepositoryId, WorkspaceId};
@@ -190,6 +191,110 @@ mod tests {
 
         assert_eq!(handled.load(Ordering::SeqCst), 8);
         assert_eq!(maximum.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn every_unadvertised_command_is_refused_with_its_own_typed_reason() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (application, workspace_id) = application_fixture(&directory);
+        let server = DaemonServer::start_application(application, loopback(), "opaque-token")
+            .expect("start daemon");
+        let client = typed_client(&server, "opaque-token");
+        let workspace = ClientWorkspaceId::from_uuid(*workspace_id.as_uuid());
+
+        let capabilities = client.handshake().command_capabilities.clone();
+        assert_eq!(capabilities.len(), CommandCode::ALL.len());
+        for capability in &capabilities {
+            assert_eq!(
+                capability.available,
+                capability.unavailable_reason.is_none(),
+                "{:?} disagrees about availability",
+                capability.code
+            );
+        }
+
+        let unavailable = [
+            (
+                CommandOperation::ApproveFeature {
+                    feature_id: FeatureId::generate(),
+                },
+                "publication_policy_unavailable",
+            ),
+            (
+                CommandOperation::RequestFeatureRevision {
+                    feature_id: FeatureId::generate(),
+                },
+                "publication_policy_unavailable",
+            ),
+            (
+                CommandOperation::RejectFeature {
+                    feature_id: FeatureId::generate(),
+                },
+                "publication_policy_unavailable",
+            ),
+            (
+                CommandOperation::CheckpointWorkItem {
+                    work_item_id: WorkItemId::generate(),
+                },
+                "structured_checkpoint_unavailable",
+            ),
+            (
+                CommandOperation::StartSession {
+                    work_item_id: WorkItemId::generate(),
+                },
+                "session_control_unavailable",
+            ),
+            (
+                CommandOperation::ResumeSession {
+                    session_id: SessionId::generate(),
+                },
+                "session_control_unavailable",
+            ),
+            (
+                CommandOperation::FocusSession {
+                    session_id: SessionId::generate(),
+                },
+                "session_control_unavailable",
+            ),
+            (
+                CommandOperation::FollowUpSession {
+                    session_id: SessionId::generate(),
+                },
+                "session_control_unavailable",
+            ),
+            (
+                CommandOperation::RecoverSession {
+                    session_id: SessionId::generate(),
+                },
+                "session_control_unavailable",
+            ),
+        ];
+
+        for (command, expected_reason) in unavailable {
+            let code = command.code();
+            let failure = client
+                .execute(workspace, 0, format!("refused-{code:?}"), command)
+                .expect_err("unadvertised command must be refused");
+            let workboard_client::ClientError::Remote(error) = failure else {
+                panic!("{code:?} must fail with a typed remote refusal");
+            };
+            assert_eq!(error.code, "capability_unavailable", "{code:?}");
+            assert_eq!(
+                error.current_revision,
+                Some(0),
+                "{code:?} must report the authoritative revision"
+            );
+            let advertised = capabilities
+                .iter()
+                .find(|capability| capability.code == code)
+                .expect("advertised capability");
+            let reason = advertised
+                .unavailable_reason
+                .as_ref()
+                .expect("typed unavailable reason");
+            assert_eq!(reason.code, expected_reason, "{code:?}");
+            assert_eq!(error.message, reason.message, "{code:?}");
+        }
     }
 
     #[test]

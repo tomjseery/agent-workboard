@@ -15,10 +15,10 @@ use workboard_application::native_sources::RefreshNativeSources;
 use workboard_application::projection::{ReplayResult, core_workspace_id};
 use workboard_application::workspace::WorkboardApplication;
 use workboard_client_protocol::{
-    AvailableAction, CURRENT_PROTOCOL_VERSION, CommandCapability, CommandCode, DaemonInstanceId,
-    EventCursor, HandshakeResponse, Heartbeat, MAX_COLLECTION_ITEMS, MAX_DIAGNOSTICS,
-    MAX_FRAME_BYTES, Operation, PREVIOUS_PROTOCOL_VERSION, ProtocolError, ReadQuery,
-    RequestEnvelope as ClientRequestEnvelope, RequestId,
+    AvailableAction, CURRENT_PROTOCOL_VERSION, CommandCapability, CommandCode, CommandOperation,
+    DaemonInstanceId, EventCursor, HandshakeResponse, Heartbeat, MAX_COLLECTION_ITEMS,
+    MAX_DIAGNOSTICS, MAX_FRAME_BYTES, Operation, PREVIOUS_PROTOCOL_VERSION, ProtocolError,
+    ReadQuery, RequestEnvelope as ClientRequestEnvelope, RequestId,
     ResponseEnvelope as ClientResponseEnvelope, ResponseResult, SUPPORTED_READ_VERSIONS,
     ServerMessage, UnavailableReason, WorkspaceId,
 };
@@ -428,46 +428,39 @@ fn execute_protocol(
             if request.protocol_version != CURRENT_PROTOCOL_VERSION {
                 return incompatible(request);
             }
-            if let workboard_client_protocol::CommandOperation::SaveBoardView { definition } =
-                command
-            {
-                let workspace_id = request.workspace_id.expect("validated Workspace");
-                let result = application.save_client_board_view(
-                    core_workspace_id(workspace_id),
-                    request.expected_revision.expect("validated revision"),
-                    request
-                        .idempotency_key
-                        .as_deref()
-                        .expect("validated idempotency key"),
-                    request.request_id,
-                    definition.clone(),
-                );
-                return match result {
-                    Ok(saved) => {
-                        let revision = application
-                            .projection_revision(core_workspace_id(workspace_id))
-                            .expect("saved view revision");
-                        ClientResponseEnvelope::success(
-                            request.protocol_version,
-                            request,
-                            Some(revision),
-                            ResponseResult::BoardView(saved),
-                            available_actions(revision),
-                        )
-                    }
-                    Err(error) => application_failure(request.protocol_version, request, error),
-                };
+            let context = CommandContext {
+                workspace_id: request.workspace_id.expect("validated Workspace"),
+                expected_revision: request.expected_revision.expect("validated revision"),
+                idempotency_key: request
+                    .idempotency_key
+                    .clone()
+                    .expect("validated idempotency key"),
+                request_id: request.request_id,
+            };
+            match dispatch_command(application, &context, command) {
+                Ok(result) => {
+                    let revision = application
+                        .projection_revision(core_workspace_id(context.workspace_id))
+                        .expect("committed command revision");
+                    ClientResponseEnvelope::success(
+                        request.protocol_version,
+                        request,
+                        Some(revision),
+                        result,
+                        available_actions(revision),
+                    )
+                }
+                Err(CommandFailure::Application(error)) => {
+                    application_failure(request.protocol_version, request, error)
+                }
+                Err(CommandFailure::Unavailable(reason)) => {
+                    let mut error = ProtocolError::new("capability_unavailable", reason.message);
+                    error.current_revision = application
+                        .projection_revision(core_workspace_id(context.workspace_id))
+                        .ok();
+                    ClientResponseEnvelope::failure(request.protocol_version, request, error)
+                }
             }
-            let mut error = ProtocolError::new(
-                "capability_unavailable",
-                format!("the {:?} capability is unavailable", command.code()),
-            );
-            error.current_revision = request.workspace_id.and_then(|workspace_id| {
-                application
-                    .projection_revision(core_workspace_id(workspace_id))
-                    .ok()
-            });
-            ClientResponseEnvelope::failure(request.protocol_version, request, error)
         }
     }
 }
@@ -537,25 +530,98 @@ fn response_within_limits(result: &ResponseResult) -> bool {
     }
 }
 
-fn unavailable_reason() -> UnavailableReason {
+struct CommandContext {
+    workspace_id: WorkspaceId,
+    expected_revision: u64,
+    idempotency_key: String,
+    request_id: RequestId,
+}
+
+enum CommandFailure {
+    Application(AppError),
+    Unavailable(UnavailableReason),
+}
+
+fn dispatch_command(
+    application: &mut WorkboardApplication,
+    context: &CommandContext,
+    command: &CommandOperation,
+) -> Result<ResponseResult, CommandFailure> {
+    match command {
+        CommandOperation::SaveBoardView { definition } => application
+            .save_client_board_view(
+                core_workspace_id(context.workspace_id),
+                context.expected_revision,
+                &context.idempotency_key,
+                context.request_id,
+                definition.clone(),
+            )
+            .map(ResponseResult::BoardView)
+            .map_err(CommandFailure::Application),
+        CommandOperation::ApproveFeature { .. }
+        | CommandOperation::RequestFeatureRevision { .. }
+        | CommandOperation::RejectFeature { .. }
+        | CommandOperation::CheckpointWorkItem { .. }
+        | CommandOperation::StartSession { .. }
+        | CommandOperation::ResumeSession { .. }
+        | CommandOperation::FocusSession { .. }
+        | CommandOperation::FollowUpSession { .. }
+        | CommandOperation::RecoverSession { .. } => Err(CommandFailure::Unavailable(
+            command_unavailable_reason(command.code()).unwrap_or_else(accepted_capability_reason),
+        )),
+    }
+}
+
+fn accepted_capability_reason() -> UnavailableReason {
     UnavailableReason {
         code: "upstream_capability_not_accepted".to_owned(),
         message: "the authoritative Workboard operation has not been accepted".to_owned(),
     }
 }
 
+fn command_unavailable_reason(code: CommandCode) -> Option<UnavailableReason> {
+    let (code, message) = match code {
+        CommandCode::SaveBoardView => return None,
+        CommandCode::ApproveFeature
+        | CommandCode::RequestFeatureRevision
+        | CommandCode::RejectFeature => (
+            "publication_policy_unavailable",
+            "Desktop approval actions are unavailable until the daemon accepts the typed publication policy.",
+        ),
+        CommandCode::CheckpointWorkItem => (
+            "structured_checkpoint_unavailable",
+            "Structured checkpoint editing is unavailable because the daemon has not accepted a revision-checked atomic structured checkpoint operation.",
+        ),
+        CommandCode::StartSession
+        | CommandCode::ResumeSession
+        | CommandCode::FocusSession
+        | CommandCode::FollowUpSession
+        | CommandCode::RecoverSession => (
+            "session_control_unavailable",
+            "Session control is unavailable until the daemon accepts the typed session lifecycle operations.",
+        ),
+    };
+    Some(UnavailableReason {
+        code: code.to_owned(),
+        message: message.to_owned(),
+    })
+}
+
 fn command_capabilities() -> Vec<CommandCapability> {
     CommandCode::ALL
         .into_iter()
-        .map(|code| CommandCapability {
-            code,
-            available: code == CommandCode::SaveBoardView,
-            compatible_versions: if code == CommandCode::SaveBoardView {
-                vec![CURRENT_PROTOCOL_VERSION]
-            } else {
-                Vec::new()
-            },
-            unavailable_reason: (code != CommandCode::SaveBoardView).then(unavailable_reason),
+        .map(|code| {
+            let unavailable_reason = command_unavailable_reason(code);
+            CommandCapability {
+                code,
+                available: unavailable_reason.is_none(),
+                compatible_versions: if unavailable_reason.is_none() {
+                    vec![CURRENT_PROTOCOL_VERSION]
+                } else {
+                    Vec::new()
+                },
+                unavailable_reason,
+            }
         })
         .collect()
 }
@@ -563,11 +629,14 @@ fn command_capabilities() -> Vec<CommandCapability> {
 fn available_actions(revision: u64) -> Vec<AvailableAction> {
     CommandCode::ALL
         .into_iter()
-        .map(|code| AvailableAction {
-            code,
-            available: code == CommandCode::SaveBoardView,
-            unavailable_reason: (code != CommandCode::SaveBoardView).then(unavailable_reason),
-            expected_revision: Some(revision),
+        .map(|code| {
+            let unavailable_reason = command_unavailable_reason(code);
+            AvailableAction {
+                code,
+                available: unavailable_reason.is_none(),
+                unavailable_reason,
+                expected_revision: Some(revision),
+            }
         })
         .collect()
 }
