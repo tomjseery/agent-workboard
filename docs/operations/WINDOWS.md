@@ -75,6 +75,13 @@ database, planning store, provider homes, repositories, or transcripts. The firs
 binary may migrate the database. Database migrations are one-way, so keep the pre-upgrade backup until the
 new release has been accepted.
 
+## Repair
+
+Verify the archive again and rerun its `Install.ps1` with the same `InstallRoot`. This replaces only files in
+the verified release manifest; it does not reset application data or install provider-global integration. Run
+`workboard diagnostics` afterward. If storage health is not `ok`, preserve the database and diagnostics, then
+restore the latest verified database backup instead of deleting or editing SQLite directly.
+
 ## Storage and backup
 
 The default operational database and managed-session bundles are under:

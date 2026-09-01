@@ -1818,11 +1818,13 @@ name = "workboard-daemon"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "directories",
  "notify",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror",
+ "time",
  "uuid",
  "workboard-application",
  "workboard-core",

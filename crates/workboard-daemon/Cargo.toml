@@ -10,17 +10,22 @@ name = "workboard_daemon"
 
 [dependencies]
 clap.workspace = true
+directories.workspace = true
 notify.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+time.workspace = true
 uuid.workspace = true
 workboard-application = { path = "../workboard-application" }
 workboard-core = { path = "../workboard-core" }
+
+[[bin]]
+name = "workboard-daemon"
+path = "src/main.rs"
 
 [dev-dependencies]
 tempfile.workspace = true
 
 [lints]
 workspace = true
-

@@ -28,16 +28,19 @@ use workboard_application::follow_up::{SendSessionFollowUp, SystemFollowUpExecut
 use workboard_application::hooks::{HookIngestionMutation, MAX_HOOK_INPUT_BYTES};
 use workboard_application::integration::{
     INTEGRATION_OWNER, IntegrationConfirmation, IntegrationOperation, IntegrationRequest,
-    IntegrationResponse,
+    IntegrationResponse, IntegrationStatus,
 };
 use workboard_application::legacy_import::{
     ImportedSessionCandidate, LegacyImportPreview, snapshot_context_catalogue,
 };
-use workboard_application::native_launch::{SystemLaunchExecutor, SystemProcessTerminator};
+use workboard_application::native_launch::{
+    SystemLaunchExecutor, SystemProcessTerminator, native_executable_available,
+};
 use workboard_application::native_sources::{NativeRefreshOutcome, RefreshNativeSources};
 use workboard_application::planning_workflow::FeatureProposal;
 use workboard_application::planning_workflow::{CreateFeaturePlanning, planner_bootstrap_prompt};
 use workboard_application::session_launch::{BeginManagedSessionLaunch, CapabilityLaunchInputs};
+use workboard_application::storage::StorageHealth;
 use workboard_application::workflow_operations::{
     RequestManagedSession, work_item_bootstrap_prompt,
 };
@@ -90,12 +93,43 @@ enum Command {
     Integration(IntegrationArgs),
     Workflow(WorkflowArgs),
     Recover(RecoverArgs),
+    Diagnostics(DiagnosticsArgs),
     Mcp,
     #[command(alias = "snapshot")]
     Show,
     Backup(DestinationArgs),
     Export(DestinationArgs),
     Import(ImportArgs),
+}
+
+#[derive(Debug, Args)]
+struct DiagnosticsArgs {
+    #[arg(long)]
+    claude_home: Option<PathBuf>,
+    #[arg(long)]
+    codex_home: Option<PathBuf>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DiagnosticsReport {
+    schema_version: u32,
+    version: &'static str,
+    executable: PathBuf,
+    database: PathBuf,
+    storage: StorageHealth,
+    daemon_endpoint: PathBuf,
+    daemon_available: bool,
+    providers: Vec<ProviderDiagnostic>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderDiagnostic {
+    tool: Tool,
+    executable_available: bool,
+    native_home: PathBuf,
+    integration: IntegrationStatus,
 }
 
 #[derive(Debug, Args)]
@@ -2206,6 +2240,29 @@ fn execute(cli: Cli) -> Result<String, AppError> {
             let workspace_id = resolve_workspace(&application, cli.workspace)?;
             recovery::execute_recover(&mut application, workspace_id, arguments, cli.json)
         }
+        Some(Command::Diagnostics(arguments)) => {
+            let report = diagnostics(&mut application, &current_directory, arguments)?;
+            let healthy = report.storage.is_healthy();
+            let providers = report
+                .providers
+                .iter()
+                .filter(|provider| provider.executable_available)
+                .count();
+            output(
+                &report,
+                cli.json,
+                format!(
+                    "Workboard {}: storage={}, providers={providers}/2, daemon={}",
+                    report.version,
+                    if healthy { "healthy" } else { "unhealthy" },
+                    if report.daemon_available {
+                        "available"
+                    } else {
+                        "stopped"
+                    }
+                ),
+            )
+        }
         Some(Command::Show) => {
             let workspace_id = resolve_workspace(&application, cli.workspace)?;
             let snapshot = application.snapshot(workspace_id)?;
@@ -2319,6 +2376,66 @@ fn execute(cli: Cli) -> Result<String, AppError> {
         })) => unreachable!(),
         Some(Command::Mcp) => unreachable!(),
     }
+}
+
+fn diagnostics(
+    application: &mut WorkboardApplication,
+    current_directory: &Path,
+    arguments: DiagnosticsArgs,
+) -> Result<DiagnosticsReport, AppError> {
+    let executable = std::env::current_exe().map_err(AppError::GitIo)?;
+    let database = application.database_path().to_path_buf();
+    let daemon_endpoint = workboard_daemon::endpoint_path(&database);
+    let mut providers = Vec::new();
+    for (tool, home) in [
+        (Tool::Claude, arguments.claude_home),
+        (Tool::Codex, arguments.codex_home),
+    ] {
+        let native_home = home
+            .map(|path| absolute(current_directory, &path))
+            .map_or_else(|| default_integration_home(tool), Ok)?;
+        let response = application.integrations().execute(
+            IntegrationRequest {
+                tool,
+                native_home: native_home.clone(),
+                workboard_executable: executable.clone(),
+                operation: IntegrationOperation::Status,
+                preview_operation: None,
+                confirmation: None,
+            },
+            time::OffsetDateTime::now_utc(),
+        )?;
+        let IntegrationResponse::Status { status } = response else {
+            return Err(AppError::Domain(
+                "diagnostics received an unexpected integration response".to_owned(),
+            ));
+        };
+        providers.push(ProviderDiagnostic {
+            tool,
+            executable_available: native_executable_available(&default_native_executable(tool)),
+            native_home,
+            integration: status,
+        });
+    }
+    Ok(DiagnosticsReport {
+        schema_version: 1,
+        version: env!("CARGO_PKG_VERSION"),
+        executable,
+        database,
+        storage: application.storage_health()?,
+        daemon_available: daemon_is_available(&daemon_endpoint),
+        daemon_endpoint,
+        providers,
+    })
+}
+
+fn daemon_is_available(endpoint: &Path) -> bool {
+    let Ok(descriptor) = workboard_daemon::read_descriptor(endpoint) else {
+        return false;
+    };
+    workboard_daemon::DaemonClient::new(descriptor.address, descriptor.token)
+        .request(workboard_daemon::WriteCommand::Ping)
+        .is_ok()
 }
 
 fn run_interactive_board(cli: &Cli) -> Result<(), AppError> {
@@ -4265,6 +4382,33 @@ mod tests {
         let error =
             execute_from(["workboard", "epic", "create"]).expect_err("missing title should fail");
         assert_eq!(error.code(), "domain");
+    }
+
+    #[test]
+    fn diagnostics_reports_storage_and_clean_provider_homes() {
+        let directory = TempDir::new().expect("temporary diagnostics directory");
+        let database = directory.path().join("workboard.sqlite");
+        let claude = directory.path().join("claude");
+        let codex = directory.path().join("codex");
+        fs::create_dir_all(&claude).expect("Claude home");
+        fs::create_dir_all(&codex).expect("Codex home");
+        let output = execute_from([
+            "workboard".to_owned(),
+            "--database".to_owned(),
+            database.to_string_lossy().into_owned(),
+            "--json".to_owned(),
+            "diagnostics".to_owned(),
+            "--claude-home".to_owned(),
+            claude.to_string_lossy().into_owned(),
+            "--codex-home".to_owned(),
+            codex.to_string_lossy().into_owned(),
+        ])
+        .expect("diagnostics");
+        let report: serde_json::Value = serde_json::from_str(&output).expect("diagnostics JSON");
+        assert_eq!(report["storage"]["integrity"], "ok");
+        assert_eq!(report["providers"][0]["integration"]["state"], "clean");
+        assert_eq!(report["providers"][1]["integration"]["state"], "clean");
+        assert!(report.get("token").is_none());
     }
 
     #[test]

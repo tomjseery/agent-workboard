@@ -17,3 +17,27 @@ jobs:
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --workspace --all-targets
 
+  windows-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.1
+      - run: .\scripts\New-WindowsRelease.ps1
+      - run: |
+          $archive = (Get-ChildItem .\artifacts\release\*.zip).FullName
+          .\scripts\Test-WindowsRelease.ps1 $archive
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-windows-dogfood
+          path: artifacts/release/*
+
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: cargo install cargo-fuzz --locked
+      - run: cargo fuzz run hook_input -- -max_total_time=30
+
