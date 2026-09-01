@@ -41,7 +41,7 @@ describe("daemon facade", () => {
     const transport = new FakeTransport();
     const facade = createDaemonFacade(transport);
     const handshake: BootstrapHandshake = {
-      state: "read_only",
+      state: "read_only", refusal: null,
       subscriptions: [{ workspaceId }],
     };
     const response = { result: null } as ResponseEnvelope;

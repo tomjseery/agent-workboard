@@ -44,19 +44,23 @@ impl DesktopRuntime {
                             workspace_id: workspace.id,
                         })
                         .collect(),
+                    refusal: None,
                 }
             }
             Ok(_) => BootstrapHandshake {
                 state: BootstrapState::Incompatible,
                 subscriptions: Vec::new(),
+                refusal: None,
             },
             Err(error) if error.code == "incompatible_protocol" => BootstrapHandshake {
                 state: BootstrapState::Incompatible,
                 subscriptions: Vec::new(),
+                refusal: Some(error.message),
             },
-            Err(_) => BootstrapHandshake {
+            Err(error) => BootstrapHandshake {
                 state: BootstrapState::Disconnected,
                 subscriptions: Vec::new(),
+                refusal: Some(error.message),
             },
         }
     }

@@ -19,5 +19,9 @@ export function useBootstrap(): { state: BootstrapState; workspaceId?: Workspace
   if (query.isError || query.data === undefined) {
     return { state: "disconnected", refusal: refusalOf(query.error) };
   }
-  return { state: query.data.state, workspaceId: query.data.subscriptions[0]?.workspaceId };
+  return {
+    state: query.data.state,
+    workspaceId: query.data.subscriptions[0]?.workspaceId,
+    refusal: query.data.refusal ?? undefined,
+  };
 }
