@@ -182,6 +182,8 @@ configuration.
 - A normal provider CLI sees Workboard skills: this is not expected. Run `workboard integration status` for
   that provider. Preview and remove only residue Workboard proves it owns; do not delete foreign files.
 - Backup fails because the destination exists: choose a new filename. Workboard never overwrites a backup.
+- `database schema ... is newer`: the installed executable is older than the database. Run `workboard update`;
+  do not delete, edit, or downgrade the database.
 - Recovery reports a checkout conflict: keep the dry-run output and resolve the recorded dirty, occupied,
   missing-branch or path evidence. Do not force recreation by editing the database.
 - The daemon reports `daemon_already_running`: use the existing daemon or stop its process. Do not delete the

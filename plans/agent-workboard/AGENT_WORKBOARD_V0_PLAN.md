@@ -740,6 +740,9 @@ Current verification:
 - The packaged updater passed the reduced-`PATH`, source-free release test: it verified a release archive,
   replaced the installed files in place, preserved the test database and `-NoPath` choice, and left provider
   fixtures unchanged through uninstall.
+- Real-install preflight found the active dogfood database at schema 41 while this release branch supports
+  schema 32. Older binaries now fail closed on future schemas while leaving `workboard update` available;
+  the candidate must incorporate the accepted later schema migrations before it can dogfood that database.
 
 Next delivery gate: use the unsigned candidate for several days across real create, plan, execute, resume,
 adopt, recovery, and in-place update work; fix observed friction; then request owner acceptance, contract

@@ -1802,6 +1802,13 @@ impl SqliteStore {
         connection.busy_timeout(Duration::from_secs(5))?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
+        let found_schema: i64 =
+            connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if found_schema > CURRENT_SCHEMA_VERSION {
+            return Err(AppError::Domain(format!(
+                "database schema {found_schema} is newer than this Workboard version supports ({CURRENT_SCHEMA_VERSION}); update Workboard before opening this database"
+            )));
+        }
         migrate(&connection)?;
         Ok(Self { path, connection })
     }
@@ -3974,7 +3981,7 @@ mod tests {
     use time::OffsetDateTime;
     use workboard_core::ConversationId;
 
-    use super::SqliteStore;
+    use super::{CURRENT_SCHEMA_VERSION, SqliteStore};
     use crate::AppError;
 
     fn drop_checkout_readiness_schema(connection: &Connection) {
@@ -4256,6 +4263,31 @@ mod tests {
         );
         assert_eq!(store.health().expect("storage health").schema_version, 42);
         assert!(store.health().expect("storage health").is_healthy());
+    }
+
+    #[test]
+    fn a_newer_database_requires_a_newer_workboard_binary() {
+        let directory = TempDir::new().expect("temporary directory");
+        let path = directory.path().join("workboard.sqlite");
+        let connection = Connection::open(&path).expect("open raw database");
+        connection
+            .pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION + 1)
+            .expect("stamp future schema");
+        drop(connection);
+
+        let error = SqliteStore::open(&path)
+            .err()
+            .expect("reject future schema");
+        assert!(
+            error
+                .to_string()
+                .contains("newer than this Workboard version")
+        );
+        let connection = Connection::open(path).expect("reopen raw database");
+        let version: i64 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .expect("read future schema");
+        assert_eq!(version, CURRENT_SCHEMA_VERSION + 1);
     }
 
     #[test]
