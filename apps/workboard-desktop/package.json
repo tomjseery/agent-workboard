@@ -9,7 +9,10 @@
     "generate": "cargo run -q --manifest-path src-tauri/Cargo.toml --bin generate-contracts -- write",
     "generate:check": "cargo run -q --manifest-path src-tauri/Cargo.toml --bin generate-contracts -- check",
     "typecheck": "tsc -b --pretty false",
-    "test": "vitest run --exclude '**/*.browser.test.tsx' && vitest run --config vitest.browser.config.ts"
+    "test": "vitest run --exclude '**/*.browser.test.tsx' && vitest run --config vitest.browser.config.ts",
+    "app": "tauri build --no-bundle",
+    "app:dev": "tauri dev",
+    "tauri": "tauri"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.85.5",
@@ -23,6 +26,7 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.12",
+    "@tauri-apps/cli": "^2.11.4",
     "@types/react": "^19.1.10",
     "@types/react-dom": "^19.1.7",
     "@vitejs/plugin-react": "^5.0.2",
