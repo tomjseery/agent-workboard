@@ -2,7 +2,7 @@ import type { InfiniteData, QueryClient } from "@tanstack/react-query";
 
 import type { BoardCardProjection, BoardViewDefinition, EventEnvelope, ReadQueryCode, ResponseEnvelope, WorkspaceId } from "./generated";
 import { boardQueryKeys } from "../features/board/api/boardQueryKeys";
-import type { BoardResponse } from "../features/board/types/board";
+import type { DaemonRead } from "./daemon";
 import { checkoutQueryKeys } from "../features/checkout/api/checkoutQueryKeys";
 import { hierarchyQueryKeys } from "../features/hierarchy/api/hierarchyQueryKeys";
 import { repositoryQueryKeys } from "../features/repository/api/repositoryQueryKeys";
@@ -45,7 +45,7 @@ function patchSavedView(queryClient: QueryClient, workspaceId: WorkspaceId, sequ
 
 function patchBoardCards(queryClient: QueryClient, workspaceId: WorkspaceId, sequence: number, changedCards: BoardCardProjection[]) {
   const cardsByWorkItem = new Map(changedCards.map((card) => [card.workItem.id, card]));
-  queryClient.setQueriesData<InfiniteData<BoardResponse>>({ queryKey: boardQueryKeys.boards(workspaceId) }, (current) => {
+  queryClient.setQueriesData<InfiniteData<DaemonRead<"board">>>({ queryKey: boardQueryKeys.boards(workspaceId) }, (current) => {
     if (current === undefined) return current;
     let changed = false;
     const pages = current.pages.map((page) => {

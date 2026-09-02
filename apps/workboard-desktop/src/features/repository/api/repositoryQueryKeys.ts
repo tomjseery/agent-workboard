@@ -1,4 +1,4 @@
-import type { RepositoryId, WorkspaceId } from "../../../core/generated";
+import type { RepositoryId, WorkspaceId } from "../../../core/contracts";
 
 export const repositoryQueryKeys = {
   all: ["repositories"] as const,

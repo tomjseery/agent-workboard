@@ -1,7 +1,7 @@
-import type { HierarchyNode, OwnerProjection } from "../../../core/generated";
-import type { HierarchyEntityKind } from "./hierarchy";
+import type { HierarchyNode, Owner } from "../../../core/contracts";
+import type { HierarchyEntityKind } from "../types";
 
-export const ownerLabels: Record<OwnerProjection["kind"], string> = {
+export const ownerLabels: Record<Owner["kind"], string> = {
   workspace: "Workspace",
   epic: "Epic",
   feature: "Feature",

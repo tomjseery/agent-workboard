@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { WorkspaceHierarchy } from "../../../core/generated";
+import type { WorkspaceHierarchy } from "../../../core/contracts";
 import { buildNavigationTree, navigationPath, unassignedRepositoryTitle } from "./navigationTree";
 
 const workspaceId = "20000000-0000-0000-0000-000000000001";

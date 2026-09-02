@@ -1,6 +1,6 @@
 import { useParams } from "@tanstack/react-router";
 
-import type { WorkspaceId } from "../../../core/generated";
+import type { WorkspaceId } from "../../../core/contracts";
 import { useHierarchy } from "../../hierarchy/hooks/useHierarchy";
 import { buildNavigationTree, navigationPath } from "../model/navigationTree";
 import { useNavigationStore } from "../store/navigationStore";
@@ -13,7 +13,7 @@ export function useWorkspaceNavigation(workspaceId: WorkspaceId) {
   const setFilter = useNavigationStore((state) => state.setFilter);
   const toggleNode = useNavigationStore((state) => state.toggle);
   const collapseAll = useNavigationStore((state) => state.collapseAll);
-  const hierarchy = model.hierarchy?.source;
+  const hierarchy = model.hierarchy;
   const tree = hierarchy === undefined ? undefined : buildNavigationTree(hierarchy, filter);
   const path = hierarchy === undefined ? { repositoryIds: [] } : navigationPath(hierarchy, params);
   const searching = filter.trim().length > 0;

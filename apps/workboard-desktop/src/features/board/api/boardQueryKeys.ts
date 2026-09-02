@@ -1,4 +1,4 @@
-import type { AttentionQuery, BoardQuery, WorkspaceId } from "../../../core/generated";
+import type { AttentionQuery, BoardQuery, WorkspaceId } from "../../../core/contracts";
 
 type BoardParameters = Omit<BoardQuery, "cursor">;
 type AttentionParameters = Omit<AttentionQuery, "cursor">;

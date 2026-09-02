@@ -1,4 +1,4 @@
-import type { WorkspaceId } from "../../../core/generated";
+import type { WorkspaceId } from "../../../core/contracts";
 import { useAttentionQuery } from "./useAttentionQuery";
 
 export function useAttention(workspaceId: WorkspaceId) {

@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
-import type { WorkspaceId } from "../../../core/generated";
+import type { WorkspaceId } from "../../../core/contracts";
 import hierarchyApi from "../api/hierarchyApi";
 import { hierarchyQueryKeys } from "../api/hierarchyQueryKeys";
 

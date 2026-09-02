@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
-import type { BoardViewDefinition, WorkspaceId } from "../../../core/generated";
+import type { BoardViewDefinition, WorkspaceId } from "../../../core/contracts";
 import { savedViewQueryKeys } from "../api/savedViewQueryKeys";
 import savedViewsApi from "../api/savedViewsApi";
 

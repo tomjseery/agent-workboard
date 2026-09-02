@@ -1,4 +1,7 @@
-import type { DependencyReadiness, WorkItemStatus } from "../../../core/generated";
+import { Ban, Check, Hourglass, type LucideIcon } from "lucide-react";
+
+import type { BadgeTone } from "../../../components/ui/badge";
+import type { DependencyReadiness, WorkItemStatus } from "../../../core/contracts";
 
 export interface LanePresentation {
   title: string;
@@ -20,20 +23,14 @@ export const laneOrder = Object.keys(lanePresentations) as WorkItemStatus[];
 export const defaultLaneKeys = laneOrder.filter((status) => !lanePresentations[status].hiddenByDefault);
 
 export interface ReadinessPresentation {
-  symbol: string;
+  icon: LucideIcon;
   label: string;
-  tone: "neutral" | "positive" | "warning";
+  tone: BadgeTone;
 }
 
 export const dependencyReadinessPresentations = {
-  ready: { symbol: "✓", label: "Dependencies ready", tone: "positive" },
-  waiting: { symbol: "⧗", label: "Waiting on dependencies", tone: "neutral" },
-  blocked: { symbol: "⊘", label: "Blocked by dependencies", tone: "warning" },
-  complete: { symbol: "✓", label: "Dependencies complete", tone: "positive" },
+  ready: { icon: Check, label: "Dependencies ready", tone: "positive" },
+  waiting: { icon: Hourglass, label: "Waiting on dependencies", tone: "muted" },
+  blocked: { icon: Ban, label: "Blocked by dependencies", tone: "warning" },
+  complete: { icon: Check, label: "Dependencies complete", tone: "positive" },
 } as const satisfies Record<DependencyReadiness, ReadinessPresentation>;
-
-export const readinessToneClasses: Record<ReadinessPresentation["tone"], string> = {
-  neutral: "border-[var(--border)] text-[var(--muted-text)]",
-  positive: "border-[var(--success-muted)] text-[var(--success)]",
-  warning: "border-[var(--warning-muted)] text-[var(--warning)]",
-};

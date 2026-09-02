@@ -1,5 +1,5 @@
-import type { EpicId, FeatureId, RepositoryId, WorkItemId, WorkspaceHierarchy } from "../../../core/generated";
-import type { NavigationEpicNode, NavigationFeatureNode, NavigationPath, NavigationRepositoryNode, NavigationTree } from "../types/tree";
+import type { EpicId, FeatureId, RepositoryId, WorkItemId, WorkspaceHierarchy } from "../../../core/contracts";
+import type { NavigationEpicNode, NavigationFeatureNode, NavigationPath, NavigationRepositoryNode, NavigationTree } from "../types";
 
 export const unassignedRepositoryTitle = "No repository participation";
 const unassignedEpicTitle = "No Epic";

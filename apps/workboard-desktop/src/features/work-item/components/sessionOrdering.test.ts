@@ -1,12 +1,12 @@
 import { expect, it } from "vitest";
 
-import type { SessionObservabilityProjection } from "../../../core/generated";
+import type { Session } from "../../../core/contracts";
 import { isResumable, orderSessions } from "./SessionControls";
 
 function session(
   id: string,
-  overrides: Partial<SessionObservabilityProjection> = {},
-): SessionObservabilityProjection {
+  overrides: Partial<Session> = {},
+): Session {
   return {
     id,
     provider: "codex",
@@ -25,7 +25,7 @@ function session(
     revision: 1,
     diagnostics: [],
     ...overrides,
-  } as SessionObservabilityProjection;
+  } as Session;
 }
 
 it("orders current and live sessions ahead of stopped ones, then by most recent activity", () => {

@@ -1,4 +1,4 @@
-import type { FeatureId, WorkspaceId } from "../../../core/generated";
+import type { FeatureId, WorkspaceId } from "../../../core/contracts";
 import { useApprovalQueueQuery, useFeatureProposalQuery } from "./useProposalQuery";
 
 export function useApprovalQueue(workspaceId: WorkspaceId) {

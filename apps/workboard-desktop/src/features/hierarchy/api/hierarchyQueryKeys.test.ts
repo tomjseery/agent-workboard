@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { hierarchyQueryKeys } from "./hierarchyQueryKeys";
 import { workspaceQueryKeys } from "../../workspace/api/workspaceQueryKeys";
-import { entityPresentations, hierarchyNodeLabels, ownerLabels } from "../types/presentation";
+import { entityPresentations, hierarchyNodeLabels, ownerLabels } from "../model/presentation";
 
 const workspaceId = "20000000-0000-0000-0000-000000000001";
 

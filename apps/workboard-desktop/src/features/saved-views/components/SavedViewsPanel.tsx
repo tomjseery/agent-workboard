@@ -1,9 +1,29 @@
-import type { WorkspaceId } from "../../../core/generated";
+import { Alert } from "../../../components/ui/alert";
+import { Card, CardTitle } from "../../../components/ui/card";
+import type { WorkspaceId } from "../../../core/contracts";
+import { useSavedViews } from "../hooks/useSavedViews";
 import { SavedViewEditor } from "./SavedViewEditor";
 import { SavedViewsList } from "./SavedViewsList";
-import { useSavedViews } from "../hooks/useSavedViews";
 
 export function SavedViewsPanel({ workspaceId }: { workspaceId: WorkspaceId }) {
   const state = useSavedViews(workspaceId);
-  return <section aria-labelledby="saved-views-title" className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5"><div className="flex flex-wrap items-center justify-between gap-4"><div><h2 id="saved-views-title" className="text-lg font-semibold">Saved service views</h2><p className="text-sm text-[var(--muted-text)]">Filters remain views over this Workspace.</p></div><SavedViewEditor workspaceId={workspaceId} /></div>{!state.canSave && state.readOnlyReason !== undefined && <p role="status" className="mt-4 rounded-lg border border-[var(--warning-muted)] p-3 text-[var(--warning)]">Read-only: {state.readOnlyReason}</p>}<div className="mt-4"><SavedViewsList workspaceId={workspaceId} /></div></section>;
+  return (
+    <Card asChild>
+      <section aria-labelledby="saved-views-title">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <CardTitle id="saved-views-title">Saved service views</CardTitle>
+            <p className="text-sm text-muted-foreground">Filters remain views over this Workspace.</p>
+          </div>
+          <SavedViewEditor workspaceId={workspaceId} />
+        </div>
+        {!state.canSave && state.readOnlyReason !== undefined && (
+          <Alert role="status" className="mt-4 text-warning">Read-only: {state.readOnlyReason}</Alert>
+        )}
+        <div className="mt-4">
+          <SavedViewsList workspaceId={workspaceId} />
+        </div>
+      </section>
+    </Card>
+  );
 }

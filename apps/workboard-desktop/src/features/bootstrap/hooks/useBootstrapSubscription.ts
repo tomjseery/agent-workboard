@@ -6,7 +6,7 @@ import type {
   BootstrapState,
   SubscriptionMessage,
   SubscriptionTarget,
-} from "../../../core/generated";
+} from "../../../core/contracts";
 import { daemon } from "../../../core/daemon";
 import { applyWorkspaceEvent } from "../../../core/events";
 import { bootstrapQueryKey } from "./useBootstrapQuery";

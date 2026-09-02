@@ -1,5 +1,5 @@
 import { daemon } from "../../../core/daemon";
-import type { Provider, RepositoryId, SessionId, WorkItemId, WorkspaceId } from "../../../core/generated";
+import type { Provider, RepositoryId, SessionId, WorkItemId, WorkspaceId } from "../../../core/contracts";
 
 const workItemApi = {
   detail: (workspaceId: WorkspaceId, workItemId: WorkItemId) => daemon.workItemDetail(workspaceId, workItemId),

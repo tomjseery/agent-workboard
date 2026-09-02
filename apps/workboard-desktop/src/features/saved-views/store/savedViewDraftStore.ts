@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-import type { BoardViewDefinition, BoardViewDensity, BoardViewGroupingKind, BoardViewId, BoardViewLaneDefinition, BoardViewSortDirection, BoardViewSortField, RepositoryId, WorkItemStatus, WorkspaceId } from "../../../core/generated";
+import type { BoardViewDefinition, BoardViewDensity, BoardViewGroupingKind, BoardViewId, BoardViewLaneDefinition, BoardViewSortDirection, BoardViewSortField, RepositoryId, WorkItemStatus, WorkspaceId } from "../../../core/contracts";
 
 export interface SavedViewDraft {
   id: BoardViewId;

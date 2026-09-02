@@ -1,6 +1,6 @@
-import type { BoardCardProjection, WorkspaceId } from "../../../core/generated";
+import type { WorkItemCard, WorkspaceId } from "../../../core/contracts";
 import { useBoardInteractionStore } from "../store/boardInteractionStore";
-import type { BoardScope } from "../types/board";
+import type { BoardScope } from "../types";
 import { useBoardQuery } from "./useBoardQuery";
 
 export function useBoard(workspaceId: WorkspaceId, scope: BoardScope = {}) {
@@ -26,7 +26,7 @@ export function useBoard(workspaceId: WorkspaceId, scope: BoardScope = {}) {
   });
   const envelopes = query.data?.pages ?? [];
   const projections = envelopes.flatMap((page) => (page.result?.type === "board" ? [page.result.value] : []));
-  const cardsByLane = new Map<string, BoardCardProjection[]>();
+  const cardsByLane = new Map<string, WorkItemCard[]>();
   for (const card of projections.flatMap((page) => page.cards)) {
     const lane = cardsByLane.get(card.laneKey) ?? [];
     lane.push(card);
@@ -34,9 +34,9 @@ export function useBoard(workspaceId: WorkspaceId, scope: BoardScope = {}) {
   }
   for (const lane of cardsByLane.values()) lane.sort((left, right) => left.lanePosition - right.lanePosition);
   const lanes = projections[0]?.lanes ?? [];
-  const repositories = new Map<string, BoardCardProjection["repositories"][number]>();
+  const repositories = new Map<string, WorkItemCard["repositories"][number]>();
   for (const cards of cardsByLane.values()) for (const card of cards) for (const repository of card.repositories) repositories.set(repository.id, repository);
-  const move = (card: BoardCardProjection, key: string) => {
+  const move = (card: WorkItemCard, key: string) => {
     const laneIndex = lanes.findIndex((lane) => lane.key === card.laneKey);
     const cards = cardsByLane.get(card.laneKey) ?? [];
     const cardIndex = cards.findIndex((candidate) => candidate.workItem.id === card.workItem.id);

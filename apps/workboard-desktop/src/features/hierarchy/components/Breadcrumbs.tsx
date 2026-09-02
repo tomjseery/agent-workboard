@@ -1,7 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 
-import type { WorkspaceHierarchy, WorkspaceId } from "../../../core/generated";
+import type { WorkspaceHierarchy, WorkspaceId } from "../../../core/contracts";
 import { breadcrumbTrail, type BreadcrumbStep, type BreadcrumbTarget } from "../model/breadcrumbTrail";
 
 interface BreadcrumbsProps {
@@ -22,7 +22,7 @@ export function Breadcrumbs({ workspaceId, hierarchy, target }: BreadcrumbsProps
   const steps = breadcrumbTrail(hierarchy, target);
   return (
     <nav aria-label="Breadcrumbs">
-      <ol className="flex flex-wrap items-center gap-2 text-sm text-[var(--muted-text)]">
+      <ol className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
         {steps.map((step, index) => <li key={`${step.kind}-${step.id}`} className={index === 0 ? undefined : "before:mr-2 before:content-['/']"}>{stepLinks[step.kind](workspaceId, step)}</li>)}
       </ol>
     </nav>

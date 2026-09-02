@@ -1,6 +1,8 @@
-import type { WorkItemId, WorkspaceId } from "../../../core/generated";
+import { Alert } from "../../../components/ui/alert";
+import { Button } from "../../../components/ui/button";
+import type { WorkItemId, WorkspaceId } from "../../../core/contracts";
 import { useBoard } from "../hooks/useBoard";
-import type { BoardScope } from "../types/board";
+import type { BoardScope } from "../types";
 import { BoardFilters } from "./BoardFilters";
 import { VirtualLane } from "./VirtualLane";
 
@@ -22,9 +24,33 @@ export function BoardView({ workspaceId, scope, evidenceLinks = false, onOpenWor
     <div className="space-y-4">
       <BoardFilters filters={board.filters} repositories={board.repositories} repositoryScoped={board.isRepositoryScoped} onQueryChange={board.setQuery} onToggleRepository={board.toggleRepository} onToggleLane={board.toggleLane} onSort={board.setSort} onReset={board.resetFilters} />
       {board.isRefreshing && <p role="status">Refreshing changed board data…</p>}
-      {board.isPartial && <p role="alert">Some authoritative board evidence is partial. Displayed cards retain their reported state.</p>}
-      {board.totalCount === 0 ? <p>No Work items match this board view.</p> : <div aria-label="Work item board" className="flex gap-4 overflow-x-auto pb-3">{board.lanes.map((lane) => <VirtualLane key={lane.key} lane={lane} workspaceId={workspaceId} evidenceLinks={evidenceLinks} cards={board.cardsByLane.get(lane.key) ?? []} selectedWorkItemId={board.selectedWorkItemId} focusedWorkItemId={board.focusedWorkItemId} onSelect={(card) => board.select(card.workItem.id)} onFocus={(card) => board.focus(card.workItem.id)} onOpen={(card) => onOpenWorkItem(card.workItem.id)} onMove={board.move} />)}</div>}
-      {board.hasMore && <button type="button" disabled={board.isLoadingMore} onClick={() => void board.loadMore()} className="rounded-lg border border-[var(--border)] px-4 py-2">{board.isLoadingMore ? "Loading more cards…" : `Load more of ${board.totalCount}`}</button>}
+      {board.isPartial && <Alert>Some authoritative board evidence is partial. Displayed cards retain their reported state.</Alert>}
+      {board.totalCount === 0 ? (
+        <p>No Work items match this board view.</p>
+      ) : (
+        <div aria-label="Work item board" className="flex gap-4 overflow-x-auto pb-3">
+          {board.lanes.map((lane) => (
+            <VirtualLane
+              key={lane.key}
+              lane={lane}
+              workspaceId={workspaceId}
+              evidenceLinks={evidenceLinks}
+              cards={board.cardsByLane.get(lane.key) ?? []}
+              selectedWorkItemId={board.selectedWorkItemId}
+              focusedWorkItemId={board.focusedWorkItemId}
+              onSelect={(card) => board.select(card.workItem.id)}
+              onFocus={(card) => board.focus(card.workItem.id)}
+              onOpen={(card) => onOpenWorkItem(card.workItem.id)}
+              onMove={board.move}
+            />
+          ))}
+        </div>
+      )}
+      {board.hasMore && (
+        <Button type="button" size="lg" disabled={board.isLoadingMore} onClick={() => void board.loadMore()}>
+          {board.isLoadingMore ? "Loading more cards…" : `Load more of ${board.totalCount}`}
+        </Button>
+      )}
       <p className="sr-only" aria-live="polite">{board.selectedWorkItemId === undefined ? "No card selected" : `Selected Work item ${board.selectedWorkItemId}`}</p>
     </div>
   );

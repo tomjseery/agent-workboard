@@ -1,4 +1,4 @@
-import type { BoardViewId, WorkspaceId } from "../../../core/generated";
+import type { BoardViewId, WorkspaceId } from "../../../core/contracts";
 import { useSavedViewQuery } from "./useSavedViewQuery";
 
 export function useSavedView(workspaceId: WorkspaceId, viewId: BoardViewId) {

@@ -3,12 +3,14 @@ import { page, userEvent } from "@vitest/browser/context";
 import { expect, it, vi } from "vitest";
 import "vitest-browser-react";
 
+import { RouterHarness } from "../../../test/routerHarness";
+
 import { daemon } from "../../../core/daemon";
 import type {
   AvailableAction,
   RepositoryReference,
-  SessionObservabilityProjection,
-} from "../../../core/generated";
+  Session,
+} from "../../../core/contracts";
 import { SessionControls } from "./SessionControls";
 import "../../../styles.css";
 
@@ -22,7 +24,7 @@ function repository(suffix: string, title: string): RepositoryReference {
   return { id: `3000000${suffix}-0000-0000-0000-000000000001`, workspaceId, slug: title.toLowerCase(), title } as RepositoryReference;
 }
 
-function session(id: string, overrides: Partial<SessionObservabilityProjection> = {}): SessionObservabilityProjection {
+function session(id: string, overrides: Partial<Session> = {}): Session {
   const evidence = { state: "not_loaded", code: "x", message: "x", observedAt: null };
   return {
     id,
@@ -42,7 +44,7 @@ function session(id: string, overrides: Partial<SessionObservabilityProjection> 
     revision: 41,
     diagnostics: [],
     ...overrides,
-  } as SessionObservabilityProjection;
+  } as Session;
 }
 
 function actions(overrides: Partial<Record<string, Partial<AvailableAction>>> = {}): AvailableAction[] {
@@ -59,7 +61,7 @@ function actions(overrides: Partial<Record<string, Partial<AvailableAction>>> = 
 
 function render(node: React.ReactNode) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  page.render(<QueryClientProvider client={queryClient}>{node}</QueryClientProvider>);
+  page.render(<RouterHarness><QueryClientProvider client={queryClient}>{node}</QueryClientProvider></RouterHarness>);
 }
 
 function accepted() {

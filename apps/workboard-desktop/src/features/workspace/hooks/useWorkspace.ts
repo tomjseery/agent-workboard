@@ -1,4 +1,4 @@
-import type { WorkspaceId } from "../../../core/generated";
+import type { WorkspaceId } from "../../../core/contracts";
 import { useWorkspaceQuery } from "./useWorkspaceQuery";
 
 export function useWorkspace(workspaceId: WorkspaceId) {

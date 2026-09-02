@@ -3,6 +3,8 @@ import { page, userEvent } from "@vitest/browser/context";
 import { expect, it, vi } from "vitest";
 import "vitest-browser-react";
 
+import { RouterHarness } from "../../../test/routerHarness";
+
 import { daemon } from "../../../core/daemon";
 import { createLargeBoardFixture } from "../fixtures/largeBoardFixture";
 import { initialBoardFilters, useBoardInteractionStore } from "../store/boardInteractionStore";
@@ -21,7 +23,7 @@ it("bounds mounted cards and supports the complete non-drag keyboard path at 200
   document.body.style.zoom = "2";
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const onOpen = vi.fn();
-  page.render(<QueryClientProvider client={queryClient}><BoardView workspaceId={fixture.workspaceId} onOpenWorkItem={onOpen} /></QueryClientProvider>);
+  page.render(<RouterHarness><QueryClientProvider client={queryClient}><BoardView workspaceId={fixture.workspaceId} onOpenWorkItem={onOpen} /></QueryClientProvider></RouterHarness>);
   await expect.element(page.getByLabelText("Work item board")).toBeVisible();
   await vi.waitFor(() => expect(document.querySelectorAll("[data-board-card]").length).toBeGreaterThan(0));
   expect(document.querySelectorAll("[data-board-card]").length).toBeLessThanOrEqual(200);
@@ -41,7 +43,7 @@ it("bounds mounted cards and supports the complete non-drag keyboard path at 200
 
 it("renders loading, empty, partial, incompatible, and transport-error states without local inference", async () => {
   const fixture = createLargeBoardFixture();
-  const render = () => page.render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><BoardView workspaceId={fixture.workspaceId} onOpenWorkItem={() => undefined} /></QueryClientProvider>);
+  const render = () => page.render(<RouterHarness><QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><BoardView workspaceId={fixture.workspaceId} onOpenWorkItem={() => undefined} /></QueryClientProvider></RouterHarness>);
 
   vi.mocked(daemon.board).mockReset().mockImplementation(() => new Promise(() => undefined));
   render();
@@ -68,7 +70,7 @@ it("hides Cancelled behind a lane filter and shows dependency readiness as a car
   const fixture = createLargeBoardFixture();
   useBoardInteractionStore.setState({ filters: initialBoardFilters });
   vi.mocked(daemon.board).mockReset().mockResolvedValue(boardResponse(fixture, { result: { type: "board", value: { lanes: fixture.lanes, cards: fixture.cards.slice(0, 40), nextCursor: null, totalCount: 40, revision: 1 } } }));
-  page.render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><BoardView workspaceId={fixture.workspaceId} onOpenWorkItem={() => undefined} /></QueryClientProvider>);
+  page.render(<RouterHarness><QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><BoardView workspaceId={fixture.workspaceId} onOpenWorkItem={() => undefined} /></QueryClientProvider></RouterHarness>);
 
   await expect.element(page.getByLabelText("Work item board")).toBeVisible();
   expect(vi.mocked(daemon.board).mock.calls[0]?.[1].laneKeys).toEqual(["backlog", "ready", "in_progress", "blocked", "review", "done"]);

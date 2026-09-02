@@ -1,11 +1,12 @@
-import type { BootstrapState } from "../../../core/generated";
+import { Badge, type BadgeTone } from "../../../components/ui/badge";
+import type { BootstrapState } from "../../../core/contracts";
 import { useBootstrap } from "../hooks/useBootstrap";
 
 interface BootstrapPresentation {
   eyebrow: string;
   title: string;
   detail: string;
-  tone: "calm" | "warning" | "success";
+  tone: BadgeTone;
 }
 
 export const bootstrapPresentations: Record<BootstrapState, BootstrapPresentation> = {
@@ -13,7 +14,7 @@ export const bootstrapPresentations: Record<BootstrapState, BootstrapPresentatio
     eyebrow: "Starting",
     title: "Connecting to Workboard",
     detail: "The desktop client is locating the local Workboard daemon.",
-    tone: "calm",
+    tone: "accent",
   },
   disconnected: {
     eyebrow: "Offline",
@@ -31,26 +32,20 @@ export const bootstrapPresentations: Record<BootstrapState, BootstrapPresentatio
     eyebrow: "Read-only",
     title: "Connected without controls",
     detail: "Workboard has not advertised a compatible mutation capability.",
-    tone: "calm",
+    tone: "accent",
   },
   resyncing: {
     eyebrow: "Refreshing",
     title: "Resynchronizing Workboard",
     detail: "An authoritative snapshot is replacing stale streamed state.",
-    tone: "calm",
+    tone: "accent",
   },
   ready: {
     eyebrow: "Connected",
     title: "Workboard is ready",
     detail: "The secure desktop bridge is receiving ordered daemon updates.",
-    tone: "success",
+    tone: "positive",
   },
-};
-
-const toneClasses: Record<BootstrapPresentation["tone"], string> = {
-  calm: "text-[var(--accent)] border-[var(--accent-muted)]",
-  warning: "text-[var(--warning)] border-[var(--warning-muted)]",
-  success: "text-[var(--success)] border-[var(--success-muted)]",
 };
 
 export function BootstrapScreen() {
@@ -62,25 +57,23 @@ export function BootstrapStatus({ state, refusal }: { state: BootstrapState; ref
   const presentation = bootstrapPresentations[state];
 
   return (
-    <main className="grid min-h-screen place-items-center bg-[var(--canvas)] px-6 text-[var(--text)]">
+    <main className="grid min-h-screen place-items-center bg-background px-6 text-foreground">
       <section
         aria-live="polite"
         aria-atomic="true"
-        className="w-full max-w-xl rounded-3xl border border-[var(--border)] bg-[var(--surface)] p-10 shadow-2xl shadow-black/20"
+        className="w-full max-w-xl rounded-3xl border border-border bg-card p-10 shadow-2xl shadow-black/20"
       >
-        <div
-          className={`mb-8 inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] ${toneClasses[presentation.tone]}`}
-        >
+        <Badge tone={presentation.tone} size="lg" className="mb-8 font-semibold tracking-[0.18em] uppercase">
           {presentation.eyebrow}
-        </div>
+        </Badge>
         <h1 className="text-balance text-4xl font-semibold tracking-tight">
           {presentation.title}
         </h1>
-        <p className="mt-4 max-w-md text-pretty text-base leading-7 text-[var(--muted-text)]">
+        <p className="mt-4 max-w-md text-pretty text-base leading-7 text-muted-foreground">
           {presentation.detail}
         </p>
         {refusal !== undefined && (
-          <p className="mt-4 max-w-md text-pretty break-words rounded-lg border border-[var(--warning-muted)] p-3 text-sm">
+          <p className="mt-4 max-w-md text-pretty break-words rounded-lg border border-warning-border p-3 text-sm">
             {refusal}
           </p>
         )}

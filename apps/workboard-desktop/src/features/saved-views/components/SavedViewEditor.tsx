@@ -1,7 +1,13 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import type { ZodIssue } from "zod";
 
-import type { BoardViewDefinition, BoardViewDensity, BoardViewGroupingKind, BoardViewSortDirection, BoardViewSortField, WorkItemStatus, WorkspaceId } from "../../../core/generated";
+import { Alert } from "../../../components/ui/alert";
+import { Button } from "../../../components/ui/button";
+import { Checkbox } from "../../../components/ui/checkbox";
+import { Input } from "../../../components/ui/input";
+import { Label } from "../../../components/ui/label";
+import { Select } from "../../../components/ui/select";
+import type { BoardViewDefinition, BoardViewDensity, BoardViewGroupingKind, BoardViewSortDirection, BoardViewSortField, WorkItemStatus, WorkspaceId } from "../../../core/contracts";
 import { useHierarchy } from "../../hierarchy/hooks/useHierarchy";
 import { useSavedViewEditor } from "../hooks/useSavedViewEditor";
 
@@ -13,20 +19,101 @@ const statusLabels: Record<WorkItemStatus, string> = { backlog: "Backlog", ready
 
 export function SavedViewEditor({ workspaceId, view }: { workspaceId: WorkspaceId; view?: BoardViewDefinition }) {
   const editor = useSavedViewEditor(workspaceId, view);
-  const hierarchy = useHierarchy(workspaceId);
+  const { hierarchy } = useHierarchy(workspaceId);
   const [issues, setIssues] = useState<ZodIssue[]>([]);
-  if (editor.draft === undefined) return <button type="button" onClick={editor.begin} className="rounded-lg bg-[var(--accent)] px-4 py-2 font-medium text-[var(--accent-contrast)]">{view === undefined ? "Create service view" : "Edit view"}</button>;
+  const fieldId = useId();
+
+  if (editor.draft === undefined) {
+    return <Button type="button" variant="solid" size="lg" onClick={editor.begin}>{view === undefined ? "Create service view" : "Edit view"}</Button>;
+  }
+
+  const draft = editor.draft;
   const fieldIssue = (field: string) => issues.find((issue) => issue.path.join(".").endsWith(field))?.message;
 
   return (
-    <form onSubmit={(event) => { event.preventDefault(); const parsed = editor.submit(); setIssues(parsed.success ? [] : parsed.error.issues); }} className="grid gap-5" aria-label="Saved view editor">
-      <label className="grid gap-1"><span>Title</span><input value={editor.draft.title} onChange={(event) => editor.setTitle(event.target.value)} className="rounded-lg border border-[var(--border)] bg-[var(--canvas)] px-3 py-2" />{fieldIssue("title") && <span role="alert" className="text-sm text-[var(--warning)]">{fieldIssue("title")}</span>}</label>
-      <label className="grid gap-1"><span>Hierarchy search</span><input value={editor.draft.query} onChange={(event) => editor.setQuery(event.target.value)} className="rounded-lg border border-[var(--border)] bg-[var(--canvas)] px-3 py-2" /></label>
-      <fieldset><legend className="font-medium">Repository/service filters</legend><div className="mt-2 grid gap-2 sm:grid-cols-2">{hierarchy.hierarchy?.repositories.map((repository) => <label key={repository.id} className="flex items-center gap-2"><input type="checkbox" checked={editor.draft?.repositoryIds.includes(repository.id)} onChange={() => editor.toggleRepository(repository.id)} />{repository.title}</label>)}</div></fieldset>
-      <fieldset><legend className="font-medium">Work-item status filters</legend><div className="mt-2 flex flex-wrap gap-3">{Object.entries(statusLabels).map(([status, label]) => <label key={status} className="flex items-center gap-2"><input type="checkbox" checked={editor.draft?.statuses.includes(status as WorkItemStatus)} onChange={() => editor.toggleStatus(status as WorkItemStatus)} />{label}</label>)}</div></fieldset>
-      <div className="grid gap-4 sm:grid-cols-2"><label className="grid gap-1"><span>Grouping</span><select value={editor.draft.groupingKind} onChange={(event) => editor.setGroupingKind(event.target.value as BoardViewGroupingKind)}>{Object.entries(groupingLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label className="grid gap-1"><span>Density</span><select value={editor.draft.density} onChange={(event) => editor.setDensity(event.target.value as BoardViewDensity)}>{Object.entries(densityLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label className="grid gap-1"><span>Sort by</span><select value={editor.draft.sortField} onChange={(event) => editor.setSortField(event.target.value as BoardViewSortField)}>{Object.entries(sortFieldLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label className="grid gap-1"><span>Sort direction</span><select value={editor.draft.sortDirection} onChange={(event) => editor.setSortDirection(event.target.value as BoardViewSortDirection)}>{Object.entries(sortDirectionLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div>
-      {!editor.canSave && <p role="status" className="rounded-lg border border-[var(--warning-muted)] p-3 text-[var(--warning)]">Read-only: {editor.readOnlyReason} Your unsaved view remains available in this window.</p>}
-      <div className="flex gap-3"><button type="submit" disabled={!editor.canSave || editor.isSaving} className="rounded-lg bg-[var(--accent)] px-4 py-2 font-medium text-[var(--accent-contrast)] disabled:opacity-50">{editor.isSaving ? "Saving…" : "Save view"}</button><button type="button" onClick={editor.cancel} className="rounded-lg border border-[var(--border)] px-4 py-2">Cancel</button></div>
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        const parsed = editor.submit();
+        setIssues(parsed.success ? [] : parsed.error.issues);
+      }}
+      className="grid gap-5"
+      aria-label="Saved view editor"
+    >
+      <div className="grid gap-1">
+        <Label htmlFor={`${fieldId}-title`}>Title</Label>
+        <Input id={`${fieldId}-title`} value={draft.title} onChange={(event) => editor.setTitle(event.target.value)} />
+        {fieldIssue("title") && <span role="alert" className="text-sm text-warning">{fieldIssue("title")}</span>}
+      </div>
+      <div className="grid gap-1">
+        <Label htmlFor={`${fieldId}-query`}>Hierarchy search</Label>
+        <Input id={`${fieldId}-query`} value={draft.query} onChange={(event) => editor.setQuery(event.target.value)} />
+      </div>
+      <fieldset>
+        <legend className="font-medium">Repository/service filters</legend>
+        <div className="mt-2 grid gap-2 sm:grid-cols-2">
+          {hierarchy?.repositories.map((repository) => (
+            <div key={repository.id} className="flex items-center gap-2">
+              <Checkbox
+                id={`${fieldId}-repository-${repository.id}`}
+                checked={draft.repositoryIds.includes(repository.id)}
+                onCheckedChange={() => editor.toggleRepository(repository.id)}
+              />
+              <Label htmlFor={`${fieldId}-repository-${repository.id}`}>{repository.title}</Label>
+            </div>
+          ))}
+        </div>
+      </fieldset>
+      <fieldset>
+        <legend className="font-medium">Work-item status filters</legend>
+        <div className="mt-2 flex flex-wrap gap-3">
+          {Object.entries(statusLabels).map(([status, label]) => (
+            <div key={status} className="flex items-center gap-2">
+              <Checkbox
+                id={`${fieldId}-status-${status}`}
+                checked={draft.statuses.includes(status as WorkItemStatus)}
+                onCheckedChange={() => editor.toggleStatus(status as WorkItemStatus)}
+              />
+              <Label htmlFor={`${fieldId}-status-${status}`}>{label}</Label>
+            </div>
+          ))}
+        </div>
+      </fieldset>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid gap-1">
+          <Label htmlFor={`${fieldId}-grouping`}>Grouping</Label>
+          <Select id={`${fieldId}-grouping`} value={draft.groupingKind} onChange={(event) => editor.setGroupingKind(event.target.value as BoardViewGroupingKind)}>
+            {Object.entries(groupingLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </Select>
+        </div>
+        <div className="grid gap-1">
+          <Label htmlFor={`${fieldId}-density`}>Density</Label>
+          <Select id={`${fieldId}-density`} value={draft.density} onChange={(event) => editor.setDensity(event.target.value as BoardViewDensity)}>
+            {Object.entries(densityLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </Select>
+        </div>
+        <div className="grid gap-1">
+          <Label htmlFor={`${fieldId}-sort-field`}>Sort by</Label>
+          <Select id={`${fieldId}-sort-field`} value={draft.sortField} onChange={(event) => editor.setSortField(event.target.value as BoardViewSortField)}>
+            {Object.entries(sortFieldLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </Select>
+        </div>
+        <div className="grid gap-1">
+          <Label htmlFor={`${fieldId}-sort-direction`}>Sort direction</Label>
+          <Select id={`${fieldId}-sort-direction`} value={draft.sortDirection} onChange={(event) => editor.setSortDirection(event.target.value as BoardViewSortDirection)}>
+            {Object.entries(sortDirectionLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </Select>
+        </div>
+      </div>
+      {!editor.canSave && (
+        <Alert role="status" className="text-warning">Read-only: {editor.readOnlyReason} Your unsaved view remains available in this window.</Alert>
+      )}
+      <div className="flex gap-3">
+        <Button type="submit" variant="solid" size="lg" disabled={!editor.canSave || editor.isSaving}>
+          {editor.isSaving ? "Saving…" : "Save view"}
+        </Button>
+        <Button type="button" size="lg" onClick={editor.cancel}>Cancel</Button>
+      </div>
     </form>
   );
 }

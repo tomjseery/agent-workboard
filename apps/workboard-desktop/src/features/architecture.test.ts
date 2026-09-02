@@ -31,6 +31,14 @@ describe("feature authority boundaries", () => {
     }
   });
 
+  it("names daemon reads for the domain rather than for the generated wire shape", () => {
+    for (const [path, source] of Object.entries(featureSources)) {
+      if (path.includes(".test.")) continue;
+      expect(source, path).not.toMatch(/from "[./]*core\/generated"/);
+      expect(source, path).not.toMatch(/\b[A-Z][A-Za-z]*(?:Projection|ResponseEnvelope)\b/);
+    }
+  });
+
   it("keeps native repository session and recovery evidence behind the Rust boundary", () => {
     for (const source of Object.values(operationalSources)) {
       expect(source).not.toMatch(/@tauri-apps\/api|\binvoke\s*\(|\bChannel\b|window\.__TAURI__|node:fs|child_process|\bDeno\b|\bBun\b|\bWebSocket\b|\bfetch\s*\(|process\.(?:cwd|env|pid)|transcript|credential|accessToken|refreshToken/);
@@ -56,7 +64,7 @@ describe("feature authority boundaries", () => {
   });
   it("keeps daemon board dependency attention session and workflow facts out of Zustand", () => {
     const implementation = Object.values(boardStoreSources).join("\\n");
-    expect(implementation).not.toMatch(/BoardCardProjection|AttentionEntryProjection|DependencyReadiness|SessionSummary|AvailableAction/);
+    expect(implementation).not.toMatch(/WorkItemCard|AttentionEntry|DependencyReadiness|SessionSummary|AvailableAction/);
     expect(implementation).toContain("selectedWorkItemId");
     expect(implementation).toContain("focusedWorkItemId");
   });
@@ -65,7 +73,7 @@ describe("feature authority boundaries", () => {
     const navigation = (segment: string) => Object.entries(navigationSources).filter(([path]) => path.includes(segment)).map(([, source]) => source).join("\n");
 
     expect(navigation("/store/")).toContain("overrides");
-    expect(navigation("/store/")).not.toMatch(/WorkspaceHierarchy|HierarchyEpic|HierarchyFeature|HierarchyWorkItem|BoardCardProjection|AvailableAction/);
+    expect(navigation("/store/")).not.toMatch(/WorkspaceHierarchy|HierarchyEpic|HierarchyFeature|HierarchyWorkItem|WorkItemCard|AvailableAction/);
     expect(navigation("/model/")).not.toMatch(/zustand|useQuery|daemon/);
 
     for (const [path, source] of Object.entries(navigationSources)) {

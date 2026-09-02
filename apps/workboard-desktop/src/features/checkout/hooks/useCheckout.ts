@@ -1,4 +1,4 @@
-import type { CheckoutId, WorkspaceId } from "../../../core/generated";
+import type { CheckoutId, WorkspaceId } from "../../../core/contracts";
 import { useCheckoutQuery } from "./useCheckoutQuery";
 
 export function useCheckout(workspaceId: WorkspaceId, checkoutId: CheckoutId) {

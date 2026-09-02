@@ -1,5 +1,5 @@
 import { daemon } from "../../../core/daemon";
-import type { BoardViewDefinition, BoardViewId, WorkspaceId } from "../../../core/generated";
+import type { BoardViewDefinition, BoardViewId, WorkspaceId } from "../../../core/contracts";
 
 const savedViewsApi = {
   list: (workspaceId: WorkspaceId) => daemon.boardViews(workspaceId),

@@ -1,4 +1,4 @@
-import type { SessionId, WorkspaceId } from "../../../core/generated";
+import type { SessionId, WorkspaceId } from "../../../core/contracts";
 import { useRecoveryPreviewQuery, useSessionQuery } from "./useSessionQuery";
 
 export function useSession(workspaceId: WorkspaceId, sessionId: SessionId) {

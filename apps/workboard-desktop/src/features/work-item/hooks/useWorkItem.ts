@@ -1,4 +1,4 @@
-import type { WorkItemId, WorkspaceId } from "../../../core/generated";
+import type { WorkItemId, WorkspaceId } from "../../../core/contracts";
 import { useWorkItemDetailQuery } from "./useWorkItemQuery";
 
 export function useWorkItemDetail(workspaceId: WorkspaceId, workItemId: WorkItemId) {
