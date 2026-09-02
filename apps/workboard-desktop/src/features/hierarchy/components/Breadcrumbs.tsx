@@ -1,29 +1,29 @@
 import { Link } from "@tanstack/react-router";
+import type { ReactNode } from "react";
 
-import type { WorkspaceId } from "../../../core/generated";
-import type { HierarchyEntityModel, HierarchyModel } from "../types/hierarchy";
-import { EntityLink } from "./EntityLink";
+import type { WorkspaceHierarchy, WorkspaceId } from "../../../core/generated";
+import { breadcrumbTrail, type BreadcrumbStep, type BreadcrumbTarget } from "../model/breadcrumbTrail";
 
 interface BreadcrumbsProps {
   workspaceId: WorkspaceId;
-  hierarchy: HierarchyModel;
-  entity: HierarchyEntityModel;
+  hierarchy: WorkspaceHierarchy;
+  target: BreadcrumbTarget;
 }
 
-export function Breadcrumbs({ workspaceId, hierarchy, entity }: BreadcrumbsProps) {
-  const feature = entity.kind === "work_item"
-    ? hierarchy.features.find((candidate) => hierarchy.source.workItems.find((item) => item.workItem.id === entity.id)?.workItem.featureId === candidate.id)
-    : entity.kind === "feature" ? entity : undefined;
-  const epic = feature === undefined
-    ? entity.kind === "epic" ? entity : undefined
-    : hierarchy.epics.find((candidate) => hierarchy.source.features.find((item) => item.feature.id === feature.id)?.feature.epicId === candidate.id);
-  const ancestors = [epic, feature, entity].filter((candidate, index, values): candidate is HierarchyEntityModel => candidate !== undefined && values.indexOf(candidate) === index);
+const stepLinks: Record<BreadcrumbStep["kind"], (workspaceId: WorkspaceId, step: BreadcrumbStep) => ReactNode> = {
+  workspace: (workspaceId, step) => <Link to="/workspaces/$workspaceId" params={{ workspaceId }}>{step.title}</Link>,
+  repository: (workspaceId, step) => <Link to="/workspaces/$workspaceId/repositories/$repositoryId" params={{ workspaceId, repositoryId: step.id }}>{step.title}</Link>,
+  epic: (workspaceId, step) => <Link to="/workspaces/$workspaceId/epics/$epicId" params={{ workspaceId, epicId: step.id }}>{step.title}</Link>,
+  feature: (workspaceId, step) => <Link to="/workspaces/$workspaceId/features/$featureId" params={{ workspaceId, featureId: step.id }}>{step.title}</Link>,
+  work_item: (_workspaceId, step) => <span aria-current="page">{step.title}</span>,
+};
 
+export function Breadcrumbs({ workspaceId, hierarchy, target }: BreadcrumbsProps) {
+  const steps = breadcrumbTrail(hierarchy, target);
   return (
     <nav aria-label="Breadcrumbs">
       <ol className="flex flex-wrap items-center gap-2 text-sm text-[var(--muted-text)]">
-        <li><Link to="/workspaces/$workspaceId" params={{ workspaceId }} search={{ q: "" }}>{hierarchy.source.workspace.title}</Link></li>
-        {ancestors.map((ancestor) => <li key={`${ancestor.kind}-${ancestor.id}`} className="before:mr-2 before:content-['/']"><EntityLink entity={ancestor} workspaceId={workspaceId} /></li>)}
+        {steps.map((step, index) => <li key={`${step.kind}-${step.id}`} className={index === 0 ? undefined : "before:mr-2 before:content-['/']"}>{stepLinks[step.kind](workspaceId, step)}</li>)}
       </ol>
     </nav>
   );

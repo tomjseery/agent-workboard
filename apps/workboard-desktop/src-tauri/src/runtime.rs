@@ -71,7 +71,7 @@ impl DesktopRuntime {
         let client = self.connections.client()?;
         let response = client
             .client
-            .query(request.workspace_id, request.query)
+            .query_reported(request.workspace_id, request.query)
             .map_err(|error| self.map_client_error(&client, error))?;
         client.ensure_safe(&response)?;
         Ok(response)

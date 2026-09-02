@@ -405,6 +405,9 @@ fn apply_board_filters(cards: &mut Vec<CardSeed>, query: &protocol::BoardQuery) 
                 .iter()
                 .any(|repository| query.repository_ids.contains(&repository.id))
     });
+    cards.retain(|seed| {
+        query.feature_ids.is_empty() || query.feature_ids.contains(&seed.card.feature.id)
+    });
     cards.retain(|seed| query.statuses.is_empty() || query.statuses.contains(&seed.card.status));
     if let Some(text) = text {
         cards.retain(|seed| {
@@ -983,6 +986,97 @@ mod tests {
     }
 
     #[test]
+    fn feature_scope_narrows_a_board_without_collapsing_status_or_repository_scope() {
+        let statuses = [
+            protocol::WorkItemStatus::Backlog,
+            protocol::WorkItemStatus::Ready,
+            protocol::WorkItemStatus::InProgress,
+            protocol::WorkItemStatus::Blocked,
+            protocol::WorkItemStatus::Review,
+            protocol::WorkItemStatus::Done,
+            protocol::WorkItemStatus::Cancelled,
+        ];
+        let seeds = || {
+            (0..100)
+                .map(|index| {
+                    seed(
+                        index,
+                        statuses[index % statuses.len()],
+                        &format!("feature-{}-parallel", index / 10),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let query =
+            |feature_ids: Vec<protocol::FeatureId>,
+             repository_ids: Vec<protocol::RepositoryId>,
+             statuses: Vec<protocol::WorkItemStatus>| protocol::BoardQuery {
+                cursor: None,
+                limit: 200,
+                query: None,
+                repository_ids,
+                feature_ids,
+                statuses,
+                lane_keys: Vec::new(),
+                sort: protocol::BoardViewSort {
+                    field: protocol::BoardViewSortField::Key,
+                    direction: protocol::BoardViewSortDirection::Ascending,
+                },
+            };
+
+        let feature = wire_id(5, 3, protocol::FeatureId::from_uuid);
+        let mut scoped = seeds();
+        apply_board_filters(&mut scoped, &query(vec![feature], Vec::new(), Vec::new()));
+        assert_eq!(scoped.len(), 10);
+        assert!(scoped.iter().all(|seed| seed.card.feature.id == feature));
+
+        let repository = scoped[0].card.repositories[0].id;
+        let mut intersected = seeds();
+        apply_board_filters(
+            &mut intersected,
+            &query(vec![feature], vec![repository], Vec::new()),
+        );
+        assert!(!intersected.is_empty());
+        assert!(intersected.iter().all(|seed| {
+            seed.card.feature.id == feature
+                && seed
+                    .card
+                    .repositories
+                    .iter()
+                    .any(|candidate| candidate.id == repository)
+        }));
+
+        let mut by_status = seeds();
+        apply_board_filters(
+            &mut by_status,
+            &query(
+                vec![feature],
+                Vec::new(),
+                vec![protocol::WorkItemStatus::Cancelled],
+            ),
+        );
+        assert!(!by_status.is_empty());
+        assert!(by_status.iter().all(|seed| seed.card.status
+            == protocol::WorkItemStatus::Cancelled
+            && seed.card.feature.id == feature));
+
+        let mut unscoped = seeds();
+        apply_board_filters(&mut unscoped, &query(Vec::new(), Vec::new(), Vec::new()));
+        assert_eq!(unscoped.len(), 100);
+
+        let mut absent = seeds();
+        apply_board_filters(
+            &mut absent,
+            &query(
+                vec![wire_id(5, 999, protocol::FeatureId::from_uuid)],
+                Vec::new(),
+                Vec::new(),
+            ),
+        );
+        assert!(absent.is_empty());
+    }
+
+    #[test]
     fn large_projection_fixture_is_deterministic_filtered_paged_and_revisioned() {
         let statuses = [
             protocol::WorkItemStatus::Backlog,
@@ -1038,6 +1132,7 @@ mod tests {
             limit: 200,
             query: Some("Work item 42".to_owned()),
             repository_ids: vec![repository_id],
+            feature_ids: Vec::new(),
             statuses: vec![statuses[42 % statuses.len()]],
             lane_keys: Vec::new(),
             sort: protocol::BoardViewSort {

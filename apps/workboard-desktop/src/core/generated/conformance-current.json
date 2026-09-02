@@ -31,6 +31,12 @@
       "follow_up_session",
       "recover_session"
     ],
+    "dependencyReadiness": [
+      "ready",
+      "waiting",
+      "blocked",
+      "complete"
+    ],
     "entityRefs": [
       {
         "id": "20000000-0000-0000-0000-000000000001",
@@ -1088,6 +1094,9 @@
         "value": {
           "query": {
             "cursor": null,
+            "featureIds": [
+              "50000000-0000-0000-0000-000000000001"
+            ],
             "laneKeys": [
               "ready",
               "in_progress"
@@ -1246,7 +1255,7 @@
           }
         }
       },
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1262,7 +1271,7 @@
           }
         }
       },
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1279,7 +1288,7 @@
           }
         }
       },
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1295,7 +1304,7 @@
           }
         }
       },
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1311,7 +1320,7 @@
           }
         }
       },
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1329,7 +1338,7 @@
           }
         }
       },
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1345,7 +1354,7 @@
           }
         }
       },
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1361,7 +1370,7 @@
           }
         }
       },
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1377,7 +1386,7 @@
           }
         }
       },
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1393,7 +1402,7 @@
           }
         }
       },
-      "protocolVersion": 6,
+      "protocolVersion": 7,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     }
@@ -1419,7 +1428,7 @@
     "reconciliationRequired": true,
     "succeeded": false
   },
-  "protocolVersion": 7,
+  "protocolVersion": 8,
   "readRequests": [
     {
       "expectedRevision": null,
@@ -1428,15 +1437,15 @@
         "type": "handshake",
         "value": {
           "supportedCommandVersions": [
-            7
+            8
           ],
           "supportedReadVersions": [
-            7,
-            6
+            8,
+            7
           ]
         }
       },
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": null
     },
@@ -1449,7 +1458,7 @@
           "type": "workspace_summary"
         }
       },
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1468,7 +1477,7 @@
           }
         }
       },
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1481,7 +1490,7 @@
           "type": "workspace_hierarchy"
         }
       },
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1494,7 +1503,7 @@
           "type": "board_views"
         }
       },
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1510,7 +1519,7 @@
           }
         }
       },
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1524,6 +1533,9 @@
           "value": {
             "query": {
               "cursor": null,
+              "featureIds": [
+                "50000000-0000-0000-0000-000000000001"
+              ],
               "laneKeys": [
                 "ready",
                 "in_progress"
@@ -1545,7 +1557,7 @@
           }
         }
       },
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1566,7 +1578,7 @@
           }
         }
       },
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1579,7 +1591,7 @@
           "type": "approval_queue"
         }
       },
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1595,7 +1607,7 @@
           }
         }
       },
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1611,7 +1623,7 @@
           }
         }
       },
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1627,7 +1639,7 @@
           }
         }
       },
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1643,7 +1655,7 @@
           }
         }
       },
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1659,7 +1671,7 @@
           }
         }
       },
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1675,7 +1687,7 @@
           }
         }
       },
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1688,7 +1700,7 @@
           "type": "board_snapshot"
         }
       },
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1704,7 +1716,7 @@
           }
         }
       },
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     }
@@ -1727,7 +1739,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "handshake",
@@ -1737,7 +1749,7 @@
               "available": false,
               "code": "save_board_view",
               "compatibleVersions": [
-                7
+                8
               ],
               "unavailableReason": {
                 "code": "not_accepted",
@@ -1746,13 +1758,13 @@
             }
           ],
           "compatibleCommandVersions": [
-            7
+            8
           ],
           "daemonInstanceId": "80000000-0000-0000-0000-000000000001",
           "eventVersion": 1,
           "heartbeatIntervalMs": 1000,
           "maxFrameBytes": 8388608,
-          "negotiatedReadVersion": 7,
+          "negotiatedReadVersion": 8,
           "workspaces": [
             {
               "id": "20000000-0000-0000-0000-000000000001",
@@ -1782,7 +1794,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "workspace_summary",
@@ -1819,7 +1831,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "hierarchy_children",
@@ -1861,7 +1873,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "workspace_hierarchy",
@@ -1952,7 +1964,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "board_views",
@@ -2009,7 +2021,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "board_view",
@@ -2064,7 +2076,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "board",
@@ -2162,7 +2174,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "attention",
@@ -2279,7 +2291,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "approval_queue",
@@ -2346,7 +2358,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "feature_proposal",
@@ -2444,7 +2456,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "work_item_detail",
@@ -2672,7 +2684,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "repository_observability",
@@ -2734,7 +2746,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "checkout_observability",
@@ -2815,7 +2827,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "session_observability",
@@ -2877,7 +2889,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "recovery_preview",
@@ -2910,7 +2922,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "board_snapshot",
@@ -2952,7 +2964,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "subscription_accepted",
@@ -2983,7 +2995,7 @@
       "diagnostics": [],
       "error": null,
       "partialOutcomes": [],
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "command_accepted",
@@ -3015,7 +3027,7 @@
         "diagnostics": [],
         "error": null,
         "partialOutcomes": [],
-        "protocolVersion": 7,
+        "protocolVersion": 8,
         "requestId": "10000000-0000-0000-0000-000000000001",
         "result": {
           "type": "workspace_summary",
@@ -3111,7 +3123,7 @@
             }
           }
         },
-        "protocolVersion": 7,
+        "protocolVersion": 8,
         "sequence": 42,
         "workspaceId": "20000000-0000-0000-0000-000000000001"
       }

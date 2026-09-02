@@ -305,6 +305,7 @@ pub struct BoardQuery {
     pub limit: usize,
     pub query: Option<String>,
     pub repository_ids: Vec<RepositoryId>,
+    pub feature_ids: Vec<FeatureId>,
     pub statuses: Vec<WorkItemStatus>,
     pub lane_keys: Vec<String>,
     pub sort: BoardViewSort,
@@ -542,6 +543,10 @@ pub enum DependencyReadiness {
     Waiting,
     Blocked,
     Complete,
+}
+
+impl DependencyReadiness {
+    pub const ALL: [Self; 4] = [Self::Ready, Self::Waiting, Self::Blocked, Self::Complete];
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

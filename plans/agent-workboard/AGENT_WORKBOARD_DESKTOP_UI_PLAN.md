@@ -592,6 +592,62 @@ The installed Windows Desktop is secure, accessible, responsive, compatible, rec
 
 The installer never owns user work data. Uninstall preserves durable state. A capability kill switch returns Desktop to read-only; protocol mismatch fails closed; package rollback restores the previous compatible Desktop/daemon pair.
 
+### 11. Rebuild the Desktop information architecture
+
+- Status: [ ]
+- Slug: `rebuild-desktop-information-architecture`
+- Dependencies: items 4, 5, 7, and 8
+- Delivery type: navigation and layout correction
+
+#### Objective
+
+Items 4-6 delivered navigation as a search box over flat lists of every entity kind. Replace it with a
+persistent structural shell so a user reaches work by containment rather than by recall.
+
+#### Decisions
+
+These were specified on 2026-09-01 and are not reopened by this plan:
+
+1. A persistent left sidebar lists repositories, expanding to Epics, then Features, and survives navigation.
+2. Each level offers per-level view switching. A repository offers a board and a list of its Features.
+3. A Feature opens a kanban of its Work items with `Detail` and `Proposal` as tabs on the same page.
+4. A Work item opens a full page with `repository > Epic > Feature > Work item` breadcrumbs, not a drawer.
+5. Lanes are Work-item status: Backlog, Ready, In progress, Blocked, Review, Done. Cancelled is hidden
+   behind a filter.
+6. Dependency readiness renders as a card badge, never as lanes. `WorkItemStatus::Blocked` is stored by a
+   checkpoint; `DependencyReadiness::Blocked` is derived from the dependency DAG. Both can differ on one card.
+
+#### Deliverables
+
+1. Add `feature_ids` to `BoardQuery`, honour it in `board_projection.rs`, and regenerate contracts and
+   conformance fixtures. Repository scoping already exists through `repository_ids`.
+2. Add a navigation feature slice owning the tree model, its expansion store, and the sidebar. Expansion is
+   unsaved client state behind a facade hook; the tree is derived from the authoritative hierarchy read.
+3. Give the Workspace, repository, Epic, and Feature pages scoped boards and view switching through
+   zod-validated route search parameters.
+4. Replace the embedded hierarchy search on every entity page with the sidebar and a containment breadcrumb
+   trail.
+5. Render lane order and Cancelled visibility, and dependency-readiness badges, through exhaustive tables
+   keyed by the published discriminants.
+
+#### Verification
+
+- Rust tests prove Feature-scoped board filtering and its interaction with repository and status filters.
+- Vitest Node covers the tree model, the breadcrumb trail, and the exhaustive lane and readiness tables
+  against the published discriminants.
+- Browser components cover sidebar expansion, view switching, Feature tabs, and the scoped board.
+- The installed Windows application is attached over CDP and its DOM read before the item is claimed done.
+
+#### Completion gate
+
+A user navigates repository to Epic to Feature to Work item without a search box, and every board is scoped
+to the level it is shown at.
+
+#### Rollback
+
+The sidebar and scoped boards are presentation over existing authoritative reads. Removing them restores the
+prior routes without protocol change.
+
 ## Feature completion
 
 This Feature is complete only when:

@@ -54,7 +54,7 @@ describe("daemon facade", () => {
       kind: "workspace",
       id: workspaceId,
     });
-    await facade.board(workspaceId, { cursor: null, limit: 200, query: null, repositoryIds: [], statuses: [], laneKeys: [], sort: { field: "key", direction: "ascending" } });
+    await facade.board(workspaceId, { cursor: null, limit: 200, query: null, repositoryIds: [], featureIds: [], statuses: [], laneKeys: [], sort: { field: "key", direction: "ascending" } });
     await facade.attention(workspaceId, { cursor: null, limit: 200, repositoryIds: [], reasonCodes: [] });
     await facade.workItemDetail(workspaceId, workItemId);
     await facade.execute({

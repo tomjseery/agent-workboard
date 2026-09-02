@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-const featureSources = import.meta.glob("./{workspace,hierarchy,saved-views,board,repository,checkout,session,proposal,work-item}/**/*.{ts,tsx}", {
+const featureSources = import.meta.glob("./{workspace,hierarchy,navigation,saved-views,board,repository,checkout,session,proposal,work-item}/**/*.{ts,tsx}", {
   eager: true,
   import: "default",
   query: "?raw",
@@ -22,6 +22,7 @@ const boardStoreSources = import.meta.glob("./board/store/**/*.{ts,tsx}", { eage
 const operationalSources = import.meta.glob("./{repository,checkout,session}/**/*.{ts,tsx}", { eager: true, import: "default", query: "?raw" }) as Record<string, string>;
 const proposalSources = import.meta.glob("./proposal/**/*.{ts,tsx}", { eager: true, import: "default", query: "?raw" }) as Record<string, string>;
 const workItemSources = import.meta.glob("./work-item/**/*.{ts,tsx}", { eager: true, import: "default", query: "?raw" }) as Record<string, string>;
+const navigationSources = import.meta.glob("./navigation/**/*.{ts,tsx}", { eager: true, import: "default", query: "?raw" }) as Record<string, string>;
 
 describe("feature authority boundaries", () => {
   it("keeps feature slices behind generated contracts and the daemon facade", () => {
@@ -58,6 +59,19 @@ describe("feature authority boundaries", () => {
     expect(implementation).not.toMatch(/BoardCardProjection|AttentionEntryProjection|DependencyReadiness|SessionSummary|AvailableAction/);
     expect(implementation).toContain("selectedWorkItemId");
     expect(implementation).toContain("focusedWorkItemId");
+  });
+
+  it("keeps navigation structural and its expansion state the only client-owned fact", () => {
+    const navigation = (segment: string) => Object.entries(navigationSources).filter(([path]) => path.includes(segment)).map(([, source]) => source).join("\n");
+
+    expect(navigation("/store/")).toContain("overrides");
+    expect(navigation("/store/")).not.toMatch(/WorkspaceHierarchy|HierarchyEpic|HierarchyFeature|HierarchyWorkItem|BoardCardProjection|AvailableAction/);
+    expect(navigation("/model/")).not.toMatch(/zustand|useQuery|daemon/);
+
+    for (const [path, source] of Object.entries(navigationSources)) {
+      if (path.includes(".test.")) continue;
+      expect(source).not.toMatch(/@tauri-apps\/api|\binvoke\s*\(|\bChannel\b|node:fs|child_process|process\.|dangerouslySetInnerHTML/);
+    }
   });
 
   it("keeps proposal authority and unsafe native surfaces outside React", () => {

@@ -795,6 +795,7 @@ mod tests {
                     limit: crate::MAX_QUERY_PAGE_ITEMS + 1,
                     query: None,
                     repository_ids: Vec::new(),
+                    feature_ids: Vec::new(),
                     statuses: Vec::new(),
                     lane_keys: Vec::new(),
                     sort: crate::BoardViewSort {
@@ -888,6 +889,7 @@ mod tests {
                     limit: 100,
                     query: None,
                     repository_ids: Vec::new(),
+                    feature_ids: Vec::new(),
                     statuses: Vec::new(),
                     lane_keys: Vec::new(),
                     sort: crate::BoardViewSort {

@@ -8,15 +8,15 @@ use tauri::ipc::{CallbackFn, Channel, InvokeBody};
 use tauri::test::{INVOKE_KEY, get_ipc_response, mock_builder, mock_context, noop_assets};
 use tauri::webview::InvokeRequest;
 use tauri::{Runtime, WebviewWindow, WebviewWindowBuilder};
-use workboard_client_protocol::{CommandOperation, FeatureId};
+use workboard_client_protocol::{CommandOperation, FeatureId, ReadQuery};
 
 use crate::configure;
 use crate::connection::{ConnectionManager, DaemonStarter};
 use crate::runtime::DesktopRuntime;
 use crate::test_support::{FakeDaemon, FakeDaemonOptions, wait_until};
 use crate::types::{
-    BootstrapHandshake, BootstrapState, BridgeError, ExecuteRequest, SubscribeRequest,
-    SubscriptionMessage,
+    BootstrapHandshake, BootstrapState, BridgeError, ExecuteRequest, QueryRequest,
+    SubscribeRequest, SubscriptionMessage,
 };
 
 struct NoopStarter;
@@ -175,6 +175,46 @@ fn invalid_oversized_and_unknown_requests_fail_before_daemon_forwarding() {
         assert!(get_ipc_response(&main, invoke_request("workboard_query", body)).is_err());
     }
     assert_eq!(daemon.forwarded_queries.load(Ordering::Acquire), before);
+}
+
+#[test]
+fn a_typed_read_error_is_reported_to_the_webview_and_keeps_the_daemon_connection() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let database = temporary.path().join("workboard.sqlite");
+    let daemon = FakeDaemon::start(
+        &database,
+        FakeDaemonOptions {
+            typed_read_error: Some((
+                "domain".to_owned(),
+                "Feature proposal does not exist".to_owned(),
+            )),
+            ..FakeDaemonOptions::default()
+        },
+    );
+    let runtime = runtime(&database);
+    assert_eq!(runtime.handshake().state, BootstrapState::ReadOnly);
+
+    let query = || {
+        runtime.query(QueryRequest {
+            workspace_id: daemon.workspace_id,
+            query: ReadQuery::FeatureProposal {
+                feature_id: FeatureId::generate(),
+            },
+        })
+    };
+    let response = query().expect("typed errors are reported, not raised as transport failures");
+    let error = response.error.expect("typed error");
+    assert_eq!(error.code, "domain");
+    assert_eq!(error.message, "Feature proposal does not exist");
+    assert!(response.result.is_none());
+
+    let before = daemon.forwarded_queries.load(Ordering::Acquire);
+    assert!(query().is_ok());
+    assert_eq!(
+        daemon.forwarded_queries.load(Ordering::Acquire),
+        before + 1,
+        "a typed error must not invalidate the pooled daemon connection"
+    );
 }
 
 #[test]

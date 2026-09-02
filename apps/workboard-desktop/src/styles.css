@@ -6,6 +6,7 @@
   color-scheme: dark;
   --canvas: #0b0d12;
   --surface: #151922;
+  --surface-muted: #1b202b;
   --border: #2a3140;
   --text: #f3f5f8;
   --muted-text: #aab2c0;
@@ -34,6 +35,7 @@ body {
     color-scheme: light;
     --canvas: #eef1f5;
     --surface: #ffffff;
+    --surface-muted: #f5f7fa;
     --border: #d7dce5;
     --text: #171b23;
     --muted-text: #5b6472;

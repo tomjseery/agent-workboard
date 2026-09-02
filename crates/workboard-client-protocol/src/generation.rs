@@ -71,6 +71,7 @@ fn board_query() -> Value {
         "limit": 100,
         "query": "fixture",
         "repositoryIds": [REPOSITORY_ID],
+        "featureIds": [FEATURE_ID],
         "statuses": ["ready", "in_progress"],
         "laneKeys": ["ready", "in_progress"],
         "sort": { "field": "key", "direction": "ascending" }
@@ -1059,6 +1060,7 @@ fn discriminants() -> Value {
             { "kind": "work_item", "id": WORK_ITEM_ID }
         ],
         "providers": ["claude", "codex"],
+        "dependencyReadiness": ["ready", "waiting", "blocked", "complete"],
         "workItemStatuses": [
             "backlog", "ready", "in_progress", "blocked", "review", "done", "cancelled"
         ],
@@ -1330,6 +1332,10 @@ mod tests {
         assert_eq!(
             discriminants["commandCodes"],
             serde_json::to_value(CommandCode::ALL).expect("command codes")
+        );
+        assert_eq!(
+            discriminants["dependencyReadiness"],
+            serde_json::to_value(DependencyReadiness::ALL).expect("dependency readiness")
         );
         assert_eq!(
             discriminants["resyncReasons"],
