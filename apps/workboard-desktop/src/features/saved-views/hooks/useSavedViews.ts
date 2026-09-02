@@ -1,4 +1,4 @@
-import type { WorkspaceId } from "../../../core/generated";
+import type { WorkspaceId } from "../../../core/contracts";
 import { useSavedViewsQuery } from "./useSavedViewsQuery";
 
 export function useSavedViews(workspaceId: WorkspaceId) {

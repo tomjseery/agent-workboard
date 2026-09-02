@@ -1,4 +1,4 @@
-import type { BoardViewId, WorkspaceId } from "../../../core/generated";
+import type { BoardViewId, WorkspaceId } from "../../../core/contracts";
 
 export const savedViewQueryKeys = {
   all: ["savedViews"] as const,

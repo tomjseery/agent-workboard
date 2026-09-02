@@ -1,5 +1,5 @@
-import type { EpicId, FeatureId, RepositoryId, WorkItemId, WorkspaceHierarchy } from "../../../core/generated";
-import type { HierarchyEntityKind } from "../types/hierarchy";
+import type { EpicId, FeatureId, RepositoryId, WorkItemId, WorkspaceHierarchy } from "../../../core/contracts";
+import type { HierarchyEntityKind } from "../types";
 
 export type BreadcrumbTarget =
   | { kind: "repository"; id: RepositoryId }

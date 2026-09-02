@@ -1,4 +1,4 @@
-import type { BootstrapState, WorkspaceId } from "../../../core/generated";
+import type { BootstrapState, WorkspaceId } from "../../../core/contracts";
 import { useBootstrapQuery } from "./useBootstrapQuery";
 import { useBootstrapSubscription } from "./useBootstrapSubscription";
 

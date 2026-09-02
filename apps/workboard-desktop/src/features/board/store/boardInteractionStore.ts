@@ -1,8 +1,8 @@
 import { create } from "zustand";
 
-import type { BoardViewSortDirection, BoardViewSortField, RepositoryId, WorkItemId, WorkItemStatus } from "../../../core/generated";
-import type { BoardFilters } from "../types/board";
-import { defaultLaneKeys, laneOrder } from "../types/presentation";
+import type { BoardViewSortDirection, BoardViewSortField, RepositoryId, WorkItemId, WorkItemStatus } from "../../../core/contracts";
+import type { BoardFilters } from "../types";
+import { defaultLaneKeys, laneOrder } from "../model/presentation";
 
 interface BoardInteractionStore {
   selectedWorkItemId?: WorkItemId;

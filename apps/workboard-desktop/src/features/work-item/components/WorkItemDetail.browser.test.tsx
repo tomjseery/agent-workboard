@@ -3,8 +3,10 @@ import { page, userEvent } from "@vitest/browser/context";
 import { expect, it, vi } from "vitest";
 import "vitest-browser-react";
 
+import { RouterHarness } from "../../../test/routerHarness";
+
 import { daemon } from "../../../core/daemon";
-import type { ResponseEnvelope } from "../../../core/generated";
+import type { DaemonResponse } from "../../../core/contracts";
 import current from "../../../core/generated/conformance-current.json";
 import { WorkItemDetail } from "./WorkItemDetail";
 import "../../../styles.css";
@@ -13,14 +15,14 @@ vi.mock("../../../core/daemon", () => ({ daemon: { workItemDetail: vi.fn() } }))
 
 const workspaceId = "20000000-0000-0000-0000-000000000001";
 const workItemId = "60000000-0000-0000-0000-000000000001";
-const fixture = current.responses.find((candidate) => candidate.result?.type === "work_item_detail") as unknown as ResponseEnvelope;
+const fixture = current.responses.find((candidate) => candidate.result?.type === "work_item_detail") as unknown as DaemonResponse;
 
 it("renders hostile durable evidence, blockers, reconciliation, section navigation, and a closed mutation gate", async () => {
   vi.mocked(daemon.workItemDetail).mockResolvedValue({ ...fixture, partialOutcomes: [{ owner: { kind: "work_item", id: workItemId }, code: "checkpoint_partial", succeeded: false, message: "Checkpoint evidence is partial.", reconciliationRequired: true, evidence: [] }] } as never);
   document.body.style.width = "320px";
   document.body.style.zoom = "2";
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  page.render(<QueryClientProvider client={queryClient}><WorkItemDetail workspaceId={workspaceId} workItemId={workItemId} /></QueryClientProvider>);
+  page.render(<RouterHarness><QueryClientProvider client={queryClient}><WorkItemDetail workspaceId={workspaceId} workItemId={workItemId} /></QueryClientProvider></RouterHarness>);
   await expect.element(page.getByRole("heading", { name: "Fixture Work item", level: 1 })).toBeVisible();
   await expect.element(page.getByText(/<script>alert\('no'\)<\/script>/).first()).toBeVisible();
   await expect.element(page.getByText("Prerequisite is in progress.")).toBeVisible();
@@ -44,7 +46,7 @@ it("renders hostile durable evidence, blockers, reconciliation, section navigati
 it("announces a disconnected detail and independently retries by keyboard", async () => {
   vi.mocked(daemon.workItemDetail).mockReset().mockRejectedValueOnce(new Error("disconnected")).mockResolvedValue(fixture as never);
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  page.render(<QueryClientProvider client={queryClient}><WorkItemDetail workspaceId={workspaceId} workItemId={workItemId} /></QueryClientProvider>);
+  page.render(<RouterHarness><QueryClientProvider client={queryClient}><WorkItemDetail workspaceId={workspaceId} workItemId={workItemId} /></QueryClientProvider></RouterHarness>);
   const retry = page.getByRole("button", { name: "Retry Work-item detail" });
   await expect.element(retry).toBeVisible();
   (retry.element() as HTMLElement).focus();
@@ -56,7 +58,7 @@ it("announces a disconnected detail and independently retries by keyboard", asyn
 it("fails closed for an incompatible detail without reconstructing checkpoint state", async () => {
   vi.mocked(daemon.workItemDetail).mockReset().mockResolvedValue({ ...fixture, result: null, error: { code: "projection_version_unavailable", message: "Unavailable", severity: "error", retryable: false, validationFields: [], staleRevision: null, currentRevision: null, reconciliationOwner: null, correlationId: null, resync: null } } as never);
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  page.render(<QueryClientProvider client={queryClient}><WorkItemDetail workspaceId={workspaceId} workItemId={workItemId} /></QueryClientProvider>);
+  page.render(<RouterHarness><QueryClientProvider client={queryClient}><WorkItemDetail workspaceId={workspaceId} workItemId={workItemId} /></QueryClientProvider></RouterHarness>);
   await expect.element(page.getByRole("alert")).toHaveTextContent("No durable state has been reconstructed locally.");
   expect(page.getByRole("textbox").elements()).toHaveLength(0);
 });

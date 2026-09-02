@@ -1,4 +1,4 @@
-import type { SessionId, WorkspaceId } from "../../../core/generated";
+import type { SessionId, WorkspaceId } from "../../../core/contracts";
 
 export const sessionQueryKeys = {
   all: (workspaceId: WorkspaceId) => ["sessions", workspaceId] as const,

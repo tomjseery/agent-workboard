@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
-import type { RepositoryId, WorkspaceId } from "../../../core/generated";
+import type { RepositoryId, WorkspaceId } from "../../../core/contracts";
 import repositoryApi from "../api/repositoryApi";
 import { repositoryQueryKeys } from "../api/repositoryQueryKeys";
 

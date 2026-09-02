@@ -1,19 +1,15 @@
-import type { RepositoryId } from "../../../core/generated";
-import type { HierarchyModel } from "../types/hierarchy";
+import { Badge } from "../../../components/ui/badge";
+import type { RepositoryReference } from "../../../core/contracts";
 
-interface RepositoryParticipationProps {
-  hierarchy: HierarchyModel;
-  repositoryIds: RepositoryId[];
-}
-
-export function RepositoryParticipation({ hierarchy, repositoryIds }: RepositoryParticipationProps) {
-  if (repositoryIds.length === 0) return <span className="text-sm text-[var(--muted-text)]">No repository participation recorded</span>;
+export function RepositoryParticipation({ repositories }: { repositories: RepositoryReference[] }) {
+  if (repositories.length === 0) return <span className="text-sm text-muted-foreground">No repository participation recorded</span>;
   return (
     <ul aria-label="Participating repositories" className="flex flex-wrap gap-2">
-      {repositoryIds.map((repositoryId) => {
-        const repository = hierarchy.repositories.find((candidate) => candidate.id === repositoryId);
-        return <li key={repositoryId} className="rounded-full border border-[var(--border)] px-2.5 py-1 text-xs">{repository?.title ?? "Missing repository"}</li>;
-      })}
+      {repositories.map((repository) => (
+        <li key={repository.id}>
+          <Badge className="py-1">{repository.title}</Badge>
+        </li>
+      ))}
     </ul>
   );
 }

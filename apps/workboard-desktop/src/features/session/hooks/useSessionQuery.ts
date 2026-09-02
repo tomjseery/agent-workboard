@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
-import type { SessionId, WorkspaceId } from "../../../core/generated";
+import type { SessionId, WorkspaceId } from "../../../core/contracts";
 import sessionApi from "../api/sessionApi";
 import { sessionQueryKeys } from "../api/sessionQueryKeys";
 

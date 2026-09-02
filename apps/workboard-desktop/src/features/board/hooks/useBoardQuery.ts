@@ -1,6 +1,6 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 
-import type { BoardQuery, WorkspaceId } from "../../../core/generated";
+import type { BoardQuery, WorkspaceId } from "../../../core/contracts";
 import { boardApi } from "../api/boardApi";
 import { boardQueryKeys } from "../api/boardQueryKeys";
 

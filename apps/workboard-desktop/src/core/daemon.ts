@@ -40,7 +40,7 @@ export interface DaemonSubscription {
   cancel(): Promise<void>;
 }
 
-type QueryResponse<TType extends ResponseResult["type"]> = Omit<
+export type DaemonRead<TType extends ResponseResult["type"]> = Omit<
   ResponseEnvelope,
   "result"
 > & {
@@ -49,23 +49,23 @@ type QueryResponse<TType extends ResponseResult["type"]> = Omit<
 
 export interface DaemonFacade {
   handshake(): Promise<BootstrapHandshake>;
-  workspaceSummary(workspaceId: WorkspaceId): Promise<QueryResponse<"workspace_summary">>;
-  workspaceHierarchy(workspaceId: WorkspaceId): Promise<QueryResponse<"workspace_hierarchy">>;
-  boardViews(workspaceId: WorkspaceId): Promise<QueryResponse<"board_views">>;
-  boardView(workspaceId: WorkspaceId, viewId: BoardViewId): Promise<QueryResponse<"board_view">>;
-  board(workspaceId: WorkspaceId, request: BoardQuery): Promise<QueryResponse<"board">>;
-  attention(workspaceId: WorkspaceId, request: AttentionQuery): Promise<QueryResponse<"attention">>;
-  approvalQueue(workspaceId: WorkspaceId): Promise<QueryResponse<"approval_queue">>;
-  featureProposal(workspaceId: WorkspaceId, featureId: FeatureId): Promise<QueryResponse<"feature_proposal">>;
-  workItemDetail(workspaceId: WorkspaceId, workItemId: WorkItemId): Promise<QueryResponse<"work_item_detail">>;
-  repositoryObservability(workspaceId: WorkspaceId, repositoryId: RepositoryId): Promise<QueryResponse<"repository_observability">>;
-  checkoutObservability(workspaceId: WorkspaceId, checkoutId: CheckoutId): Promise<QueryResponse<"checkout_observability">>;
-  sessionObservability(workspaceId: WorkspaceId, sessionId: SessionId): Promise<QueryResponse<"session_observability">>;
-  recoveryPreview(workspaceId: WorkspaceId, sessionId: SessionId): Promise<QueryResponse<"recovery_preview">>;
+  workspaceSummary(workspaceId: WorkspaceId): Promise<DaemonRead<"workspace_summary">>;
+  workspaceHierarchy(workspaceId: WorkspaceId): Promise<DaemonRead<"workspace_hierarchy">>;
+  boardViews(workspaceId: WorkspaceId): Promise<DaemonRead<"board_views">>;
+  boardView(workspaceId: WorkspaceId, viewId: BoardViewId): Promise<DaemonRead<"board_view">>;
+  board(workspaceId: WorkspaceId, request: BoardQuery): Promise<DaemonRead<"board">>;
+  attention(workspaceId: WorkspaceId, request: AttentionQuery): Promise<DaemonRead<"attention">>;
+  approvalQueue(workspaceId: WorkspaceId): Promise<DaemonRead<"approval_queue">>;
+  featureProposal(workspaceId: WorkspaceId, featureId: FeatureId): Promise<DaemonRead<"feature_proposal">>;
+  workItemDetail(workspaceId: WorkspaceId, workItemId: WorkItemId): Promise<DaemonRead<"work_item_detail">>;
+  repositoryObservability(workspaceId: WorkspaceId, repositoryId: RepositoryId): Promise<DaemonRead<"repository_observability">>;
+  checkoutObservability(workspaceId: WorkspaceId, checkoutId: CheckoutId): Promise<DaemonRead<"checkout_observability">>;
+  sessionObservability(workspaceId: WorkspaceId, sessionId: SessionId): Promise<DaemonRead<"session_observability">>;
+  recoveryPreview(workspaceId: WorkspaceId, sessionId: SessionId): Promise<DaemonRead<"recovery_preview">>;
   hierarchyChildren(
     workspaceId: WorkspaceId,
     parent: HierarchyRef,
-  ): Promise<QueryResponse<"hierarchy_children">>;
+  ): Promise<DaemonRead<"hierarchy_children">>;
   execute(request: ExecuteRequest): Promise<ResponseEnvelope>;
   subscribe(
     target: SubscriptionTarget,
@@ -84,7 +84,7 @@ export function createDaemonFacade(transport: DaemonTransport): DaemonFacade {
     workspaceId: WorkspaceId,
     read: Extract<import("./generated").ReadQuery, { type: TType }>,
   ) =>
-    transport.invoke<QueryResponse<TType>>(commands.query, {
+    transport.invoke<DaemonRead<TType>>(commands.query, {
       request: { workspaceId, query: read },
     });
 

@@ -1,5 +1,5 @@
 import { daemon } from "../../../core/daemon";
-import type { AttentionQuery, BoardQuery, WorkspaceId } from "../../../core/generated";
+import type { AttentionQuery, BoardQuery, WorkspaceId } from "../../../core/contracts";
 
 export const boardApi = {
   page: (workspaceId: WorkspaceId, query: BoardQuery) => daemon.board(workspaceId, query),

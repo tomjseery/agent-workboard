@@ -1,20 +1,20 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useRef } from "react";
 
-import type { BoardCardProjection, BoardLaneProjection, WorkItemId, WorkspaceId } from "../../../core/generated";
+import type { WorkItemCard, BoardLane, WorkItemId, WorkspaceId } from "../../../core/contracts";
 import { BoardCard } from "./BoardCard";
 
 interface VirtualLaneProps {
-  lane: BoardLaneProjection;
+  lane: BoardLane;
   workspaceId: WorkspaceId;
   evidenceLinks: boolean;
-  cards: BoardCardProjection[];
+  cards: WorkItemCard[];
   selectedWorkItemId?: WorkItemId;
   focusedWorkItemId?: WorkItemId;
-  onSelect(card: BoardCardProjection): void;
-  onFocus(card: BoardCardProjection): void;
-  onOpen(card: BoardCardProjection): void;
-  onMove(card: BoardCardProjection, key: string): void;
+  onSelect(card: WorkItemCard): void;
+  onFocus(card: WorkItemCard): void;
+  onOpen(card: WorkItemCard): void;
+  onMove(card: WorkItemCard, key: string): void;
 }
 
 export function VirtualLane({ lane, workspaceId, evidenceLinks, cards, selectedWorkItemId, focusedWorkItemId, onSelect, onFocus, onOpen, onMove }: VirtualLaneProps) {
@@ -28,7 +28,7 @@ export function VirtualLane({ lane, workspaceId, evidenceLinks, cards, selectedW
   }, [focusedIndex, focusedWorkItemId, virtualizer]);
 
   return (
-    <section aria-labelledby={`lane-${lane.key}`} className="flex min-w-72 max-w-80 flex-1 flex-col rounded-2xl border border-[var(--border)] bg-[var(--surface-muted)]">
+    <section aria-labelledby={`lane-${lane.key}`} className="flex min-w-72 max-w-80 flex-1 flex-col rounded-2xl border border-border bg-muted">
       <h2 id={`lane-${lane.key}`} className="flex items-center justify-between px-4 py-3 text-sm font-semibold"><span>{lane.title}</span><span aria-label={`${lane.totalCount} cards`}>{lane.totalCount}</span></h2>
       <div ref={scrollElement} role="list" aria-label={`${lane.title} cards`} className="h-[62vh] min-h-80 overflow-auto">
         <div className="relative w-full" style={{ height: `${virtualizer.getTotalSize()}px` }}>

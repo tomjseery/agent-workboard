@@ -1,4 +1,4 @@
-import type { FeatureId, WorkspaceId } from "../../../core/generated";
+import type { FeatureId, WorkspaceId } from "../../../core/contracts";
 
 export const proposalQueryKeys = {
   all: (workspaceId: WorkspaceId) => ["proposals", workspaceId] as const,

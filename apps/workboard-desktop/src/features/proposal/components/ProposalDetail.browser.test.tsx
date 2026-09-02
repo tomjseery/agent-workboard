@@ -3,6 +3,8 @@ import { page, userEvent } from "@vitest/browser/context";
 import { expect, it, vi } from "vitest";
 import "vitest-browser-react";
 
+import { RouterHarness } from "../../../test/routerHarness";
+
 import { daemon } from "../../../core/daemon";
 import { ApprovalQueue } from "./ApprovalQueue";
 import { ProposalDetail } from "./ProposalDetail";
@@ -48,7 +50,7 @@ it("renders long hostile changed content as inert text with cross-repository sco
   document.body.style.width = "320px";
   document.body.style.zoom = "2";
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  page.render(<QueryClientProvider client={queryClient}><ProposalDetail workspaceId={workspaceId} featureId={featureId} /></QueryClientProvider>);
+  page.render(<RouterHarness><QueryClientProvider client={queryClient}><ProposalDetail workspaceId={workspaceId} featureId={featureId} /></QueryClientProvider></RouterHarness>);
   await expect.element(page.getByText(/Proposal changed: review generation 2/)).toBeVisible();
   await expect.element(page.getByText(/<script>window\.evil = true<\/script>/)).toBeVisible();
   await expect.element(page.getByText("Repositories: service-a, service-b")).toBeVisible();
@@ -70,7 +72,7 @@ it("supports empty queues and independently retries a disconnected proposal by k
   vi.mocked(daemon.approvalQueue).mockReset().mockResolvedValue(response({ type: "approval_queue", value: { entries: [], revision: 41 } }));
   vi.mocked(daemon.featureProposal).mockReset().mockRejectedValueOnce(new Error("disconnected")).mockResolvedValue(response({ type: "feature_proposal", value: proposal(0) }));
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  page.render(<QueryClientProvider client={queryClient}><ApprovalQueue workspaceId={workspaceId} /><ProposalDetail workspaceId={workspaceId} featureId={featureId} /></QueryClientProvider>);
+  page.render(<RouterHarness><QueryClientProvider client={queryClient}><ApprovalQueue workspaceId={workspaceId} /><ProposalDetail workspaceId={workspaceId} featureId={featureId} /></QueryClientProvider></RouterHarness>);
   await expect.element(page.getByText("No Feature proposals currently require review.")).toBeVisible();
   const retry = page.getByRole("button", { name: "Retry proposal detail" });
   (retry.element() as HTMLElement).focus();
@@ -96,7 +98,7 @@ it("approves, validates revision feedback before sending, and reports a stale re
   vi.mocked(daemon.featureProposal).mockReset().mockResolvedValue(response({ type: "feature_proposal", value: actionable() }));
   vi.mocked(daemon.execute).mockReset().mockResolvedValue(response({ type: "feature_proposal", value: actionable() }));
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  page.render(<QueryClientProvider client={queryClient}><ProposalDetail workspaceId={workspaceId} featureId={featureId} /></QueryClientProvider>);
+  page.render(<RouterHarness><QueryClientProvider client={queryClient}><ProposalDetail workspaceId={workspaceId} featureId={featureId} /></QueryClientProvider></RouterHarness>);
 
   await expect.element(page.getByText("Rejecting a proposal outright is unavailable; request a revision instead.")).toBeVisible();
 
@@ -132,7 +134,7 @@ it("surfaces a stale-revision refusal and a partial publication outcome instead 
     partialOutcomes: [{ owner: { kind: "feature", id: featureId }, code: "workflow_document_changed", succeeded: false, message: "Publication did not complete.", reconciliationRequired: true, evidence: [] }],
   } as never);
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  page.render(<QueryClientProvider client={queryClient}><ProposalDetail workspaceId={workspaceId} featureId={featureId} /></QueryClientProvider>);
+  page.render(<RouterHarness><QueryClientProvider client={queryClient}><ProposalDetail workspaceId={workspaceId} featureId={featureId} /></QueryClientProvider></RouterHarness>);
   await userEvent.click(page.getByRole("button", { name: "Approve and publish" }));
   await expect.element(page.getByText(/Workspace revision 41 is stale/)).toBeVisible();
   await expect.element(page.getByText("Publication did not complete. Reconciliation is required.")).toBeVisible();

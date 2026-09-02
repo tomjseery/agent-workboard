@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import workspaceApi from "../api/workspaceApi";
 import { workspaceQueryKeys } from "../api/workspaceQueryKeys";
-import type { WorkspaceId } from "../../../core/generated";
+import type { WorkspaceId } from "../../../core/contracts";
 
 export function useWorkspaceQuery(workspaceId: WorkspaceId) {
   return useQuery({

@@ -1,4 +1,4 @@
-import type { CheckoutId, WorkspaceId } from "../../../core/generated";
+import type { CheckoutId, WorkspaceId } from "../../../core/contracts";
 
 export const checkoutQueryKeys = {
   all: ["checkouts"] as const,

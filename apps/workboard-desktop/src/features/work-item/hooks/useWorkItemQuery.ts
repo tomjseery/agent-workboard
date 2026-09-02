@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
-import type { WorkItemId, WorkspaceId } from "../../../core/generated";
+import type { WorkItemId, WorkspaceId } from "../../../core/contracts";
 import workItemApi from "../api/workItemApi";
 import { workItemQueryKeys } from "../api/workItemQueryKeys";
 

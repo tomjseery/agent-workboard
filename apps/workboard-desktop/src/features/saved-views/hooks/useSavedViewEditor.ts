@@ -1,4 +1,4 @@
-import type { BoardViewDefinition, WorkspaceId } from "../../../core/generated";
+import type { BoardViewDefinition, WorkspaceId } from "../../../core/contracts";
 import { boardViewDefinitionSchema } from "../schemas/boardViewDefinitionSchema";
 import { useSavedViewDraftStore } from "../store/savedViewDraftStore";
 import { useSaveBoardViewMutation } from "./useSaveBoardViewMutation";

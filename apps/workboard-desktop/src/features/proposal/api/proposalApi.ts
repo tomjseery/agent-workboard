@@ -1,5 +1,5 @@
 import { daemon } from "../../../core/daemon";
-import type { FeatureId, WorkspaceId } from "../../../core/generated";
+import type { FeatureId, WorkspaceId } from "../../../core/contracts";
 
 const proposalApi = {
   queue: (workspaceId: WorkspaceId) => daemon.approvalQueue(workspaceId),

@@ -1,4 +1,4 @@
-import type { WorkItemId, WorkspaceId } from "../../../core/generated";
+import type { WorkItemId, WorkspaceId } from "../../../core/contracts";
 
 export const workItemQueryKeys = {
   all: ["work-items"] as const,

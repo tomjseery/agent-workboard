@@ -1,4 +1,4 @@
-import type { EpicId, FeatureId, RepositoryId, WorkItemStatus } from "../../../core/generated";
+import type { EpicId, FeatureId, RepositoryId, WorkItemStatus } from "../../core/contracts";
 
 export interface NavigationFeatureNode {
   id: FeatureId;

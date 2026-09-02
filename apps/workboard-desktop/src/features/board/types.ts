@@ -1,7 +1,4 @@
-import type { AttentionQuery, BoardQuery, FeatureId, RepositoryId, ResponseEnvelope, ResponseResult, WorkItemId, WorkItemStatus } from "../../../core/generated";
-
-export type BoardResponse = Omit<ResponseEnvelope, "result"> & { result: Extract<ResponseResult, { type: "board" }> | null };
-export type AttentionResponse = Omit<ResponseEnvelope, "result"> & { result: Extract<ResponseResult, { type: "attention" }> | null };
+import type { AttentionQuery, BoardQuery, FeatureId, RepositoryId, WorkItemId, WorkItemStatus } from "../../core/contracts";
 
 export interface BoardScope {
   repositoryIds?: RepositoryId[];

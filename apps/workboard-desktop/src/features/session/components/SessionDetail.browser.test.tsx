@@ -3,6 +3,8 @@ import { page, userEvent } from "@vitest/browser/context";
 import { expect, it, vi } from "vitest";
 import "vitest-browser-react";
 
+import { RouterHarness } from "../../../test/routerHarness";
+
 import { daemon } from "../../../core/daemon";
 import { SessionDetail } from "./SessionDetail";
 import "../../../styles.css";
@@ -53,7 +55,7 @@ it("keeps stale evidence explicit in a narrow dense panel and retries recovery i
   document.body.style.width = "320px";
   document.body.style.zoom = "2";
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  page.render(<QueryClientProvider client={queryClient}><SessionDetail workspaceId={workspaceId} sessionId={sessionId} /></QueryClientProvider>);
+  page.render(<RouterHarness><QueryClientProvider client={queryClient}><SessionDetail workspaceId={workspaceId} sessionId={sessionId} /></QueryClientProvider></RouterHarness>);
 
   await expect.element(page.getByText(/Liveness evidence is stale/)).toBeVisible();
   await expect.element(page.getByText("Unknown", { exact: true }).first()).toBeVisible();

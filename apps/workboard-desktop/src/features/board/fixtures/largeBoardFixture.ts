@@ -1,4 +1,4 @@
-import type { AttentionEntryProjection, AttentionReasonCode, BoardCardProjection, BoardLaneProjection, Provider, RepositoryReference, WorkItemStatus, WorkspaceId } from "../../../core/generated";
+import type { AttentionEntry, AttentionReasonCode, WorkItemCard, BoardLane, Provider, RepositoryReference, WorkItemStatus, WorkspaceId } from "../../../core/contracts";
 
 const workspaceId = "20000000-0000-0000-0000-000000000001" as WorkspaceId;
 const statuses: WorkItemStatus[] = ["backlog", "ready", "in_progress", "blocked", "review", "done", "cancelled"];
@@ -10,8 +10,8 @@ function identity(prefix: string, index: number) {
 
 export function createLargeBoardFixture() {
   const repositories: RepositoryReference[] = Array.from({ length: 100 }, (_, index) => ({ id: identity("3", index + 1), workspaceId, slug: `service-${index.toString().padStart(3, "0")}`, title: `Service ${index}` }));
-  const lanes: BoardLaneProjection[] = statuses.map((status, index) => ({ key: status, title: status.replaceAll("_", " "), position: index + 1, totalCount: 0 }));
-  const cards: BoardCardProjection[] = [];
+  const lanes: BoardLane[] = statuses.map((status, index) => ({ key: status, title: status.replaceAll("_", " "), position: index + 1, totalCount: 0 }));
+  const cards: WorkItemCard[] = [];
   const laneCounts = new Map<WorkItemStatus, number>();
   for (let index = 0; index < 10_000; index += 1) {
     const featureIndex = Math.floor(index / 10);
@@ -45,6 +45,6 @@ export function createLargeBoardFixture() {
   }
   for (const card of cards) card.laneCount = laneCounts.get(card.status) ?? 0;
   for (const lane of lanes) lane.totalCount = laneCounts.get(lane.key as WorkItemStatus) ?? 0;
-  const attentionEntries: AttentionEntryProjection[] = cards.filter((card) => card.attentionReasons.length > 0).map((card, index, source) => ({ owner: { kind: "work_item", id: card.workItem.id }, title: card.workItem.title, subtitle: card.workItem.key, repositories: card.repositories, card, reasons: card.attentionReasons, revision: card.revision, availableActions: [], position: index + 1, totalCount: source.length }));
+  const attentionEntries: AttentionEntry[] = cards.filter((card) => card.attentionReasons.length > 0).map((card, index, source) => ({ owner: { kind: "work_item", id: card.workItem.id }, title: card.workItem.title, subtitle: card.workItem.key, repositories: card.repositories, card, reasons: card.attentionReasons, revision: card.revision, availableActions: [], position: index + 1, totalCount: source.length }));
   return { workspaceId, repositories, features: 1_000, lanes, cards, attentionEntries };
 }

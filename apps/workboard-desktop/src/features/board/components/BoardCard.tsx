@@ -1,11 +1,14 @@
-import { memo } from "react";
 import { Link } from "@tanstack/react-router";
+import { Ban } from "lucide-react";
+import { memo } from "react";
 
-import type { BoardCardProjection, WorkspaceId } from "../../../core/generated";
-import { dependencyReadinessPresentations, readinessToneClasses } from "../types/presentation";
+import { Badge } from "../../../components/ui/badge";
+import { Card } from "../../../components/ui/card";
+import type { WorkItemCard, WorkspaceId } from "../../../core/contracts";
+import { dependencyReadinessPresentations } from "../model/presentation";
 
 interface BoardCardProps {
-  card: BoardCardProjection;
+  card: WorkItemCard;
   workspaceId: WorkspaceId;
   evidenceLinks: boolean;
   selected: boolean;
@@ -18,38 +21,50 @@ interface BoardCardProps {
 
 export const BoardCard = memo(function BoardCard({ card, workspaceId, evidenceLinks, selected, focused, onSelect, onFocus, onOpen, onKeyDown }: BoardCardProps) {
   const readiness = dependencyReadinessPresentations[card.dependencyReadiness];
+  const ReadinessIcon = readiness.icon;
   return (
     <article role="listitem" aria-posinset={card.lanePosition} aria-setsize={card.laneCount} className="px-2 py-1">
-      <button
-        type="button"
-        data-board-card={card.workItem.id}
-        tabIndex={focused ? 0 : -1}
-        aria-current={selected ? "true" : undefined}
-        aria-label={`${card.workItem.key}: ${card.workItem.title}. Position ${card.lanePosition} of ${card.laneCount} in ${card.laneKey}.`}
-        className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3 text-left focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
-        onClick={onSelect}
-        onDoubleClick={onOpen}
-        onFocus={onFocus}
-        onKeyDown={onKeyDown}
-      >
-        <span className="block text-xs font-semibold text-[var(--accent)]">{card.workItem.key}</span>
-        <span className="mt-1 block font-medium">{card.workItem.title}</span>
-        <span className="mt-1 block text-xs text-[var(--muted-text)]">{card.feature.title}</span>
-        <span className="mt-3 flex flex-wrap gap-1">
-          {card.repositories.map((repository) => <span key={repository.id} className="rounded border border-[var(--border)] px-1.5 py-0.5 text-xs">{repository.slug}</span>)}
-        </span>
-        <span className="mt-2 flex flex-wrap items-center gap-1 text-xs">
-          <span className={`rounded-full border px-2 py-0.5 ${readinessToneClasses[readiness.tone]}`}>{readiness.symbol} {readiness.label}</span>
-          {card.blockedBy.length > 0 && <span className={`rounded-full border px-2 py-0.5 ${readinessToneClasses.warning}`}>⊘ blocked by {card.blockedBy.map((evidence) => evidence.workItem.key).join(", ")}</span>}
-        </span>
-        <span className="mt-1 block text-xs">Parallel: {card.parallelReadiness.readyCount} ready, {card.parallelReadiness.waitingCount} waiting</span>
-        <span className="mt-1 block text-xs">Sessions: {card.sessionSummary.total}</span>
-        {card.attentionReasons.length > 0 && <span className="mt-2 block text-xs font-semibold text-[var(--warning)]">{card.attentionReasons.map((reason) => reason.message).join(" · ")}</span>}
-      </button>
-      {evidenceLinks && (card.checkoutIds.length > 0 || card.sessionIds.length > 0) && <nav aria-label={`Evidence for ${card.workItem.key}`} className="mt-1 flex flex-wrap gap-2 px-1 text-xs">
-        {card.checkoutIds.map((checkoutId) => <Link key={checkoutId} to="/workspaces/$workspaceId/checkouts/$checkoutId" params={{ workspaceId, checkoutId }} className="rounded border border-[var(--border)] px-2 py-1">Checkout {checkoutId.slice(0, 8)}</Link>)}
-        {card.sessionIds.map((sessionId) => <Link key={sessionId} to="/workspaces/$workspaceId/sessions/$sessionId" params={{ workspaceId, sessionId }} className="rounded border border-[var(--border)] px-2 py-1">Session {sessionId.slice(0, 8)}</Link>)}
-      </nav>}
+      <Card asChild size="inset" className="w-full rounded-xl text-left focus-visible:ring-2 focus-visible:ring-ring">
+        <button
+          type="button"
+          data-board-card={card.workItem.id}
+          tabIndex={focused ? 0 : -1}
+          aria-current={selected ? "true" : undefined}
+          aria-label={`${card.workItem.key}: ${card.workItem.title}. Position ${card.lanePosition} of ${card.laneCount} in ${card.laneKey}.`}
+          onClick={onSelect}
+          onDoubleClick={onOpen}
+          onFocus={onFocus}
+          onKeyDown={onKeyDown}
+        >
+          <span className="block text-xs font-semibold text-primary">{card.workItem.key}</span>
+          <span className="mt-1 block font-medium">{card.workItem.title}</span>
+          <span className="mt-1 block text-xs text-muted-foreground">{card.feature.title}</span>
+          <span className="mt-3 flex flex-wrap gap-1">
+            {card.repositories.map((repository) => <Badge key={repository.id} size="tag">{repository.slug}</Badge>)}
+          </span>
+          <span className="mt-2 flex flex-wrap items-center gap-1">
+            <Badge tone={readiness.tone}><ReadinessIcon className="size-3" aria-hidden />{readiness.label}</Badge>
+            {card.blockedBy.length > 0 && <Badge tone="warning"><Ban className="size-3" aria-hidden />blocked by {card.blockedBy.map((evidence) => evidence.workItem.key).join(", ")}</Badge>}
+          </span>
+          <span className="mt-1 block text-xs">Parallel: {card.parallelReadiness.readyCount} ready, {card.parallelReadiness.waitingCount} waiting</span>
+          <span className="mt-1 block text-xs">Sessions: {card.sessionSummary.total}</span>
+          {card.attentionReasons.length > 0 && <span className="mt-2 block text-xs font-semibold text-warning">{card.attentionReasons.map((reason) => reason.message).join(" · ")}</span>}
+        </button>
+      </Card>
+      {evidenceLinks && (card.checkoutIds.length > 0 || card.sessionIds.length > 0) && (
+        <nav aria-label={`Evidence for ${card.workItem.key}`} className="mt-1 flex flex-wrap gap-2 px-1">
+          {card.checkoutIds.map((checkoutId) => (
+            <Badge key={checkoutId} size="tag" asChild>
+              <Link to="/workspaces/$workspaceId/checkouts/$checkoutId" params={{ workspaceId, checkoutId }}>Checkout {checkoutId.slice(0, 8)}</Link>
+            </Badge>
+          ))}
+          {card.sessionIds.map((sessionId) => (
+            <Badge key={sessionId} size="tag" asChild>
+              <Link to="/workspaces/$workspaceId/sessions/$sessionId" params={{ workspaceId, sessionId }}>Session {sessionId.slice(0, 8)}</Link>
+            </Badge>
+          ))}
+        </nav>
+      )}
     </article>
   );
 });

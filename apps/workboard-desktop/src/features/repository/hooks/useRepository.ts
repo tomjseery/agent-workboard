@@ -1,4 +1,4 @@
-import type { RepositoryId, WorkspaceId } from "../../../core/generated";
+import type { RepositoryId, WorkspaceId } from "../../../core/contracts";
 import { useRepositoryQuery } from "./useRepositoryQuery";
 
 export function useRepository(workspaceId: WorkspaceId, repositoryId: RepositoryId) {

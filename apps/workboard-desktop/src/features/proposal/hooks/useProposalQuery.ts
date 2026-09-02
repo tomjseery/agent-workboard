@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
-import type { FeatureId, WorkspaceId } from "../../../core/generated";
+import type { FeatureId, WorkspaceId } from "../../../core/contracts";
 import proposalApi from "../api/proposalApi";
 import { proposalQueryKeys } from "../api/proposalQueryKeys";
 

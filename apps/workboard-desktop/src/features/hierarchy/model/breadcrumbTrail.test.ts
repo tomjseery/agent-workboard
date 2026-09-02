@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import type { WorkspaceHierarchy } from "../../../core/generated";
+import type { WorkspaceHierarchy } from "../../../core/contracts";
 import { breadcrumbTrail, type BreadcrumbTarget } from "./breadcrumbTrail";
-import { entityPresentations } from "../types/presentation";
+import { entityPresentations } from "../model/presentation";
 
 const workspaceId = "20000000-0000-0000-0000-000000000001";
 const alpha = "30000000-0000-0000-0000-000000000001";

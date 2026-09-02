@@ -1,5 +1,5 @@
 import { daemon } from "../../../core/daemon";
-import type { SessionId, WorkspaceId } from "../../../core/generated";
+import type { SessionId, WorkspaceId } from "../../../core/contracts";
 
 const sessionApi = {
   get: (workspaceId: WorkspaceId, sessionId: SessionId) => daemon.sessionObservability(workspaceId, sessionId),
