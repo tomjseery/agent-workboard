@@ -61,8 +61,10 @@ apps/
     ├── package.json
     ├── src/
     │   ├── app/
+    │   ├── components/ui/
     │   ├── core/
     │   ├── features/
+    │   ├── lib/
     │   └── routes/
     └── src-tauri/
 ```
@@ -75,10 +77,10 @@ The protocol crate may depend on serialization and identity primitives but never
 - Zustand owns only unsaved filters, draft lane layout, focused card, panel state, and equivalent client-only state through feature facade hooks.
 - TanStack Router owns typed routes and zod-validated search parameters.
 - zod parses environment, route, and user-editable form boundaries. Negotiated first-party daemon responses use generated contract types rather than a handwritten validation mirror.
-- Feature slices own `types`, `api`, `hooks`, `components`, `pages`, and `schemas` as needed.
+- Feature slices own one `types.ts`, plus `api`, `hooks`, `components`, `pages`, `model`, and `schemas` as needed. Generated contract names never reach a feature; `core/contracts.ts` re-exports domain names over `core/generated`.
 - Raw React Query hooks use `Query`/`Mutation` suffixes. Facade hooks return domain-shaped state and operations. Components render.
-- Tailwind provides styling through one `cn` helper and `cva` variants. Owned accessible primitives are based on Radix/shadcn patterns. Use one icon set.
-- dayjs is hidden behind one named date-formatting module.
+- Tailwind provides styling through one `cn` helper (`src/lib/utils.ts`) and `cva` variants. Owned accessible primitives live in `src/components/ui/`. Use one icon set (`lucide-react`).
+- dayjs is hidden behind one named date-formatting module (`src/lib/dates.ts`).
 - Closed protocol discriminants render through one exhaustive table per concern.
 - Effects are reserved for external subscriptions and DOM integration, not derived state or request orchestration.
 
@@ -594,7 +596,8 @@ The installer never owns user work data. Uninstall preserves durable state. A ca
 
 ### 11. Rebuild the Desktop information architecture
 
-- Status: [ ]
+- Status: [x] — landed as `3067fd6`. Delivered functionally but off-standard; item 12 brought it onto
+  `react-standards`.
 - Slug: `rebuild-desktop-information-architecture`
 - Dependencies: items 4, 5, 7, and 8
 - Delivery type: navigation and layout correction
@@ -648,11 +651,78 @@ to the level it is shown at.
 The sidebar and scoped boards are presentation over existing authoritative reads. Removing them restores the
 prior routes without protocol change.
 
+### 12. Adopt shadcn and bring the frontend onto `react-standards`
+
+- Status: [x] — landed as `83a3f5f`
+- Slug: `adopt-shadcn-and-react-standards`
+- Dependencies: item 11
+- Delivery type: presentation-layer remediation
+
+#### Objective
+
+Item 11 shipped the information architecture without the styling and structure rules in
+`Frontend rules` above. This item pays that back and makes the rules mechanical where they can be.
+
+#### Delivered
+
+1. `clsx` + `tailwind-merge` behind one `cn()` in `src/lib/utils.ts`; `class-variance-authority` for
+   every visual variant; `lucide-react` as the single icon set; `dayjs` behind `src/lib/dates.ts`.
+2. The palette moved onto shadcn token names in `styles.css`, keeping the existing dark and light
+   values and the `forced-colors` / `prefers-reduced-motion` blocks, mapped through `@theme inline`.
+   No component uses an arbitrary `var(--…)` utility.
+3. Owned primitives in `src/components/ui/`: `button`, `card`, `badge`, `alert`, `retry-alert`,
+   `input`, `textarea`, `label`, `checkbox`, `radio`, `select`, `collapsible`, `nav-tabs`.
+4. Page derivation lifted into facade hooks over pure functions in `hierarchy/model/overview.ts`.
+5. `HierarchyModel` / `HierarchyEntityModel` deleted. `core/contracts.ts` re-exports domain names over
+   the quarantined generated module and `architecture.test.ts` fails the build if a feature names a
+   generated `…Projection` or `ResponseEnvelope` type again.
+6. Per-level view lists derived from `satisfies`-checked label tables, so a new view member breaks the
+   build.
+7. The proposal revision-feedback form parses through
+   `proposal/schemas/requestFeatureRevisionSchema.ts` in a facade hook.
+
+#### Decisions
+
+1. **`select` and `radio` wrap the native controls, not Radix.** The platform control is already
+   correct in a WebView2 shell and Radix would trade that for a portal and a scroll lock. They are
+   still owned primitives with `cva` styling, which is what the standard asks for.
+2. **The routed view switchers stay a `nav` of typed links, not Radix `Tabs`.** They change the URL,
+   and the ARIA practices guide treats a set of separate pages as links rather than tabs. Making them
+   tabs would have weakened the roles the browser suite asserts rather than updated them.
+3. **`scroll-area` and `dialog` were not generated.** Nothing uses a dialog, and a Radix scroll area
+   would fight `@tanstack/react-virtual` for the lane scroll element.
+4. **`http-layer` does not apply.** There is no HTTP. The app reaches the daemon over Tauri IPC through
+   the single owned `core/daemon.ts` facade, which is this app's analogue of the one-instance rule. Do
+   not "fix" this by adding axios.
+5. **`data-tables` does not apply yet.** The Feature index and Work-item lists are lists, not grids of
+   comparable rows. A genuinely comparable-rows grid would be TanStack Table behind one `DataTable`.
+6. **File-based routing is accepted debt.** `src/routes/router.tsx` still declares all thirteen routes
+   with `createRoute`. The rule's substance is already met — each URL is declared once and every
+   navigation is a typed `Link` or `navigate` — and converting would add a build-time route-tree
+   generator and a second generated artifact to keep in sync beside the contract fixtures. `AppLayout`
+   was extracted to `src/app/AppLayout.tsx` behind a pathless layout route, which was the part of the
+   rule that was actually being violated.
+
+#### Defects found and fixed
+
+- The hierarchy pages tested "unavailable" before "missing", so a deep link to a Feature that no longer
+  exists reported a broken daemon instead of a missing entity.
+- The browser tier ran without Tailwind — the plugin was never in `vitest.browser.config.ts` — so every
+  utility class was inert and the tier proved nothing about the CSS/layout behavior it owns. Enabling it
+  exposed a real reflow bug: at 200% zoom the fixed-width sidebar drove `main` to zero width. The
+  sidebar is now capped at 45%.
+
+#### Verification
+
+Full gate green: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --all-features -D
+warnings`, `cargo test --workspace --all-targets` (265 tests), `npm run generate:check`,
+`npm run typecheck`, 47 Vitest Node tests, 22 browser tests, `npm run build`.
+
 ## Feature completion
 
 This Feature is complete only when:
 
-- all ten items are checked and their exact-head gates passed;
+- all twelve items are checked and their exact-head gates passed;
 - CLI, TUI, and Desktop consume the same accepted client protocol for migrated operations;
 - the daemon/application is the only runtime and persistence authority;
 - Desktop cannot obtain or manufacture Workboard/provider authority;
