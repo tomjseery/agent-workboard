@@ -82,6 +82,7 @@ pub struct FakeDaemonOptions {
     pub ready: bool,
     pub expose_token_in_handshake: bool,
     pub workspace_id: Option<WorkspaceId>,
+    pub typed_read_error: Option<(String, String)>,
 }
 
 impl FakeDaemon {
@@ -126,6 +127,7 @@ impl FakeDaemon {
             max_active_subscriptions: Arc::clone(&max_active_subscriptions),
             accepted_subscriptions: Arc::clone(&accepted_subscriptions),
             forwarded_queries: Arc::clone(&forwarded_queries),
+            typed_read_error: options.typed_read_error,
         };
         let thread = thread::spawn(move || server.run(listener));
         Self {
@@ -206,6 +208,7 @@ struct FakeServer {
     max_active_subscriptions: Arc<AtomicUsize>,
     accepted_subscriptions: Arc<AtomicUsize>,
     forwarded_queries: Arc<AtomicUsize>,
+    typed_read_error: Option<(String, String)>,
 }
 
 impl FakeServer {
@@ -290,6 +293,17 @@ impl FakeServer {
     }
 
     fn query(&self, stream: &mut TcpStream, request: &RequestEnvelope, query: &ReadQuery) {
+        if let Some((code, message)) = self.typed_read_error.clone() {
+            write_message(
+                stream,
+                ServerMessage::Response(Box::new(ResponseEnvelope::failure(
+                    CURRENT_PROTOCOL_VERSION,
+                    request,
+                    workboard_client_protocol::ProtocolError::new(code, message),
+                ))),
+            );
+            return;
+        }
         let result = match query {
             ReadQuery::WorkspaceSummary => ResponseResult::WorkspaceSummary(WorkspaceSummary {
                 workspace: self.workspace_reference(),

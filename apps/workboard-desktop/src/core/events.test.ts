@@ -54,7 +54,7 @@ describe("ordered event cache updates", () => {
   it("patches one card while preserving unrelated card and canonical query references", () => {
     const queryClient = new QueryClient();
     const fixture = createLargeBoardFixture();
-    const parameters = { limit: 200, query: null, repositoryIds: [], statuses: [], laneKeys: [], sort: { field: "key" as const, direction: "ascending" as const } };
+    const parameters = { limit: 200, query: null, repositoryIds: [], featureIds: [], statuses: [], laneKeys: [], sort: { field: "key" as const, direction: "ascending" as const } };
     const first = fixture.cards[0]!;
     const untouched = fixture.cards[1]!;
     const boardEnvelope = envelope({ type: "board", value: { lanes: fixture.lanes, cards: [first, untouched], nextCursor: null, totalCount: 2, revision: 1 } });
@@ -94,7 +94,7 @@ describe("ordered event cache updates", () => {
     queryClient.setQueryData(repositoryQueryKeys.detail(workspaceId, checkout.repository.id), affectedRepository);
     queryClient.setQueryData(repositoryQueryKeys.detail(workspaceId, unrelatedRepositoryId), unrelatedRepository);
     const fixture = createLargeBoardFixture();
-    const parameters = { limit: 200, query: null, repositoryIds: [], statuses: [], laneKeys: [], sort: { field: "key" as const, direction: "ascending" as const } };
+    const parameters = { limit: 200, query: null, repositoryIds: [], featureIds: [], statuses: [], laneKeys: [], sort: { field: "key" as const, direction: "ascending" as const } };
     const first = fixture.cards[0]!;
     const untouched = fixture.cards[1]!;
     const boardKey = boardQueryKeys.board(workspaceId, parameters);
@@ -137,7 +137,7 @@ describe("ordered event cache updates", () => {
     queryClient.setQueryData(proposalQueryKeys.detail(workspaceId, unrelatedFeatureId), unrelatedProposal);
     queryClient.setQueryData(proposalQueryKeys.queue(workspaceId), envelope({ type: "approval_queue", value: { entries: [], revision: 1 } }));
     const attentionKey = boardQueryKeys.attentionList(workspaceId, { limit: 200, repositoryIds: [], reasonCodes: [] });
-    const boardKey = boardQueryKeys.board(workspaceId, { limit: 200, query: null, repositoryIds: [], statuses: [], laneKeys: [], sort: { field: "key", direction: "ascending" } });
+    const boardKey = boardQueryKeys.board(workspaceId, { limit: 200, query: null, repositoryIds: [], featureIds: [], statuses: [], laneKeys: [], sort: { field: "key", direction: "ascending" } });
     queryClient.setQueryData(attentionKey, { pages: [envelope(null)], pageParams: [null] });
     queryClient.setQueryData(boardKey, unrelatedBoard);
     applyWorkspaceEvent(queryClient, { ...event(["feature_proposal", "approval_queue", "attention"]), kind: "proposal_changed", payload, owner: { kind: "feature", id: payload.value.proposal.feature.id } });

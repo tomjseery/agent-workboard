@@ -5,6 +5,7 @@ import "vitest-browser-react";
 
 import { daemon } from "../../../core/daemon";
 import { createLargeBoardFixture } from "../fixtures/largeBoardFixture";
+import { initialBoardFilters, useBoardInteractionStore } from "../store/boardInteractionStore";
 import { BoardView } from "./BoardView";
 import "../../../styles.css";
 
@@ -61,4 +62,22 @@ it("renders loading, empty, partial, incompatible, and transport-error states wi
   vi.mocked(daemon.board).mockReset().mockRejectedValue(new Error("disconnected"));
   render();
   await expect.element(page.getByText(/could not be reached/)).toBeVisible();
+});
+
+it("hides Cancelled behind a lane filter and shows dependency readiness as a card badge", async () => {
+  const fixture = createLargeBoardFixture();
+  useBoardInteractionStore.setState({ filters: initialBoardFilters });
+  vi.mocked(daemon.board).mockReset().mockResolvedValue(boardResponse(fixture, { result: { type: "board", value: { lanes: fixture.lanes, cards: fixture.cards.slice(0, 40), nextCursor: null, totalCount: 40, revision: 1 } } }));
+  page.render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><BoardView workspaceId={fixture.workspaceId} onOpenWorkItem={() => undefined} /></QueryClientProvider>);
+
+  await expect.element(page.getByLabelText("Work item board")).toBeVisible();
+  expect(vi.mocked(daemon.board).mock.calls[0]?.[1].laneKeys).toEqual(["backlog", "ready", "in_progress", "blocked", "review", "done"]);
+  const cancelled = page.getByRole("checkbox", { name: "Cancelled" });
+  await expect.element(cancelled).not.toBeChecked();
+  await expect.element(page.getByText("Dependencies ready").first()).toBeVisible();
+  await expect.element(page.getByText(/blocked by F0000\/WI0/).first()).toBeVisible();
+
+  await cancelled.click();
+  await vi.waitFor(() => expect(vi.mocked(daemon.board).mock.calls.at(-1)?.[1].laneKeys).toContain("cancelled"));
+  useBoardInteractionStore.setState({ filters: initialBoardFilters });
 });

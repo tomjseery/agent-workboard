@@ -24,7 +24,7 @@ export type BoardLaneProjection = { key: string, title: string, position: number
 
 export type BoardPage = { lanes: Array<BoardLaneProjection>, cards: Array<BoardCardProjection>, nextCursor: string | null, totalCount: number, revision: number, };
 
-export type BoardQuery = { cursor: string | null, limit: number, query: string | null, repositoryIds: Array<RepositoryId>, statuses: Array<WorkItemStatus>, laneKeys: Array<string>, sort: BoardViewSort, };
+export type BoardQuery = { cursor: string | null, limit: number, query: string | null, repositoryIds: Array<RepositoryId>, featureIds: Array<FeatureId>, statuses: Array<WorkItemStatus>, laneKeys: Array<string>, sort: BoardViewSort, };
 
 export type BoardViewDefinition = { id: BoardViewId, workspaceId: WorkspaceId, title: string, filters: BoardViewFilters, grouping: BoardViewGrouping, sort: BoardViewSort, density: BoardViewDensity, revision: number, };
 

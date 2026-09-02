@@ -167,6 +167,22 @@ impl WorkboardClient {
         self.send(&request)
     }
 
+    pub fn query_reported(
+        &self,
+        workspace_id: WorkspaceId,
+        query: ReadQuery,
+    ) -> Result<ResponseEnvelope, ClientError> {
+        let request = RequestEnvelope {
+            protocol_version: self.handshake.negotiated_read_version,
+            request_id: RequestId::generate(),
+            workspace_id: Some(workspace_id),
+            expected_revision: None,
+            idempotency_key: None,
+            operation: Operation::Query(query),
+        };
+        self.send_reported(&request)
+    }
+
     pub fn execute(
         &self,
         workspace_id: WorkspaceId,
@@ -186,6 +202,14 @@ impl WorkboardClient {
     }
 
     fn send(&self, request: &RequestEnvelope) -> Result<ResponseEnvelope, ClientError> {
+        let response = self.send_reported(request)?;
+        if let Some(error) = response.error.clone() {
+            return Err(ClientError::Remote(Box::new(error)));
+        }
+        Ok(response)
+    }
+
+    fn send_reported(&self, request: &RequestEnvelope) -> Result<ResponseEnvelope, ClientError> {
         request.validate().map_err(ClientError::Remote)?;
         let mut stream = self.open_stream()?;
         framing::write_frame(
@@ -196,7 +220,7 @@ impl WorkboardClient {
             },
         )?;
         match framing::read_frame::<ServerMessage>(&mut stream)? {
-            ServerMessage::Response(response) => validate_response(request, *response),
+            ServerMessage::Response(response) => correlate_response(request, *response),
             _ => Err(ClientError::UnexpectedResponse),
         }
     }
@@ -209,7 +233,7 @@ impl WorkboardClient {
     }
 }
 
-fn validate_response(
+fn correlate_response(
     request: &RequestEnvelope,
     response: ResponseEnvelope,
 ) -> Result<ResponseEnvelope, ClientError> {
@@ -219,6 +243,14 @@ fn validate_response(
     if !SUPPORTED_READ_VERSIONS.contains(&response.protocol_version) {
         return Err(ClientError::IncompatibleProtocol);
     }
+    Ok(response)
+}
+
+fn validate_response(
+    request: &RequestEnvelope,
+    response: ResponseEnvelope,
+) -> Result<ResponseEnvelope, ClientError> {
+    let response = correlate_response(request, response)?;
     if let Some(error) = response.error.clone() {
         return Err(ClientError::Remote(Box::new(error)));
     }

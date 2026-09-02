@@ -2,6 +2,7 @@ import { memo } from "react";
 import { Link } from "@tanstack/react-router";
 
 import type { BoardCardProjection, WorkspaceId } from "../../../core/generated";
+import { dependencyReadinessPresentations, readinessToneClasses } from "../types/presentation";
 
 interface BoardCardProps {
   card: BoardCardProjection;
@@ -16,6 +17,7 @@ interface BoardCardProps {
 }
 
 export const BoardCard = memo(function BoardCard({ card, workspaceId, evidenceLinks, selected, focused, onSelect, onFocus, onOpen, onKeyDown }: BoardCardProps) {
+  const readiness = dependencyReadinessPresentations[card.dependencyReadiness];
   return (
     <article role="listitem" aria-posinset={card.lanePosition} aria-setsize={card.laneCount} className="px-2 py-1">
       <button
@@ -36,8 +38,10 @@ export const BoardCard = memo(function BoardCard({ card, workspaceId, evidenceLi
         <span className="mt-3 flex flex-wrap gap-1">
           {card.repositories.map((repository) => <span key={repository.id} className="rounded border border-[var(--border)] px-1.5 py-0.5 text-xs">{repository.slug}</span>)}
         </span>
-        <span className="mt-2 block text-xs">Dependencies: {card.dependencyReadiness.replaceAll("_", " ")}</span>
-        {card.blockedBy.length > 0 && <span className="mt-1 block text-xs text-[var(--warning)]">Blocked by {card.blockedBy.map((evidence) => evidence.workItem.key).join(", ")}</span>}
+        <span className="mt-2 flex flex-wrap items-center gap-1 text-xs">
+          <span className={`rounded-full border px-2 py-0.5 ${readinessToneClasses[readiness.tone]}`}>{readiness.symbol} {readiness.label}</span>
+          {card.blockedBy.length > 0 && <span className={`rounded-full border px-2 py-0.5 ${readinessToneClasses.warning}`}>⊘ blocked by {card.blockedBy.map((evidence) => evidence.workItem.key).join(", ")}</span>}
+        </span>
         <span className="mt-1 block text-xs">Parallel: {card.parallelReadiness.readyCount} ready, {card.parallelReadiness.waitingCount} waiting</span>
         <span className="mt-1 block text-xs">Sessions: {card.sessionSummary.total}</span>
         {card.attentionReasons.length > 0 && <span className="mt-2 block text-xs font-semibold text-[var(--warning)]">{card.attentionReasons.map((reason) => reason.message).join(" · ")}</span>}

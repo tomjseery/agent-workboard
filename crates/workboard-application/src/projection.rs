@@ -1589,6 +1589,7 @@ mod tests {
                     repository_ids: vec![protocol::RepositoryId::from_uuid(
                         *repository_ids[0].as_uuid(),
                     )],
+                    feature_ids: Vec::new(),
                     statuses: vec![protocol::WorkItemStatus::InProgress],
                     lane_keys: vec!["in_progress".to_owned()],
                     sort: protocol::BoardViewSort {

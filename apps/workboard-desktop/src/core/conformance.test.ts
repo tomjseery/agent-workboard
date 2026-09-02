@@ -8,6 +8,7 @@ import type {
   CheckoutPurposeSource,
   CommandCode,
   CommandOperation,
+  DependencyReadiness,
   EntityRef,
   ErrorSeverity,
   EvidenceState,
@@ -195,6 +196,12 @@ describe("generated protocol conformance", () => {
       "board_snapshot",
     ] satisfies ReadQueryCode[];
     const providers = ["claude", "codex"] satisfies Provider[];
+    const dependencyReadiness = [
+      "ready",
+      "waiting",
+      "blocked",
+      "complete",
+    ] satisfies DependencyReadiness[];
     const statuses = [
       "backlog",
       "ready",
@@ -261,6 +268,7 @@ describe("generated protocol conformance", () => {
     expect(current.discriminants.errorSeverities).toEqual(errorSeverities);
     expect(current.discriminants.readQueryCodes).toEqual(readQueryCodes);
     expect(current.discriminants.providers).toEqual(providers);
+    expect(current.discriminants.dependencyReadiness).toEqual(dependencyReadiness);
     expect(current.discriminants.workItemStatuses).toEqual(statuses);
     expect(current.discriminants.workflowStates).toEqual(workflowStates);
     expect(current.discriminants.checkoutAvailability).toEqual(
@@ -300,7 +308,7 @@ describe("generated protocol conformance", () => {
       succeeded: false,
       reconciliationRequired: true,
     });
-    expect(previous.protocolVersion).toBe(6);
-    expect(current.protocolVersion).toBe(7);
+    expect(previous.protocolVersion).toBe(7);
+    expect(current.protocolVersion).toBe(8);
   });
 });
