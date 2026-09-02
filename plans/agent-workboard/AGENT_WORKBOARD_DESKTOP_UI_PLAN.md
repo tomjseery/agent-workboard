@@ -97,6 +97,38 @@ The plan explicitly adopts the following test tiers:
 
 Do not repeat the same behavior at every tier. Each test belongs to the narrowest tier that can prove the application-owned contract honestly.
 
+## Developer loop
+
+`apps/workboard-desktop/scripts/install-desktop.ps1` is the one command for the installed build. It stops
+the app, its own WebView2 children and the daemon, runs `npm run app`, copies the result into
+`%LOCALAPPDATA%\Programs\Agent Workboard Desktop`, creates the desktop shortcut if it is missing, and
+relaunches. `-SkipBuild`, `-DaemonToo` and `-NoLaunch` cover the variants. A failed build aborts before any
+copy, so a stale binary never lands and reports success. `workboard.exe` is copied only when its hash
+changes, because the daemon is a separate `cargo build --release -p workboard-cli` artifact that moves only
+when the Rust client protocol does.
+
+The script stops only this application's WebView2 processes: the descendants of its own process, plus any
+`msedgewebview2.exe` whose command line carries `dev.agentworkboard.desktop`. Never widen that to every
+`msedgewebview2.exe` — Teams, WhatsApp, Widgets, Copilot and Windows Search each host their own, and a
+blanket stop takes those applications down with it.
+
+For UI iteration prefer `npm run app:dev`, which serves the frontend from vite with hot module reload and
+removes the rebuild-and-copy cycle. Two constraints come with it:
+
+- Set `WORKBOARD_DAEMON` to an existing `workboard.exe` (the installed one will do). A dev binary has no
+  sibling daemon to spawn, so without it the window cannot connect.
+- `tauri dev` compiles `--no-default-features --cfg dev` and shares no artifacts with `npm run app`, so it
+  carries its own multi-gigabyte `target/debug` on first run. Check free disk before starting.
+
+The crate sets `default-run` so that the bare `cargo run` inside `tauri dev` resolves the application
+binary; without it the two `[[bin]]` targets make `tauri dev` fail outright. Keep it in step if a third
+binary is ever added.
+
+**Dev mode is for iteration speed, not acceptance.** It serves over http with no CSP where the packaged
+build enforces one, and the Tauri mock-runtime tests never exercise the real webview, the CSP or the
+isolation frame — a fully green suite has previously coexisted with a permanently stuck "Connecting to
+Workboard" window. Verify every change on the installed build before treating it as done.
+
 ## Framework references
 
 The Tauri decisions in this plan are pinned to the current official v2 guidance:
