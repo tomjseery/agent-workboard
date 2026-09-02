@@ -1,0 +1,86 @@
+{
+  "_comment": [
+    "Path -> the skills that must be loaded before writing that path. EVERY matching row fires, not the",
+    "first: the area floor always applies and a specific row below ADDS to it.",
+    "The convention this table follows - the layered floor+route model, why a row keyed on a top-level",
+    "directory cannot port while one keyed on architecture ports verbatim, and the field semantics",
+    "(path, skills, note, content_requires, deny) - is the routing convention in",
+    "Concertable/agent-standards, whose generator is .agents/gen_skill_routes.py there.",
+    "This table is hand-derived rather than emitted, and deliberately: that generator knows the kinds",
+    "monorepo, dotnet-service and dotnet-service-with-app, keyed on the Concertable repo registry. This",
+    "repo is a Rust workspace carrying one React app, is in no such registry, and the generator refuses",
+    "a react-only kind outright. So the rows below follow the convention's shape while anchoring the",
+    "floor at this repo's own app root. Re-derive them if the app moves; do not copy another repo's table.",
+    "The Rust half of this repo carries no rows on purpose. No Rust standard ships as a skill, and a row",
+    "naming a skill that does not resolve blocks every write in the repo rather than teaching anything.",
+    "Rust is gated by scripts/Test.ps1 and the verification rules in AGENTS.md, which is the build tier",
+    "the router's own docstring says should own a rule it can decide mechanically."
+  ],
+  "routes": [
+    {
+      "path": "^apps/workboard-desktop/src/(?!core/generated/)(?!.*\\.d\\.ts$).*\\.(ts|tsx)$",
+      "skills": ["react-standards:typescript-style"],
+      "note": "Area floor. Every TypeScript file in the app gets the style standard, so a shape nobody wrote a route for is still gated; the rows below add to this, they do not replace it. core/generated/ is excluded because it is emitted by `npm run generate` and its names are wire contract rather than this repo's choice."
+    },
+    {
+      "path": "^apps/workboard-desktop/src/(?!core/generated/).*\\.tsx$",
+      "skills": ["react-standards:react-structure", "react-standards:ui-components"],
+      "note": "Rendering is where the two most-violated rules live: derivation and orchestration belong in a hook rather than in the component, and class strings merge only through cn() with visual variants expressed as cva. A hand-concatenated class string and a two-state variant written out twice are the failures this row exists for."
+    },
+    {
+      "path": "^apps/workboard-desktop/src/features/[^/]+/hooks/.*\\.ts$",
+      "skills": ["react-standards:react-structure", "react-standards:server-state"],
+      "note": "The raw-hook/facade-hook split and its mandatory Query/Mutation suffixes are decided here, along with the rule that a daemon read or write is a useQuery/useMutation and never a useEffect."
+    },
+    {
+      "path": "^apps/workboard-desktop/src/features/[^/]+/store/.*\\.ts$",
+      "skills": ["react-standards:client-state"],
+      "note": "A store stays private to its feature behind a facade hook and holds only client state and its transitions. Mirroring a daemon projection into Zustand is the violation, and features/architecture.test.ts fails the build for it."
+    },
+    {
+      "path": "^apps/workboard-desktop/src/features/[^/]+/api/.*\\.ts$",
+      "skills": ["react-standards:server-state", "react-standards:contract-naming"],
+      "note": "Query keys are one factory per feature ordered generic to specific so prefix invalidation works, and a read is named for the domain noun. Generated ...Projection and ResponseEnvelope names stop at core/contracts.ts and never reach a feature."
+    },
+    {
+      "path": "^apps/workboard-desktop/src/routes/.*\\.tsx?$",
+      "skills": ["react-standards:routing"],
+      "note": "Anything arriving in the URL is untrusted and gets a validateSearch schema, and every in-app destination is a typed Link or navigate. A path built by template literal survives a rename silently, and a raw <a href> reloads the whole SPA inside a Tauri webview."
+    },
+    {
+      "path": "^apps/workboard-desktop/src/(features/[^/]+/)?types\\.ts$",
+      "skills": ["react-standards:typescript-style", "react-standards:contract-naming"],
+      "note": "One types.ts per feature answers what that feature exchanges with the daemon. Wire discriminants are copied exactly and dispatched through one exhaustive table with a never arm; a parallel client-side shape wrapping a read is a view model and is banned."
+    },
+    {
+      "path": "^apps/workboard-desktop/src/features/[^/]+/schemas/.*\\.ts$",
+      "skills": ["react-standards:write-boundary"],
+      "note": "A user-editable buffer is parsed by a zod schema at submit and the parsed value, never the raw buffer, becomes the request. A hand-rolled length or presence check on a field is the missing schema, and a bang past it is the missing validation."
+    },
+    {
+      "path": "^apps/workboard-desktop/src/features/[^/]+/model/.*\\.ts$",
+      "skills": ["react-standards:react-structure"],
+      "note": "These modules exist so derivation is pure and provable outside React, with every input passed explicitly. Reaching a store, the query client or a browser global from one turns it into infrastructure pretending to be a rule."
+    },
+    {
+      "path": "^apps/workboard-desktop/src/lib/dates\\.ts$",
+      "skills": ["react-standards:date-formatting"],
+      "note": "This is the one module allowed to name a date format, and the one place dayjs plugins are registered. Adding a named function here is cheap; calling dayjs(x).format(...) in a component is how one timestamp starts rendering three ways on a single screen."
+    },
+    {
+      "path": "^apps/workboard-desktop/src/(styles\\.css|lib/utils\\.ts)$",
+      "skills": ["react-standards:ui-components"],
+      "note": "The two files the styling rules are actually about: the theme tokens, read by name rather than by literal shade so a colour defined for only one mode does not break the other silently, and cn() itself, which exists so a caller's className wins instead of losing to source order. The forced-colors and prefers-reduced-motion blocks here are asserted by the browser suite."
+    },
+    {
+      "path": "^apps/workboard-desktop/(src/.*\\.test\\.tsx?|vitest[^/]*\\.config\\.ts)$",
+      "skills": ["react-standards:frontend-testing"],
+      "note": "Adoption is explicit and the tier must be the narrowest honest one: Node for pure logic, schemas and stores, and the real-browser project only where DOM, focus, accessibility or layout decides the outcome. The configs are routed because the browser project once ran with no Tailwind plugin, so every utility class was inert and the tier proved nothing about the layout it claims to own."
+    },
+    {
+      "path": "^apps/workboard-desktop/package\\.json$",
+      "skills": ["react-standards:stack-defaults"],
+      "note": "One library per job. This is the moment a second answer to a question something already answers gets added, and the interesting question is always why the incumbent cannot do it."
+    }
+  ]
+}
