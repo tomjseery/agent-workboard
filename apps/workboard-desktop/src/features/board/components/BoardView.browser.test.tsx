@@ -29,6 +29,9 @@ it("bounds mounted cards and supports the complete non-drag keyboard path at 200
   expect(document.querySelectorAll("[data-board-card]").length).toBeLessThanOrEqual(200);
   const first = page.getByRole("button", { name: /F0000\/WI0:/ });
   await first.click();
+  expect(onOpen).toHaveBeenCalledOnce();
+  (first.element() as HTMLElement).focus();
+  await userEvent.keyboard(" ");
   await expect.element(page.getByText(/Selected Work item 60000000/)).toBeInTheDocument();
   await userEvent.keyboard("{ArrowDown}");
   await vi.waitFor(() => expect(document.activeElement?.getAttribute("aria-label")).toContain("F0000/WI7"));
@@ -37,7 +40,7 @@ it("bounds mounted cards and supports the complete non-drag keyboard path at 200
   await userEvent.keyboard("{End}");
   await vi.waitFor(() => expect(document.activeElement?.getAttribute("aria-label")).toContain("Position 29 of 1429"));
   await userEvent.keyboard("{Enter}");
-  expect(onOpen).toHaveBeenCalledOnce();
+  expect(onOpen).toHaveBeenCalledTimes(2);
   document.body.style.zoom = "";
 });
 

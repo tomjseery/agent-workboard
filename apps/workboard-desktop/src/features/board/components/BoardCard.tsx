@@ -24,15 +24,14 @@ export const BoardCard = memo(function BoardCard({ card, workspaceId, evidenceLi
   const ReadinessIcon = readiness.icon;
   return (
     <article role="listitem" aria-posinset={card.lanePosition} aria-setsize={card.laneCount} className="px-2 py-1">
-      <Card asChild size="inset" className="w-full rounded-xl text-left focus-visible:ring-2 focus-visible:ring-ring">
+      <Card asChild size="inset" className="w-full cursor-pointer rounded-xl text-left hover:border-accent-border focus-visible:ring-2 focus-visible:ring-ring">
         <button
           type="button"
           data-board-card={card.workItem.id}
           tabIndex={focused ? 0 : -1}
           aria-current={selected ? "true" : undefined}
           aria-label={`${card.workItem.key}: ${card.workItem.title}. Position ${card.lanePosition} of ${card.laneCount} in ${card.laneKey}.`}
-          onClick={onSelect}
-          onDoubleClick={onOpen}
+          onClick={onOpen}
           onFocus={onFocus}
           onKeyDown={onKeyDown}
         >
