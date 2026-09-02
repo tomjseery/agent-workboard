@@ -43,11 +43,17 @@ export function FeatureDetail({ workspaceId, featureId }: FeatureDetailProps) {
           ) : (
             <ul className="mt-3 grid gap-2">
               {workItems.map((entry) => (
-                <li key={entry.workItem.id} className="flex flex-wrap items-baseline justify-between gap-3 rounded-xl border border-border p-3">
-                  <Link to="/workspaces/$workspaceId/work-items/$workItemId" params={{ workspaceId, workItemId: entry.workItem.id }}>
-                    <span className="font-mono text-xs text-primary">{entry.workItem.key}</span> <span className="font-medium">{entry.workItem.title}</span>
+                <li key={entry.workItem.id}>
+                  <Link
+                    to="/workspaces/$workspaceId/work-items/$workItemId"
+                    params={{ workspaceId, workItemId: entry.workItem.id }}
+                    className="flex flex-wrap items-baseline justify-between gap-3 rounded-xl border border-border p-3 hover:border-accent-border hover:bg-muted"
+                  >
+                    <span>
+                      <span className="font-mono text-xs text-primary">{entry.workItem.key}</span> <span className="font-medium">{entry.workItem.title}</span>
+                    </span>
+                    <Badge>{lanePresentations[entry.status].title}</Badge>
                   </Link>
-                  <Badge>{lanePresentations[entry.status].title}</Badge>
                 </li>
               ))}
             </ul>
