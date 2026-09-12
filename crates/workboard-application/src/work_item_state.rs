@@ -5,10 +5,10 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 use workboard_core::{
-    HierarchyOwner, ManagedSessionRole, WORK_ITEM_STATE_SCHEMA_VERSION, WorkItemCheckpointId,
-    WorkItemId, WorkItemState, WorkItemStateOutcome, WorkItemStatePublicationStatus,
-    WorkItemStateReconciliation, WorkItemStateUpdate, WorkItemStateView, WorkItemStatus,
-    WorkItemTerminalIntent, WorkspaceId,
+    CheckoutId, HierarchyOwner, ManagedSessionRole, WORK_ITEM_STATE_SCHEMA_VERSION,
+    WorkItemCheckpointId, WorkItemId, WorkItemState, WorkItemStateOutcome,
+    WorkItemStatePublicationStatus, WorkItemStateReconciliation, WorkItemStateUpdate,
+    WorkItemStateView, WorkItemStatus, WorkItemTerminalIntent, WorkspaceId,
 };
 
 use crate::AppError;
@@ -27,7 +27,10 @@ pub struct WorkItemStateService<'a> {
 
 #[derive(Clone, Copy)]
 enum StateActor {
-    Managed(workboard_core::ConversationId),
+    Managed {
+        session_id: workboard_core::ConversationId,
+        checkout_id: CheckoutId,
+    },
     Human,
 }
 
@@ -48,6 +51,7 @@ struct StagedUpdate {
     front_matter: DocumentFrontMatter,
     body: String,
     context: DocumentContext,
+    actor_checkout_id: Option<CheckoutId>,
 }
 
 impl<'a> WorkItemStateService<'a> {
@@ -87,7 +91,10 @@ impl<'a> WorkItemStateService<'a> {
             return Err(AppError::WorkflowOperationUnauthorized);
         }
         self.update(
-            StateActor::Managed(principal.session_id),
+            StateActor::Managed {
+                session_id: principal.session_id,
+                checkout_id: principal.checkout_id,
+            },
             request,
             recorded_at,
         )
@@ -152,9 +159,16 @@ impl<'a> WorkItemStateService<'a> {
         let body = render_state_body(&document.body, &state)?;
         let candidate_hash = PlanningStore::rendered_document_hash(&front_matter, &body)?;
         let checkpoint_id = WorkItemCheckpointId::generate();
-        let (actor_kind, session_id) = match actor {
-            StateActor::Managed(id) => ("managed_session", Some(id.to_string())),
-            StateActor::Human => ("local_human", None),
+        let (actor_kind, session_id, actor_checkout_id) = match actor {
+            StateActor::Managed {
+                session_id,
+                checkout_id,
+            } => (
+                "managed_session",
+                Some(session_id.to_string()),
+                Some(checkout_id),
+            ),
+            StateActor::Human => ("local_human", None, None),
         };
         self.store.write(|transaction| {
             let current = document_context_connection(transaction, request.work_item_id)?;
@@ -168,17 +182,18 @@ impl<'a> WorkItemStateService<'a> {
             }
             transaction.execute(
                 "INSERT INTO work_item_state_updates (
-                     id, workspace_id, work_item_id, actor_kind, session_id, idempotency_key,
+                     id, workspace_id, work_item_id, actor_kind, session_id, checkout_id, idempotency_key,
                      request_hash, expected_revision, expected_document_revision,
                      expected_document_hash, candidate_document_hash, state_json,
                      publication_status, recorded_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'pending', ?13)",
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 'pending', ?14)",
                 params![
                     checkpoint_id.to_string(),
                     context.workspace_id.to_string(),
                     request.work_item_id.to_string(),
                     actor_kind,
                     session_id,
+                    actor_checkout_id.map(|id| id.to_string()),
                     request.idempotency_key,
                     request_hash,
                     as_i64(request.expected_revision)?,
@@ -198,6 +213,7 @@ impl<'a> WorkItemStateService<'a> {
                 front_matter,
                 body,
                 context,
+                actor_checkout_id,
             },
             recorded_at,
         )
@@ -211,10 +227,10 @@ impl<'a> WorkItemStateService<'a> {
     ) -> Result<WorkItemStateOutcome, AppError> {
         let row = self.store.read(|connection| {
             connection.query_row(
-                "SELECT id, state_json, expected_document_hash FROM work_item_state_updates
+                "SELECT id, state_json, expected_document_hash, checkout_id FROM work_item_state_updates
                  WHERE work_item_id = ?1 AND idempotency_key = ?2 AND publication_status <> 'completed'",
                 params![work_item_id.to_string(), idempotency_key],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, Option<String>>(3)?)),
             ).optional().map_err(Into::into)
         })?.ok_or(AppError::WorkItemNotFound)?;
         let state: WorkItemState = serde_json::from_str(&row.1)?;
@@ -234,6 +250,7 @@ impl<'a> WorkItemStateService<'a> {
                 front_matter,
                 body,
                 context,
+                actor_checkout_id: row.3.as_deref().map(parse_id).transpose()?,
             },
             recorded_at,
         )
@@ -292,17 +309,28 @@ impl<'a> WorkItemStateService<'a> {
                 transaction.execute(
                     "INSERT INTO work_item_integrations (
                          work_item_id, repository_id, source_checkout_id, source_head, status, updated_at
-                     ) SELECT ?1, effective.repository_id, checkout.id, checkout.head, 'pending', ?2
-                     FROM effective_work_item_checkouts effective
-                     JOIN checkouts checkout ON checkout.id = effective.checkout_id
-                     WHERE effective.work_item_id = ?1 AND checkout.head IS NOT NULL
+                     ) SELECT ?1, checkout.repository_id, checkout.id, checkout.head, 'pending', ?2
+                     FROM checkouts checkout
+                     WHERE checkout.head IS NOT NULL AND (
+                         (?3 IS NOT NULL AND checkout.id = ?3)
+                         OR (?3 IS NULL AND checkout.id IN (
+                             SELECT effective.checkout_id FROM effective_work_item_checkouts effective
+                             WHERE effective.work_item_id = ?1
+                         ))
+                     )
                      ON CONFLICT(work_item_id, repository_id) DO UPDATE SET
                          source_checkout_id=excluded.source_checkout_id, source_head=excluded.source_head,
                          status=CASE WHEN work_item_integrations.source_head=excluded.source_head
                               AND work_item_integrations.status='integrated' THEN 'integrated' ELSE 'pending' END,
-                         integration_run_id=NULL, expected_target_head=NULL, result_head=NULL,
+                         integration_run_id=CASE WHEN work_item_integrations.source_head=excluded.source_head
+                              AND work_item_integrations.status='integrated' THEN work_item_integrations.integration_run_id ELSE NULL END,
+                         expected_target_head=CASE WHEN work_item_integrations.source_head=excluded.source_head
+                              AND work_item_integrations.status='integrated' THEN work_item_integrations.expected_target_head ELSE NULL END,
+                         result_head=CASE WHEN work_item_integrations.source_head=excluded.source_head
+                              AND work_item_integrations.status='integrated' THEN work_item_integrations.result_head ELSE NULL END,
                          conflict=NULL, updated_at=excluded.updated_at",
-                    params![staged.state.work_item_id.to_string(), timestamp(recorded_at)],
+                    params![staged.state.work_item_id.to_string(), timestamp(recorded_at),
+                        staged.actor_checkout_id.map(|id| id.to_string())],
                 )?;
             }
             transaction.execute(
@@ -391,17 +419,7 @@ pub(crate) fn read_projection_view(
     store: &SqliteStore,
     work_item_id: WorkItemId,
 ) -> Result<WorkItemStateView, AppError> {
-    read_view(store, work_item_id).or_else(|error| {
-        if matches!(error, AppError::WorkItemNotFound) {
-            Ok(WorkItemStateView {
-                state: None,
-                document_revision: 1,
-                reconciliation: None,
-            })
-        } else {
-            Err(error)
-        }
-    })
+    read_view(store, work_item_id)
 }
 
 fn existing_update(
@@ -464,13 +482,13 @@ fn document_context_connection(
     work_item_id: WorkItemId,
 ) -> Result<DocumentContext, AppError> {
     let row = connection.query_row(
-        "SELECT workspace.id, item.status, COALESCE(state.revision,0), MAX(revision.revision),
+        "SELECT workspace.id, item.status, COALESCE(state.revision,0), COALESCE(MAX(revision.revision),1),
                 document.id, document.relative_path, document.content_hash, path.path
          FROM work_items item JOIN features feature ON feature.id=item.feature_id
          JOIN epics epic ON epic.id=feature.epic_id JOIN workspaces workspace ON workspace.id=epic.workspace_id
          JOIN documents document ON document.work_item_id=item.id AND document.kind='work_item'
               AND document.repository_id=workspace.planning_store_repository_id
-         JOIN document_revisions revision ON revision.document_id=document.id
+         LEFT JOIN document_revisions revision ON revision.document_id=document.id
          JOIN repository_paths path ON path.repository_id=workspace.planning_store_repository_id AND path.observed_until IS NULL
          LEFT JOIN work_item_states state ON state.work_item_id=item.id WHERE item.id=?1
          GROUP BY workspace.id,item.status,state.revision,document.id,document.relative_path,document.content_hash,path.path",
@@ -731,7 +749,7 @@ mod tests {
         WorkItemStatus, WorkspaceId,
     };
 
-    use super::{WorkItemStateService, timestamp};
+    use super::{WorkItemStateService, read_projection_view, timestamp};
     use crate::planning_store::{DocumentFrontMatter, PlanningStore};
     use crate::storage::SqliteStore;
 
@@ -742,6 +760,7 @@ mod tests {
         relative_path: std::path::PathBuf,
         workspace_id: WorkspaceId,
         work_item_id: workboard_core::WorkItemId,
+        checkout_id: workboard_core::CheckoutId,
         token: String,
         at: OffsetDateTime,
     }
@@ -842,6 +861,7 @@ mod tests {
                 relative_path,
                 workspace_id,
                 work_item_id,
+                checkout_id,
                 token,
                 at: at_value,
             }
@@ -945,19 +965,33 @@ mod tests {
             .read(fixture.work_item_id)
             .expect("state view");
         assert_eq!(view.state, Some(outcome.state));
-        let actor: String = fixture
+        let (actor, recorded_checkout): (String, String) = fixture
             .store
             .read(|connection| {
                 connection
                     .query_row(
-                        "SELECT actor_kind FROM work_item_state_updates WHERE id=?1",
+                        "SELECT actor_kind, checkout_id FROM work_item_state_updates WHERE id=?1",
                         [outcome.checkpoint_id.to_string()],
-                        |row| row.get(0),
+                        |row| Ok((row.get(0)?, row.get(1)?)),
                     )
                     .map_err(Into::into)
             })
             .expect("history actor");
         assert_eq!(actor, "managed_session");
+        assert_eq!(recorded_checkout, fixture.checkout_id.to_string());
+        let integrated_checkout: String = fixture
+            .store
+            .read(|connection| {
+                connection
+                    .query_row(
+                        "SELECT source_checkout_id FROM work_item_integrations WHERE work_item_id=?1",
+                        [fixture.work_item_id.to_string()],
+                        |row| row.get(0),
+                    )
+                    .map_err(Into::into)
+            })
+            .expect("managed integration source");
+        assert_eq!(integrated_checkout, fixture.checkout_id.to_string());
         let unauthorized = fixture.request("wrong-token");
         assert_eq!(
             WorkItemStateService::new(&mut fixture.store)
@@ -1097,5 +1131,27 @@ mod tests {
             )
             .expect_err("changed document");
         assert_eq!(error.code(), "planning_document_concurrent_edit");
+    }
+
+    #[test]
+    fn authoritative_read_rejects_a_missing_planning_store_path() {
+        let mut fixture = Fixture::new();
+        fixture
+            .store
+            .write(|transaction| {
+                transaction.execute(
+                    "UPDATE repository_paths SET observed_until=?1 WHERE observed_until IS NULL",
+                    [timestamp(OffsetDateTime::now_utc())],
+                )?;
+                Ok(())
+            })
+            .expect("retire planning-store path");
+
+        assert_eq!(
+            read_projection_view(&fixture.store, fixture.work_item_id)
+                .expect_err("missing authority")
+                .code(),
+            "work_item_not_found"
+        );
     }
 }
