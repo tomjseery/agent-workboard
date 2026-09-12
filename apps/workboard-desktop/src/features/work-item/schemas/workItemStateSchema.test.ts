@@ -37,5 +37,6 @@ describe("workItemStateSchema", () => {
 
   it("rejects a transition not accepted from the authoritative status", () => {
     expect(createWorkItemStateSchema("backlog").safeParse(valid).success).toBe(false);
+    expect(createWorkItemStateSchema("cancelled").safeParse({ ...valid, status: "cancelled", terminalIntent: "cancel" }).success).toBe(false);
   });
 });

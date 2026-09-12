@@ -529,7 +529,10 @@ fn work_item_actions(
     .map(|code| {
         let unavailable_reason = match code {
             protocol::CommandCode::CheckpointWorkItem
-                if status == core::WorkItemStatus::Done =>
+                if matches!(
+                    status,
+                    core::WorkItemStatus::Done | core::WorkItemStatus::Cancelled
+                ) =>
             {
                 unavailable(
                     "work_item_terminal",

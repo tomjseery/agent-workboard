@@ -597,7 +597,7 @@ live Work item was mutated. The isolated planning-store integration test perform
 the actual Git-backed state update and proves revision increment, authoritative
 reprojection and idempotent lost-response replay.
 
-The production build currently reports a 592.32 kB JavaScript chunk, above the
+The production build currently reports a 593.27 kB JavaScript chunk, above the
 500 kB warning threshold. Item 10 remains open until route/feature splitting and
 the complete packaging, accessibility, security and performance acceptance gates
 below are satisfied.
@@ -781,7 +781,7 @@ Remaining delivery gates are:
    provider-profile selection, isolated additional-writer fan-out and close.
 2. Manual Work-item creation/edit remains unavailable because Workboard advertises
    no accepted planning mutation for it; Desktop surfaces that exact gate.
-3. Item 10 needs code splitting for the 592.32 kB production chunk, a proved
+3. Item 10 needs code splitting for the 593.27 kB production chunk, a proved
    structured-state backup/restore or deterministic reconstruction path, and the
    full security, accessibility, performance, package lifecycle and rollback matrix.
 

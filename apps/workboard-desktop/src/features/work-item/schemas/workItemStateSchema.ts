@@ -44,7 +44,7 @@ const transitions = {
   blocked: ["blocked", "ready", "in_progress", "review", "cancelled"],
   review: ["review", "in_progress", "blocked", "cancelled"],
   done: [],
-  cancelled: ["cancelled"],
+  cancelled: [],
 } as const satisfies Record<WorkItemStatus, readonly WorkItemStatus[]>;
 
 export function allowedWorkItemStatuses(status: WorkItemStatus): readonly WorkItemStatus[] {

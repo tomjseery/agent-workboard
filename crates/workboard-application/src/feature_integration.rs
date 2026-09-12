@@ -831,13 +831,16 @@ where
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
+    use std::process::Command;
 
     use rusqlite::params;
     use tempfile::TempDir;
     use time::OffsetDateTime;
     use workboard_core::{
-        CheckoutId, DocumentId, EpicId, FeatureId, RepositoryId, WorkItemId, WorkItemStatus,
-        WorkspaceId,
+        CheckoutId, DocumentId, DocumentKind, EpicId, FeatureId, NextActionKind, RepositoryId,
+        Slug, WORK_ITEM_STATE_SCHEMA_VERSION, WorkItemDeliveryState, WorkItemDeliveryStatus,
+        WorkItemId, WorkItemNextAction, WorkItemReviewState, WorkItemReviewStatus,
+        WorkItemStateUpdate, WorkItemStatus, WorkItemTerminalIntent, WorkspaceId,
     };
 
     use super::{
@@ -845,7 +848,9 @@ mod tests {
         IntegrationGit, ResolvedWorktree,
     };
     use crate::AppError;
+    use crate::planning_store::{DocumentFrontMatter, PlanningStore};
     use crate::storage::SqliteStore;
+    use crate::work_item_state::WorkItemStateService;
     use crate::work_projection::WorkProjectionService;
 
     struct FakeGit {
@@ -929,12 +934,52 @@ mod tests {
         let target_path = directory.path().join("feature");
         let root_path = directory.path().join("root");
         let middle_path = directory.path().join("middle");
+        let planning_path = directory.path().join("planning");
         let observed_at = OffsetDateTime::parse(
             "2026-08-30T12:00:00Z",
             &time::format_description::well_known::Rfc3339,
         )
         .expect("timestamp");
         let now = observed_at.unix_timestamp_nanos().to_string();
+        let planning_store = PlanningStore::create_or_link(&planning_path).expect("planning store");
+        for arguments in [
+            ["config", "user.name", "Workboard Test"],
+            ["config", "user.email", "workboard@example.invalid"],
+        ] {
+            assert!(
+                Command::new("git")
+                    .arg("-C")
+                    .arg(&planning_path)
+                    .args(arguments)
+                    .status()
+                    .expect("configure Git")
+                    .success()
+            );
+        }
+        let mut documents = Vec::new();
+        for (slug, status) in [
+            ("root", WorkItemStatus::Review),
+            ("middle", WorkItemStatus::Review),
+            ("leaf", WorkItemStatus::Ready),
+        ] {
+            let document_id = DocumentId::generate();
+            let relative_path = std::path::PathBuf::from(format!("work-items/{slug}.md"));
+            let published = planning_store
+                .publish_new(
+                    &relative_path,
+                    &DocumentFrontMatter {
+                        id: document_id,
+                        kind: DocumentKind::WorkItem,
+                        key: format!("integration/{slug}"),
+                        status: Some(status),
+                        repositories: vec![Slug::new("code").expect("repository slug")],
+                    },
+                    &format!("# {slug}\n"),
+                    &format!("Add {slug} Work item"),
+                )
+                .expect("publish Work item");
+            documents.push((slug, document_id, relative_path, published));
+        }
         store
             .write(|transaction| {
                 transaction.execute(
@@ -966,7 +1011,7 @@ mod tests {
                     params![
                         workboard_core::RepositoryPathId::generate().to_string(),
                         planning_repository_id.to_string(),
-                        directory.path().to_string_lossy(),
+                        planning_path.to_string_lossy(),
                         now,
                     ],
                 )?;
@@ -985,6 +1030,10 @@ mod tests {
                     (1, middle_id, "middle", "review"),
                     (2, leaf_id, "leaf", "ready"),
                 ] {
+                    let document = documents
+                        .iter()
+                        .find(|(candidate, _, _, _)| *candidate == slug)
+                        .expect("published document");
                     transaction.execute(
                         "INSERT INTO work_items (
                              id, feature_id, key, slug, title, status, created_at, proposal_order
@@ -1010,11 +1059,22 @@ mod tests {
                              content_hash, observed_at
                          ) VALUES (?1, ?2, ?3, 'work_item', ?4, ?5, ?6)",
                         params![
-                            DocumentId::generate().to_string(),
+                            document.1.to_string(),
                             planning_repository_id.to_string(),
                             work_item_id.to_string(),
-                            format!("work-items/{slug}.md"),
-                            "0".repeat(64),
+                            document.2.to_string_lossy(),
+                            document.3.content_hash,
+                            now,
+                        ],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO document_revisions (
+                             document_id, revision, content_hash, observed_commit, observed_at
+                         ) VALUES (?1, 1, ?2, ?3, ?4)",
+                        params![
+                            document.1.to_string(),
+                            document.3.content_hash,
+                            document.3.observed_commit,
                             now,
                         ],
                     )?;
@@ -1089,6 +1149,21 @@ mod tests {
                         now,
                     ],
                 )?;
+                for (work_item_id, checkout_id) in
+                    [(root_id, root_checkout_id), (middle_id, middle_checkout_id)]
+                {
+                    transaction.execute(
+                        "INSERT INTO work_item_checkout_overrides (
+                             work_item_id, repository_id, checkout_id, assigned_at
+                         ) VALUES (?1, ?2, ?3, ?4)",
+                        params![
+                            work_item_id.to_string(),
+                            repository_id.to_string(),
+                            checkout_id.to_string(),
+                            now,
+                        ],
+                    )?;
+                }
                 transaction.execute(
                     "INSERT INTO work_item_integrations (
                          work_item_id, repository_id, source_checkout_id, source_head,
@@ -1107,6 +1182,39 @@ mod tests {
                 Ok(())
             })
             .expect("seed integration fixture");
+        for (work_item_id, key) in [(root_id, "root"), (middle_id, "middle")] {
+            WorkItemStateService::new(&mut store)
+                .update_human(
+                    workspace_id,
+                    WorkItemStateUpdate {
+                        schema_version: WORK_ITEM_STATE_SCHEMA_VERSION,
+                        work_item_id,
+                        expected_revision: 0,
+                        expected_document_revision: 1,
+                        current_state: "Implementation and review are complete.".to_owned(),
+                        next_action: WorkItemNextAction {
+                            kind: NextActionKind::Delivery,
+                            description: "Integrate the accepted branch.".to_owned(),
+                        },
+                        blockers: vec![],
+                        decisions: vec![],
+                        verification: vec![],
+                        review: WorkItemReviewState {
+                            status: WorkItemReviewStatus::Accepted,
+                            evidence: vec!["Review accepted.".to_owned()],
+                        },
+                        delivery: WorkItemDeliveryState {
+                            status: WorkItemDeliveryStatus::Ready,
+                            evidence: vec![],
+                        },
+                        status: WorkItemStatus::Review,
+                        terminal_intent: Some(WorkItemTerminalIntent::Complete),
+                        idempotency_key: format!("integration-fixture-{key}"),
+                    },
+                    observed_at,
+                )
+                .expect("publish structured review state");
+        }
         Fixture {
             _directory: directory,
             store,
@@ -1158,7 +1266,7 @@ mod tests {
             )
             .expect("integrate accepted branches");
 
-        assert_eq!(outcome.status, "completed");
+        assert_eq!(outcome.status, "completed", "{outcome:#?}");
         assert_eq!(outcome.steps[0].work_item_id, fixture.root_id);
         assert_eq!(outcome.steps[0].expected_target_head, "base");
         assert_eq!(
