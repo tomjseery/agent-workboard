@@ -14,7 +14,7 @@ use workboard_core::{ConversationId, LaunchLeaseId, WorkspaceId};
 
 use crate::AppError;
 
-pub(crate) const CURRENT_SCHEMA_VERSION: i64 = 43;
+pub(crate) const CURRENT_SCHEMA_VERSION: i64 = 44;
 const CLIENT_EVENT_JOURNAL_SCHEMA_CHECKSUM: &str = "agent-workboard-client-event-journal-v1";
 const BOARD_VIEW_DEFINITION_SCHEMA_CHECKSUM: &str = "agent-workboard-board-view-definition-v1";
 const FOUNDATION_SCHEMA_CHECKSUM: &str = "agent-workboard-foundation-v1";
@@ -33,6 +33,59 @@ const FEATURE_BRANCH_INTEGRATION_SCHEMA_CHECKSUM: &str =
     "agent-workboard-feature-branch-integration-v1";
 const FEATURE_WORK_ITEM_PROPOSAL_SCHEMA_CHECKSUM: &str =
     "agent-workboard-feature-work-item-proposal-v1";
+const WORK_ITEM_STATE_SCHEMA_CHECKSUM: &str = "agent-workboard-work-item-state-v1";
+const WORK_ITEM_STATE_SQL: &str = r#"
+CREATE TABLE work_item_state_updates (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE RESTRICT,
+    work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE RESTRICT,
+    actor_kind TEXT NOT NULL CHECK (actor_kind IN ('managed_session', 'local_human')),
+    session_id TEXT REFERENCES native_sessions(id) ON DELETE RESTRICT,
+    checkout_id TEXT REFERENCES checkouts(id) ON DELETE RESTRICT,
+    idempotency_key TEXT NOT NULL UNIQUE CHECK (idempotency_key <> ''),
+    request_hash TEXT NOT NULL CHECK (length(request_hash) = 64),
+    expected_revision INTEGER NOT NULL CHECK (expected_revision >= 0),
+    expected_document_revision INTEGER NOT NULL CHECK (expected_document_revision > 0),
+    expected_document_hash TEXT NOT NULL CHECK (length(expected_document_hash) = 64),
+    candidate_document_hash TEXT NOT NULL CHECK (length(candidate_document_hash) = 64),
+    state_json TEXT NOT NULL CHECK (state_json <> ''),
+    publication_status TEXT NOT NULL CHECK (
+        publication_status IN ('pending', 'reconciliation_required', 'completed')
+    ),
+    published_commit TEXT,
+    failure TEXT,
+    recorded_at TEXT NOT NULL,
+    completed_at TEXT,
+    CHECK (
+        (actor_kind = 'managed_session' AND session_id IS NOT NULL AND checkout_id IS NOT NULL)
+        OR (actor_kind = 'local_human' AND session_id IS NULL AND checkout_id IS NULL)
+    )
+);
+CREATE INDEX work_item_state_updates_item
+    ON work_item_state_updates (work_item_id, recorded_at, id);
+CREATE INDEX work_item_state_updates_reconciliation
+    ON work_item_state_updates (publication_status, recorded_at);
+CREATE TRIGGER work_item_state_updates_completed_immutable
+BEFORE UPDATE ON work_item_state_updates
+WHEN OLD.publication_status = 'completed'
+BEGIN
+    SELECT RAISE(ABORT, 'completed Work-item state history is immutable');
+END;
+CREATE TRIGGER work_item_state_updates_no_delete
+BEFORE DELETE ON work_item_state_updates
+BEGIN
+    SELECT RAISE(ABORT, 'Work-item state history cannot be deleted');
+END;
+CREATE TABLE work_item_states (
+    work_item_id TEXT PRIMARY KEY REFERENCES work_items(id) ON DELETE RESTRICT,
+    schema_version INTEGER NOT NULL CHECK (schema_version > 0),
+    revision INTEGER NOT NULL CHECK (revision > 0),
+    document_revision INTEGER NOT NULL CHECK (document_revision > 0),
+    state_json TEXT NOT NULL CHECK (state_json <> ''),
+    checkpoint_id TEXT NOT NULL UNIQUE REFERENCES work_item_state_updates(id) ON DELETE RESTRICT,
+    updated_at TEXT NOT NULL
+);
+"#;
 const FEATURE_WORK_ITEM_PROPOSAL_SQL: &str = r#"
 CREATE TABLE feature_work_item_proposals (
     id TEXT PRIMARY KEY,
@@ -2979,6 +3032,12 @@ fn migrate(connection: &Connection) -> Result<(), AppError> {
              UNIQUE (workspace_id, title)
          );",
     )?;
+    apply_migration(
+        connection,
+        44,
+        WORK_ITEM_STATE_SCHEMA_CHECKSUM,
+        WORK_ITEM_STATE_SQL,
+    )?;
     Ok(())
 }
 
@@ -3941,7 +4000,11 @@ fn health(connection: &Connection) -> Result<StorageHealth, AppError> {
 pub(crate) fn drop_workspace_planning_schema(connection: &Connection) {
     connection
         .execute_batch(
-            r#"DROP TABLE board_view_definitions;
+            r#"DROP TABLE work_item_states;
+            DROP TABLE work_item_state_updates;
+            DELETE FROM schema_migrations WHERE version = 44;
+
+            DROP TABLE board_view_definitions;
             DELETE FROM schema_migrations WHERE version = 43;
 
             DROP TRIGGER workspaces_create_projection_revision;

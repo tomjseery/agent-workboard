@@ -161,7 +161,7 @@ const CHECKPOINT: CapabilityAsset = CapabilityAsset {
         WorkflowOperation::ReadHierarchy,
         WorkflowOperation::CheckpointWorkItem,
     ],
-    guidance: "Checkpoint when durable knowledge or the next action materially changes: a verification gate passed, a blocker was found, or the work became reviewable. Do not checkpoint routine progress.\n\nA checkpoint carries a summary, the next action kind, and an idempotency key. Replaying the same key with the same content returns the original outcome; replaying it with different content is rejected.",
+    guidance: "Checkpoint when durable knowledge or the next action materially changes: a verification gate passed, a blocker was found, or the work became reviewable. Do not checkpoint routine progress.\n\nRead the current Work-item state and document revisions first. Submit the complete typed current state, concrete next action, blockers, decisions, verification, review, delivery, status or terminal intent, and an idempotency key. Replaying the same key with the same content returns the original outcome; stale revisions and changed replays are rejected.",
 };
 
 const REVIEW: CapabilityAsset = CapabilityAsset {
