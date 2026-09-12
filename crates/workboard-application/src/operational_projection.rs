@@ -226,11 +226,7 @@ impl WorkboardApplication {
             (Some(_), Some(_), _) => protocol::SessionRestoreState::Removed,
         };
         let checkout_id = parse_optional_id(row.checkout_id.as_deref())?;
-        let resumability = match (row.source_count, row.checkout_availability.as_deref()) {
-            (0, _) => protocol::SessionResumability::Missing,
-            (_, Some("missing" | "deleted" | "replaced")) => protocol::SessionResumability::Missing,
-            _ => protocol::SessionResumability::Unknown,
-        };
+        let resumability = session_resumability(&row.resumability)?;
         let role = session_role(&row.role)?;
         let primary_writer = if role != protocol::ManagedSessionRole::WorkItemExecution {
             protocol::PrimaryWriterEvidence::NotApplicable
@@ -370,12 +366,20 @@ impl WorkboardApplication {
                     managed.managed_until, association.epic_id, association.feature_id,
                     association.work_item_id, restore.added_at, restore.removed_at,
                     restore.remove_reason, live.status, live.observed_at, live.expires_at,
-                    checkout.availability,
                     (SELECT source.snapshot_json FROM native_session_sources source
                      WHERE source.session_id = session.id AND source.missing = 0
                      ORDER BY source.observed_at DESC LIMIT 1),
-                    (SELECT COUNT(*) FROM native_session_sources source
-                     WHERE source.session_id = session.id AND source.missing = 0)
+                    CASE
+                      WHEN EXISTS (
+                        SELECT 1 FROM native_session_sources source
+                        WHERE source.session_id = session.id AND source.missing = 0
+                      ) THEN 'validated'
+                      WHEN EXISTS (
+                        SELECT 1 FROM native_session_sources source
+                        WHERE source.session_id = session.id
+                      ) THEN 'missing'
+                      ELSE 'unknown'
+                    END
              FROM native_sessions session
              JOIN managed_sessions managed ON managed.id = (
                  SELECT candidate.id FROM managed_sessions candidate
@@ -410,9 +414,8 @@ impl WorkboardApplication {
                             live_status: row.get(11)?,
                             live_observed_at: row.get(12)?,
                             live_expires_at: row.get(13)?,
-                            checkout_availability: row.get(14)?,
-                            snapshot_json: row.get(15)?,
-                            source_count: row.get::<_, i64>(16)? as usize,
+                            snapshot_json: row.get(14)?,
+                            resumability: row.get(15)?,
                         })
                     },
                 )
@@ -506,9 +509,8 @@ struct ManagedSessionRow {
     live_status: Option<String>,
     live_observed_at: Option<String>,
     live_expires_at: Option<String>,
-    checkout_availability: Option<String>,
     snapshot_json: Option<String>,
-    source_count: usize,
+    resumability: String,
 }
 
 fn repository_reference(repository: &core::Repository) -> protocol::RepositoryReference {
@@ -632,12 +634,22 @@ fn provider(value: &str) -> Result<protocol::Provider, AppError> {
 
 fn session_role(value: &str) -> Result<protocol::ManagedSessionRole, AppError> {
     match value {
+        "workspace_planning" => Ok(protocol::ManagedSessionRole::WorkspacePlanning),
         "epic_navigation" => Ok(protocol::ManagedSessionRole::EpicNavigation),
         "feature_planning" => Ok(protocol::ManagedSessionRole::FeaturePlanning),
         "work_item_execution" => Ok(protocol::ManagedSessionRole::WorkItemExecution),
         "debugging" => Ok(protocol::ManagedSessionRole::Debugging),
         "review" => Ok(protocol::ManagedSessionRole::Review),
         _ => Err(AppError::Domain("invalid managed session role".to_owned())),
+    }
+}
+
+fn session_resumability(value: &str) -> Result<protocol::SessionResumability, AppError> {
+    match value {
+        "validated" => Ok(protocol::SessionResumability::Validated),
+        "missing" => Ok(protocol::SessionResumability::Missing),
+        "unknown" => Ok(protocol::SessionResumability::Unknown),
+        _ => Err(AppError::Domain("invalid session resumability".to_owned())),
     }
 }
 
@@ -781,11 +793,16 @@ where
 }
 
 fn parse_timestamp(value: &str) -> Result<OffsetDateTime, AppError> {
-    OffsetDateTime::parse(value, &Rfc3339).map_err(|error| AppError::Domain(error.to_string()))
+    let nanoseconds = value
+        .parse::<i128>()
+        .map_err(|error| AppError::Domain(error.to_string()))?;
+    OffsetDateTime::from_unix_timestamp_nanos(nanoseconds)
+        .map_err(|error| AppError::Domain(error.to_string()))
 }
 
 fn parse_timestamp_sql(value: &str) -> rusqlite::Result<OffsetDateTime> {
-    OffsetDateTime::parse(value, &Rfc3339).map_err(to_sql_error)
+    let nanoseconds = value.parse::<i128>().map_err(to_sql_error)?;
+    OffsetDateTime::from_unix_timestamp_nanos(nanoseconds).map_err(to_sql_error)
 }
 
 fn to_sql_error(error: impl std::error::Error + Send + Sync + 'static) -> rusqlite::Error {
@@ -804,8 +821,8 @@ mod tests {
 
     #[test]
     fn liveness_states_remain_distinct_and_absence_is_not_stopped() {
-        let observed_at = "2999-08-31T12:00:00Z";
-        let expires_at = "2999-08-31T12:05:00Z";
+        let observed_at = stored_timestamp("2999-08-31T12:00:00Z");
+        let expires_at = stored_timestamp("2999-08-31T12:05:00Z");
         let cases = [
             ("active", protocol::SessionLiveState::Active),
             ("idle", protocol::SessionLiveState::Idle),
@@ -816,7 +833,7 @@ mod tests {
         ];
         for (status, expected) in cases {
             assert_eq!(
-                liveness(Some(status), Some(observed_at), Some(expires_at))
+                liveness(Some(status), Some(&observed_at), Some(&expires_at))
                     .expect("liveness")
                     .state,
                 expected
@@ -832,8 +849,8 @@ mod tests {
     fn stale_liveness_becomes_unknown_without_erasing_observed_state() {
         let projection = liveness(
             Some("active"),
-            Some("2020-01-01T12:00:00Z"),
-            Some("2020-01-01T12:05:00Z"),
+            Some(&stored_timestamp("2020-01-01T12:00:00Z")),
+            Some(&stored_timestamp("2020-01-01T12:05:00Z")),
         )
         .expect("stale liveness");
         assert_eq!(projection.state, protocol::SessionLiveState::Unknown);
@@ -843,6 +860,13 @@ mod tests {
             projection.observed_at.as_deref(),
             Some("2020-01-01T12:00:00Z")
         );
+    }
+
+    fn stored_timestamp(value: &str) -> String {
+        OffsetDateTime::parse(value, &Rfc3339)
+            .expect("timestamp")
+            .unix_timestamp_nanos()
+            .to_string()
     }
 
     #[test]
@@ -879,5 +903,21 @@ mod tests {
                 protocol::EvidenceState::Unknown
             );
         }
+    }
+
+    #[test]
+    fn session_resumability_preserves_source_evidence() {
+        assert_eq!(
+            session_resumability("validated").expect("validated resumability"),
+            protocol::SessionResumability::Validated
+        );
+        assert_eq!(
+            session_resumability("missing").expect("missing resumability"),
+            protocol::SessionResumability::Missing
+        );
+        assert_eq!(
+            session_resumability("unknown").expect("unknown resumability"),
+            protocol::SessionResumability::Unknown
+        );
     }
 }

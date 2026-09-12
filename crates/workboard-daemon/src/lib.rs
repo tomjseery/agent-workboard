@@ -238,12 +238,6 @@ mod tests {
                 },
                 "session_follow_up_unavailable",
             ),
-            (
-                CommandOperation::RecoverSession {
-                    session_id: SessionId::generate(),
-                },
-                "session_recovery_unavailable",
-            ),
         ];
 
         for (command, expected_reason) in unavailable {
@@ -299,6 +293,7 @@ mod tests {
                 CommandCode::RequestFeatureRevision,
                 CommandCode::StartSession,
                 CommandCode::ResumeSession,
+                CommandCode::RecoverSession,
             ]
         );
         assert!(
@@ -313,9 +308,24 @@ mod tests {
                         | CommandCode::RequestFeatureRevision
                         | CommandCode::StartSession
                         | CommandCode::ResumeSession
+                        | CommandCode::RecoverSession
                 ))
                 .all(|capability| !capability.available)
         );
+        let recovery = client
+            .execute(
+                ClientWorkspaceId::from_uuid(*workspace_id.as_uuid()),
+                0,
+                "recover-missing-session".to_owned(),
+                CommandOperation::RecoverSession {
+                    session_id: SessionId::generate(),
+                },
+            )
+            .expect_err("missing recovery session");
+        let workboard_client::ClientError::Remote(error) = recovery else {
+            panic!("recovery must return an application error");
+        };
+        assert_eq!(error.code, "conversation_not_found");
         let snapshot = client
             .board_snapshot(ClientWorkspaceId::from_uuid(*workspace_id.as_uuid()))
             .expect("board snapshot");

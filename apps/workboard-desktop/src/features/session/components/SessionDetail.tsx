@@ -15,7 +15,7 @@ import type {
   WorkspaceId,
 } from "../../../core/contracts";
 import { formatTimestamp } from "../../../lib/dates";
-import { useRecoveryPreview, useSession } from "../hooks/useSession";
+import { useRecovery, useSession } from "../hooks/useSession";
 
 const liveLabels: Record<SessionLiveState, string> = {
   active: "Active",
@@ -129,7 +129,7 @@ export function SessionDetail({ workspaceId, sessionId }: { workspaceId: Workspa
 }
 
 function RecoveryPanel({ workspaceId, sessionId }: { workspaceId: WorkspaceId; sessionId: SessionId }) {
-  const recovery = useRecoveryPreview(workspaceId, sessionId);
+  const recovery = useRecovery(workspaceId, sessionId);
   if (recovery.isLoading) return <section aria-label="Recovery preview"><p role="status">Loading recovery preview...</p></section>;
   if (recovery.isDisconnected) return <RetryAlert message="Recovery preview is disconnected." actionLabel="Retry recovery panel" onRetry={() => void recovery.retry()} />;
   if (recovery.error != null || recovery.projection === undefined) {
@@ -147,6 +147,19 @@ function RecoveryPanel({ workspaceId, sessionId }: { workspaceId: WorkspaceId; s
         </div>
         {projection.stale && <p role="alert" className="mt-3">Recovery evidence is stale.</p>}
         {recovery.isPartial && <p role="alert" className="mt-3">Some recovery evidence is partial.</p>}
+        {recovery.isRecovering && <p role="status" className="mt-3">Workboard is recovering the exact managed session…</p>}
+        {recovery.outcome?.error != null && (
+          <Alert role="alert" className="mt-3">
+            <p>{recovery.outcome.error.message}</p>
+            <p className="text-xs text-muted-foreground">{recovery.outcome.error.code}</p>
+          </Alert>
+        )}
+        {recovery.recoveryError != null && (
+          <Alert role="alert" className="mt-3">The recovery request could not reach Workboard. Review the refreshed preview before retrying.</Alert>
+        )}
+        {recovery.outcome?.result?.type === "work_item_detail" && (
+          <p role="status" className="mt-3">Recovery completed and authoritative Work-item evidence was refreshed.</p>
+        )}
         <p className="mt-3 text-lg font-medium">{recoveryLabels[projection.disposition]}</p>
         {projection.conflicts.length > 0 && (
           <ul className="mt-3 space-y-2">
@@ -157,7 +170,15 @@ function RecoveryPanel({ workspaceId, sessionId }: { workspaceId: WorkspaceId; s
             ))}
           </ul>
         )}
-        <Button type="button" onClick={() => void recovery.retry()} className="mt-4">Refresh recovery panel</Button>
+        <div className="mt-4 flex flex-wrap gap-2">
+          {(projection.disposition === "ready_present" || projection.disposition === "ready_recreate") && (
+            <Button type="button" disabled={recovery.isRecovering || projection.stale} onClick={() => recovery.recover(projection.revision)}>
+              {recovery.isRecovering ? "Recovering…" : "Recover session"}
+            </Button>
+          )}
+          <Button type="button" variant="outline" disabled={recovery.isRecovering} onClick={() => void recovery.retry()}>Refresh recovery panel</Button>
+        </div>
+        {projection.stale && <p className="mt-2 text-sm text-muted-foreground">Refresh stale evidence before recovery.</p>}
       </section>
     </Card>
   );

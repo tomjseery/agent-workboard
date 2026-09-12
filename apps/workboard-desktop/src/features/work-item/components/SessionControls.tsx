@@ -1,7 +1,8 @@
+import { Link } from "@tanstack/react-router";
 import { useId, useState } from "react";
 
 import { Alert } from "../../../components/ui/alert";
-import { Button } from "../../../components/ui/button";
+import { buttonVariants, Button } from "../../../components/ui/button";
 import { Card, CardTitle } from "../../../components/ui/card";
 import { Label } from "../../../components/ui/label";
 import { Radio } from "../../../components/ui/radio";
@@ -16,6 +17,7 @@ import type {
   WorkItemId,
   WorkspaceId,
 } from "../../../core/contracts";
+import { cn } from "../../../lib/utils";
 import { useResumeSessionMutation, useStartSessionMutation } from "../hooks/useSessionControlMutations";
 
 interface SessionControlsProps {
@@ -176,6 +178,15 @@ export function SessionControls({ workspaceId, workItemId, sessions, repositorie
                             ? "Already running. Workboard will not launch a duplicate."
                             : "No validated resume evidence for this session."}
                         </span>
+                      )}
+                      {recoverAction?.available === true && isResumable(session) && (
+                        <Link
+                          to="/workspaces/$workspaceId/sessions/$sessionId"
+                          params={{ workspaceId, sessionId: session.id }}
+                          className={cn(buttonVariants({ variant: "outline", size: "sm" }), "mt-2")}
+                        >
+                          Review recovery
+                        </Link>
                       )}
                     </span>
                   </label>

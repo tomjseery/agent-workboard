@@ -30,6 +30,31 @@ pub struct ProposalCommandOutcome {
     pub partial_outcomes: Vec<protocol::PartialOutcome>,
 }
 
+fn wait_for_session_binding(
+    application: &mut WorkboardApplication,
+    intent_id: core::LaunchIntentId,
+) -> Result<(), AppError> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    loop {
+        if application
+            .session_launch()
+            .binding_for_intent(intent_id)?
+            .is_some()
+        {
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(AppError::External {
+                code: "launch_binding_pending".to_owned(),
+                message: format!(
+                    "native process launched but no exact hook binding arrived for intent {intent_id}"
+                ),
+            });
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
 fn proposal_event(
     workspace_id: core::WorkspaceId,
     revision: u64,
@@ -670,6 +695,189 @@ impl WorkboardApplication {
         request_id: protocol::RequestId,
         session_id: core::ConversationId,
     ) -> Result<SessionCommandOutcome, AppError> {
+        self.resume_client_session_operation(
+            workspace_id,
+            expected_revision,
+            idempotency_key,
+            request_id,
+            session_id,
+            "resume_session",
+        )
+        .map(|(outcome, _)| outcome)
+    }
+
+    pub fn recover_client_session(
+        &mut self,
+        workspace_id: core::WorkspaceId,
+        expected_revision: u64,
+        idempotency_key: &str,
+        request_id: protocol::RequestId,
+        session_id: core::ConversationId,
+    ) -> Result<SessionCommandOutcome, AppError> {
+        let now = OffsetDateTime::now_utc();
+        let current_revision = self.projection_revision(workspace_id)?;
+        if current_revision != expected_revision {
+            return Err(AppError::External {
+                code: "stale_revision".to_owned(),
+                message: format!(
+                    "Workspace revision {expected_revision} is stale; current revision is {current_revision}"
+                ),
+            });
+        }
+        let availability = crate::recovery::ProviderAvailability {
+            claude: crate::native_launch::native_executable_available(
+                &crate::native_launch::default_native_executable(core::Tool::Claude),
+            ),
+            codex: crate::native_launch::native_executable_available(
+                &crate::native_launch::default_native_executable(core::Tool::Codex),
+            ),
+        };
+        let preview = self
+            .recovery()
+            .preview(workspace_id, None, now, availability)?;
+        let entry = preview
+            .entries
+            .iter()
+            .find(|entry| entry.session_id == session_id)
+            .cloned()
+            .ok_or(AppError::ConversationNotFound)?;
+        let core::HierarchyOwner::WorkItem(work_item_id) = entry.owner else {
+            return Err(AppError::ConversationNotResumable(
+                "only Work-item sessions can be recovered from Desktop".to_owned(),
+            ));
+        };
+        let attempt_id =
+            self.recovery()
+                .begin_attempt(&preview, &[session_id], idempotency_key, now)?;
+
+        if let Some(prior) = self.recovery().recorded_outcome(attempt_id, session_id)? {
+            match prior.status {
+                crate::recovery::RecoveryOutcomeStatus::Bound
+                | crate::recovery::RecoveryOutcomeStatus::Skipped => {
+                    return Ok(SessionCommandOutcome {
+                        detail: Box::new(self.client_work_item_detail(workspace_id, work_item_id)?),
+                    });
+                }
+                crate::recovery::RecoveryOutcomeStatus::Launched
+                | crate::recovery::RecoveryOutcomeStatus::Failed
+                    if prior.launch_intent_id.is_some() =>
+                {
+                    return Err(AppError::External {
+                        code: "launch_reconciliation_required".to_owned(),
+                        message: "an earlier recovery launch crossed the process boundary and will not be duplicated".to_owned(),
+                    });
+                }
+                _ => {}
+            }
+        }
+
+        match &entry.disposition {
+            crate::recovery::RecoveryDisposition::AlreadyLive => {
+                self.recovery()
+                    .record_outcome(crate::recovery::RecordRecoveryOutcome {
+                        attempt_id,
+                        session_id,
+                        status: crate::recovery::RecoveryOutcomeStatus::Skipped,
+                        launch_intent_id: None,
+                        code: Some("already_live".to_owned()),
+                        message: Some(
+                            "a confirmed live process already owns this session".to_owned(),
+                        ),
+                        observed_at: now,
+                    })?;
+                self.recovery().finish_attempt(attempt_id, now)?;
+                self.record_session_command(
+                    workspace_id,
+                    expected_revision,
+                    &format!("{idempotency_key}:skipped"),
+                    "recover_session",
+                    request_id,
+                    entry.owner,
+                )?;
+                return Ok(SessionCommandOutcome {
+                    detail: Box::new(self.client_work_item_detail(workspace_id, work_item_id)?),
+                });
+            }
+            crate::recovery::RecoveryDisposition::Conflict { code, message } => {
+                self.recovery()
+                    .record_outcome(crate::recovery::RecordRecoveryOutcome {
+                        attempt_id,
+                        session_id,
+                        status: crate::recovery::RecoveryOutcomeStatus::Conflict,
+                        launch_intent_id: None,
+                        code: Some(code.clone()),
+                        message: Some(message.clone()),
+                        observed_at: now,
+                    })?;
+                self.recovery().finish_attempt(attempt_id, now)?;
+                return Err(AppError::CheckoutReconciliation {
+                    code: code.clone(),
+                    message: message.clone(),
+                });
+            }
+            crate::recovery::RecoveryDisposition::ReadyRecreate => {
+                self.recovery().recreate_checkout(&entry, now)?;
+            }
+            crate::recovery::RecoveryDisposition::ReadyPresent => {}
+        }
+
+        let operation_key = format!("{idempotency_key}:launch");
+        let (outcome, intent_id) = self.resume_client_session_operation(
+            workspace_id,
+            expected_revision,
+            &operation_key,
+            request_id,
+            session_id,
+            "recover_session",
+        )?;
+        self.recovery()
+            .record_outcome(crate::recovery::RecordRecoveryOutcome {
+                attempt_id,
+                session_id,
+                status: crate::recovery::RecoveryOutcomeStatus::Launched,
+                launch_intent_id: Some(intent_id),
+                code: None,
+                message: None,
+                observed_at: OffsetDateTime::now_utc(),
+            })?;
+        let binding = wait_for_session_binding(self, intent_id);
+        let (status, code, message) = match &binding {
+            Ok(()) => (
+                crate::recovery::RecoveryOutcomeStatus::Bound,
+                None,
+                Some("restored the exact managed session".to_owned()),
+            ),
+            Err(error) => (
+                crate::recovery::RecoveryOutcomeStatus::Failed,
+                Some(error.code().to_owned()),
+                Some(error.to_string()),
+            ),
+        };
+        self.recovery()
+            .record_outcome(crate::recovery::RecordRecoveryOutcome {
+                attempt_id,
+                session_id,
+                status,
+                launch_intent_id: Some(intent_id),
+                code,
+                message,
+                observed_at: OffsetDateTime::now_utc(),
+            })?;
+        self.recovery()
+            .finish_attempt(attempt_id, OffsetDateTime::now_utc())?;
+        binding?;
+        Ok(outcome)
+    }
+
+    fn resume_client_session_operation(
+        &mut self,
+        workspace_id: core::WorkspaceId,
+        expected_revision: u64,
+        idempotency_key: &str,
+        request_id: protocol::RequestId,
+        session_id: core::ConversationId,
+        operation: &'static str,
+    ) -> Result<(SessionCommandOutcome, core::LaunchIntentId), AppError> {
         let now = OffsetDateTime::now_utc();
         let target = self.managed_session_target(session_id)?;
         let core::HierarchyOwner::WorkItem(work_item_id) = target.owner else {
@@ -734,13 +942,16 @@ impl WorkboardApplication {
             workspace_id,
             expected_revision,
             &format!("{idempotency_key}:resumed"),
-            "resume_session",
+            operation,
             request_id,
             target.owner,
         )?;
-        Ok(SessionCommandOutcome {
-            detail: Box::new(self.client_work_item_detail(workspace_id, work_item_id)?),
-        })
+        Ok((
+            SessionCommandOutcome {
+                detail: Box::new(self.client_work_item_detail(workspace_id, work_item_id)?),
+            },
+            prepared.intent_id,
+        ))
     }
 
     fn record_session_command(

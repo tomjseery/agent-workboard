@@ -53,7 +53,7 @@ function actions(overrides: Partial<Record<string, Partial<AvailableAction>>> = 
     resume_session: { code: "resume_session", available: true, unavailableReason: null, expectedRevision: 41 },
     focus_session: { code: "focus_session", available: false, unavailableReason: { code: "session_focus_unavailable", message: "Focusing a running session is unavailable." }, expectedRevision: 41 },
     follow_up_session: { code: "follow_up_session", available: false, unavailableReason: { code: "session_follow_up_unavailable", message: "Sending a follow-up is unavailable." }, expectedRevision: 41 },
-    recover_session: { code: "recover_session", available: false, unavailableReason: { code: "session_recovery_unavailable", message: "Recovery is unavailable from Desktop." }, expectedRevision: 41 },
+    recover_session: { code: "recover_session", available: false, unavailableReason: { code: "no_recoverable_session", message: "No session has validated recovery evidence." }, expectedRevision: 41 },
   };
   for (const [code, patch] of Object.entries(overrides)) base[code] = { ...base[code], ...patch } as AvailableAction;
   return Object.values(base);
@@ -87,10 +87,11 @@ it("offers Start and nothing to resume when no session is bound", async () => {
 it("resumes the single bound session and also offers Start another", async () => {
   vi.mocked(daemon.execute).mockReset().mockResolvedValue(accepted());
   const only = session("70000000-0000-0000-0000-000000000001");
-  render(<SessionControls workspaceId={workspaceId} workItemId={workItemId} sessions={[only]} repositories={[repository("1", "Service A")]} actions={actions()} revision={41} />);
+  render(<SessionControls workspaceId={workspaceId} workItemId={workItemId} sessions={[only]} repositories={[repository("1", "Service A")]} actions={actions({ recover_session: { available: true, unavailableReason: null } })} revision={41} />);
 
   await expect.element(page.getByText("1 bound session.")).toBeVisible();
   await expect.element(page.getByRole("button", { name: "Start another" })).toBeVisible();
+  await expect.element(page.getByRole("link", { name: "Review recovery" })).toBeVisible();
 
   await userEvent.click(page.getByRole("button", { name: "Resume" }));
   await vi.waitFor(() => expect(daemon.execute).toHaveBeenCalledTimes(1));
@@ -138,7 +139,7 @@ it("requires a repository choice across many repositories and shows every blocke
 
   await expect.element(page.getByText("Focusing a running session is unavailable.")).toBeVisible();
   await expect.element(page.getByText("Sending a follow-up is unavailable.")).toBeVisible();
-  await expect.element(page.getByText("Recovery is unavailable from Desktop.")).toBeVisible();
+  await expect.element(page.getByText("No session has validated recovery evidence.")).toBeVisible();
   expect(daemon.execute).not.toHaveBeenCalled();
 });
 
