@@ -37,7 +37,7 @@ export function WorkItemDetail({ workspaceId, workItemId }: { workspaceId: Works
   if (model.error != null || model.projection === undefined) return <RetryAlert message={model.error?.message ?? "Work-item detail is unavailable."} actionLabel={retryLabel} onRetry={() => void model.retry()} />;
 
   const detail = model.projection;
-  const checkpointGate = detail.availableActions.find((action) => action.code === "checkpoint_work_item")?.unavailableReason;
+  const checkpointAction = detail.availableActions.find((action) => action.code === "checkpoint_work_item");
   const diagnostics = [...detail.diagnostics, ...model.diagnostics];
 
   return (
@@ -86,7 +86,7 @@ export function WorkItemDetail({ workspaceId, workItemId }: { workspaceId: Works
 
       <TextSection id="outcome" title="Outcome and design" content={detail.outcomeDesignSummary} empty="No outcome or design summary is recorded." />
       <DurableSection id="state" title="Current state" section={detail.currentState} empty="No structured current state is recorded." />
-      {checkpointGate == null && (
+      {checkpointAction?.available === true && (
         <WorkItemStateEditor
           key={`${detail.structuredState.state?.revision ?? 0}:${detail.structuredState.documentRevision}`}
           detail={detail}
@@ -215,12 +215,12 @@ export function WorkItemDetail({ workspaceId, workItemId }: { workspaceId: Works
         )}
       </DetailSection>
 
-      {checkpointGate != null && (
+      {checkpointAction?.available !== true && (
         <Card asChild size="compact" className="p-5">
           <aside aria-label="Checkpoint availability">
             <h2 className="font-semibold">Structured checkpoints unavailable</h2>
-            <p className="mt-1">{checkpointGate.message}</p>
-            <p className="mt-1 text-xs text-muted-foreground">{checkpointGate.code}</p>
+            <p className="mt-1">{checkpointAction?.unavailableReason?.message ?? "This daemon did not advertise structured checkpoint editing."}</p>
+            <p className="mt-1 text-xs text-muted-foreground">{checkpointAction?.unavailableReason?.code ?? "checkpoint_not_advertised"}</p>
           </aside>
         </Card>
       )}

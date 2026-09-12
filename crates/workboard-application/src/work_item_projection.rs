@@ -216,7 +216,7 @@ impl WorkboardApplication {
             checkpoint_history,
             sessions,
             diagnostics,
-            available_actions: work_item_actions(revision, &session_actions),
+            available_actions: work_item_actions(revision, row.status, &session_actions),
         })
     }
 
@@ -508,6 +508,7 @@ fn session_action_inputs(
 
 fn work_item_actions(
     revision: u64,
+    status: core::WorkItemStatus,
     sessions: &SessionActionInputs,
 ) -> Vec<protocol::AvailableAction> {
     let unavailable = |code: &str, message: &str| {
@@ -527,6 +528,14 @@ fn work_item_actions(
     .into_iter()
     .map(|code| {
         let unavailable_reason = match code {
+            protocol::CommandCode::CheckpointWorkItem
+                if status == core::WorkItemStatus::Done =>
+            {
+                unavailable(
+                    "work_item_terminal",
+                    "A completed Work item cannot accept another human state update.",
+                )
+            }
             protocol::CommandCode::CheckpointWorkItem => None,
             protocol::CommandCode::StartSession if sessions.has_live => unavailable(
                 "writer_session_active",

@@ -79,3 +79,21 @@ it("fails closed for an incompatible detail without reconstructing checkpoint st
   await expect.element(page.getByRole("alert")).toHaveTextContent("No durable state has been reconstructed locally.");
   expect(page.getByRole("textbox").elements()).toHaveLength(0);
 });
+
+it("keeps the editor absent when the daemon does not advertise checkpointing", async () => {
+  if (fixture.result?.type !== "work_item_detail") throw new Error("Work-item fixture missing");
+  vi.mocked(daemon.workItemDetail).mockReset().mockResolvedValue({
+    ...fixture,
+    result: {
+      ...fixture.result,
+      value: {
+        ...fixture.result.value,
+        availableActions: fixture.result.value.availableActions.filter((action) => action.code !== "checkpoint_work_item"),
+      },
+    },
+  } as never);
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  page.render(<RouterHarness><QueryClientProvider client={queryClient}><WorkItemDetail workspaceId={workspaceId} workItemId={workItemId} /></QueryClientProvider></RouterHarness>);
+  await expect.element(page.getByRole("complementary", { name: "Checkpoint availability" })).toHaveTextContent("did not advertise structured checkpoint editing");
+  expect(page.getByRole("button", { name: "Save durable state" }).elements()).toHaveLength(0);
+});

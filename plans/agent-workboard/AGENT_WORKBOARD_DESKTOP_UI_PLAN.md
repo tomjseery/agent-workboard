@@ -597,10 +597,18 @@ live Work item was mutated. The isolated planning-store integration test perform
 the actual Git-backed state update and proves revision increment, authoritative
 reprojection and idempotent lost-response replay.
 
-The production build currently reports a 591.31 kB JavaScript chunk, above the
+The production build currently reports a 592.32 kB JavaScript chunk, above the
 500 kB warning threshold. Item 10 remains open until route/feature splitting and
 the complete packaging, accessibility, security and performance acceptance gates
 below are satisfied.
+
+Structured state reads now fail closed when the canonical document is missing,
+externally changed or disagrees with SQLite. Document-only reconstruction on a
+fresh machine is not accepted because the current managed section does not carry
+the immutable actor and checkpoint provenance needed to recreate history. Item 10
+must either prove SQLite backup/restore as part of the package lifecycle or extend
+the canonical format with enough provenance for a deterministic reconstruction
+test before treating planning documents alone as a recovery source.
 
 #### Objective
 
@@ -773,8 +781,9 @@ Remaining delivery gates are:
    provider-profile selection, isolated additional-writer fan-out and close.
 2. Manual Work-item creation/edit remains unavailable because Workboard advertises
    no accepted planning mutation for it; Desktop surfaces that exact gate.
-3. Item 10 needs code splitting for the 591.31 kB production chunk and the full
-   security, accessibility, performance, package lifecycle and rollback matrix.
+3. Item 10 needs code splitting for the 592.32 kB production chunk, a proved
+   structured-state backup/restore or deterministic reconstruction path, and the
+   full security, accessibility, performance, package lifecycle and rollback matrix.
 
 The next delivery action is for the backend owners to accept the remaining item
 9 planning/session operations. Desktop can then consume them without inventing
