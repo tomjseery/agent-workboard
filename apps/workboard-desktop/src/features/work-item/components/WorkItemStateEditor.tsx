@@ -9,7 +9,7 @@ import { Select } from "../../../components/ui/select";
 import { Textarea } from "../../../components/ui/textarea";
 import type { WorkItemDetail, WorkItemStateInput } from "../../../core/contracts";
 import type { useCheckpointWorkItemMutation } from "../hooks/useCheckpointWorkItemMutation";
-import { workItemStateSchema, type WorkItemStateForm } from "../schemas/workItemStateSchema";
+import { allowedWorkItemStatuses, createWorkItemStateSchema, type WorkItemStateForm } from "../schemas/workItemStateSchema";
 
 interface WorkItemStateEditorProps {
   detail: WorkItemDetail;
@@ -23,16 +23,31 @@ const reviewStatuses = ["not_started", "in_progress", "changes_requested", "read
 const deliveryStatuses = ["not_started", "in_progress", "blocked", "ready", "delivered"] as const;
 
 export function WorkItemStateEditor({ detail, refresh, checkpoint }: WorkItemStateEditorProps) {
-  const [form, setForm] = useState<WorkItemStateForm>(() => initialForm(detail));
-  const [validation, setValidation] = useState<string[]>([]);
+  const [form, setFormState] = useState<WorkItemStateForm>(() => initialForm(detail));
+  const [validation, setValidation] = useState<Array<{ path: string; message: string }>>([]);
   const reconciliation = detail.structuredState.reconciliation;
   const remoteError = checkpoint.data?.error;
   const saved = checkpoint.data?.result?.type === "work_item_detail" && checkpoint.data.error == null;
+  const schema = createWorkItemStateSchema(detail.status);
+  const allowedStatuses = allowedWorkItemStatuses(detail.status);
+  const setForm = (value: WorkItemStateForm) => {
+    checkpoint.reset();
+    setValidation([]);
+    setFormState(value);
+  };
+  const refreshAuthoritative = () => {
+    checkpoint.reset();
+    setValidation([]);
+    refresh();
+  };
 
   const submit = () => {
-    const parsed = workItemStateSchema.safeParse(form);
+    const parsed = schema.safeParse(form);
     if (!parsed.success) {
-      setValidation([...new Set(parsed.error.issues.map((issue) => issue.message))]);
+      setValidation(parsed.error.issues.map((issue) => ({
+        path: issue.path.map(String).join(" → "),
+        message: issue.message,
+      })));
       return;
     }
     setValidation([]);
@@ -49,7 +64,7 @@ export function WorkItemStateEditor({ detail, refresh, checkpoint }: WorkItemSta
           <Alert role="alert" className="mt-4">
             <strong>Reconciliation required</strong>
             <p>{reconciliation.reason}</p>
-            <Button type="button" className="mt-3" onClick={refresh}>Refresh authoritative state</Button>
+            <Button type="button" className="mt-3" onClick={refreshAuthoritative}>Refresh authoritative state</Button>
           </Alert>
         )}
 
@@ -61,7 +76,7 @@ export function WorkItemStateEditor({ detail, refresh, checkpoint }: WorkItemSta
           <div className="grid gap-4 md:grid-cols-2">
             <Field label="Status" htmlFor="work-item-status">
               <Select id="work-item-status" value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value as WorkItemStateForm["status"] })}>
-                {statuses.map((status) => <option key={status} value={status} disabled={status === "done"}>{status === "done" ? "done — set by integration" : label(status)}</option>)}
+                {statuses.map((status) => <option key={status} value={status} disabled={!allowedStatuses.includes(status)}>{status === "done" ? "done — set by integration" : label(status)}</option>)}
               </Select>
             </Field>
             <Field label="Terminal intent" htmlFor="work-item-terminal-intent">
@@ -123,8 +138,8 @@ export function WorkItemStateEditor({ detail, refresh, checkpoint }: WorkItemSta
             <StatePhase title="Delivery" status={form.delivery.status} statuses={deliveryStatuses} evidence={form.delivery.evidence} onStatus={(status) => setForm({ ...form, delivery: { ...form.delivery, status } })} onEvidence={(evidence) => setForm({ ...form, delivery: { ...form.delivery, evidence } })} />
           </div>
 
-          {validation.length > 0 && <Alert role="alert"><ul className="list-disc pl-5">{validation.map((message) => <li key={message}>{message}</li>)}</ul></Alert>}
-          {remoteError != null && <Alert role="alert"><strong>{label(remoteError.code)}</strong><p>{remoteError.message}</p>{isStale(remoteError.code) && <Button type="button" className="mt-3" onClick={refresh}>Refresh and review changes</Button>}</Alert>}
+          {validation.length > 0 && <Alert id="state-validation-errors" role="alert"><strong>Review these state fields</strong><ul className="list-disc pl-5">{validation.map((issue, index) => <li key={`${issue.path}:${issue.message}:${index}`}><strong>{issue.path || "State"}:</strong> {issue.message}</li>)}</ul></Alert>}
+          {remoteError != null && <Alert role="alert"><strong>{label(remoteError.code)}</strong><p>{remoteError.message}</p>{isStale(remoteError.code) && <Button type="button" className="mt-3" onClick={refreshAuthoritative}>Refresh and review changes</Button>}</Alert>}
           {checkpoint.isError && <Alert role="alert">Workboard is disconnected. The state was not reported as saved.</Alert>}
           <div aria-live="polite">{checkpoint.isPending ? "Saving authoritative state..." : saved ? "Authoritative Work-item state saved." : ""}</div>
           <Button type="submit" variant="solid" disabled={checkpoint.isPending || reconciliation != null}>{checkpoint.isPending ? "Saving..." : "Save durable state"}</Button>

@@ -12,6 +12,7 @@ use workboard_core::{CheckoutId, FeatureId, RepositoryId, WorkItemId};
 use crate::AppError;
 use crate::git::{GitCli, GitWorktreeResolver, ResolvedWorktree};
 use crate::storage::SqliteStore;
+use crate::work_item_state::WorkItemStateService;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IntegrateFeatureBranches {
@@ -367,6 +368,16 @@ impl<'a> FeatureIntegrationService<'a> {
                 }
             }
         }
+        let mut completed_work_items = HashSet::new();
+        for step in &outcome.steps {
+            if completed_work_items.insert(step.work_item_id) {
+                WorkItemStateService::new(self.store).complete_integration(
+                    step.work_item_id,
+                    &run_id,
+                    observed_at,
+                )?;
+            }
+        }
         let result_head = git.resolve(&target.path)?.head_oid;
         self.store.write(|transaction| {
             transaction.execute(
@@ -429,18 +440,13 @@ impl<'a> FeatureIntegrationService<'a> {
                  )",
                 params![run_id, result_head, at],
             )?;
-            transaction.execute(
-                "UPDATE work_items
-                 SET status = 'done'
-                 WHERE id = ?1 AND status = 'review'
-                   AND NOT EXISTS (
-                       SELECT 1 FROM work_item_integrations
-                       WHERE work_item_id = ?1 AND status <> 'integrated'
-                   )",
-                [work_item_id.to_string()],
-            )?;
             Ok(())
-        })
+        })?;
+        WorkItemStateService::new(self.store).complete_integration(
+            work_item_id,
+            run_id,
+            observed_at,
+        )
     }
 
     fn record_expected_target(
