@@ -434,8 +434,12 @@ impl<'a> FeatureIntegrationService<'a> {
                  SET status = 'done'
                  WHERE id = ?1 AND status = 'review'
                    AND NOT EXISTS (
-                       SELECT 1 FROM work_item_integrations
-                       WHERE work_item_id = ?1 AND status <> 'integrated'
+                       SELECT 1 FROM work_item_repositories expected
+                       LEFT JOIN work_item_integrations integration
+                         ON integration.work_item_id = expected.work_item_id
+                        AND integration.repository_id = expected.repository_id
+                       WHERE expected.work_item_id = ?1
+                         AND (integration.status IS NULL OR integration.status <> 'integrated')
                    )",
                 [work_item_id.to_string()],
             )?;
@@ -1181,6 +1185,63 @@ mod tests {
             .project(fixture.leaf_id)
             .expect("leaf projection");
         assert!(leaf.readiness.ready);
+    }
+
+    #[test]
+    fn integration_keeps_an_item_in_review_until_every_repository_has_evidence() {
+        let mut fixture = fixture();
+        let missing_repository_id = RepositoryId::generate();
+        fixture
+            .store
+            .write(|transaction| {
+                transaction.execute(
+                    "INSERT INTO repositories (
+                         id, workspace_id, slug, title, git_common_directory, default_branch,
+                         is_planning_store, created_at
+                     ) SELECT ?1, workspace_id, 'secondary', 'Secondary', 'secondary.git',
+                              'main', 0, ?3
+                       FROM repositories WHERE id = ?2",
+                    params![
+                        missing_repository_id.to_string(),
+                        fixture.repository_id.to_string(),
+                        fixture.observed_at.unix_timestamp_nanos().to_string(),
+                    ],
+                )?;
+                transaction.execute(
+                    "INSERT INTO work_item_repositories (work_item_id, repository_id)
+                     VALUES (?1, ?2)",
+                    params![
+                        fixture.root_id.to_string(),
+                        missing_repository_id.to_string()
+                    ],
+                )?;
+                Ok(())
+            })
+            .expect("add repository without integration evidence");
+        let git = fake_git(&fixture, None);
+        let preview = FeatureIntegrationService::new(&mut fixture.store)
+            .preview(IntegrateFeatureBranches {
+                feature_id: fixture.feature_id,
+                repository_id: fixture.repository_id,
+                idempotency_key: "integrate-partial-repositories".to_owned(),
+                observed_at: fixture.observed_at,
+            })
+            .expect("preview one repository");
+        FeatureIntegrationService::new(&mut fixture.store)
+            .confirm_with(
+                ConfirmFeatureIntegration {
+                    run_id: preview.run.run_id,
+                    confirmation_token: preview.confirmation_token,
+                    confirmed_at: fixture.observed_at,
+                },
+                &git,
+            )
+            .expect("integrate one repository");
+
+        let root = WorkProjectionService::new(&fixture.store)
+            .project(fixture.root_id)
+            .expect("root projection");
+        assert_eq!(root.work_item.status, WorkItemStatus::Review);
     }
 
     #[test]
