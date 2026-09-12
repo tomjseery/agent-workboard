@@ -260,6 +260,10 @@ impl WorkboardApplication {
         WorkflowOperationService::new(&mut self.store)
     }
 
+    pub fn work_item_states(&mut self) -> crate::work_item_state::WorkItemStateService<'_> {
+        crate::work_item_state::WorkItemStateService::new(&mut self.store)
+    }
+
     pub fn follow_ups(&mut self) -> FollowUpService<'_> {
         FollowUpService::new(&mut self.store)
     }
@@ -414,12 +418,35 @@ impl WorkboardApplication {
                 })
             })
             .collect::<Result<Vec<_>, AppError>>()?;
+        let work_item_state = work_item
+            .as_ref()
+            .map(|item| {
+                self.work_item_states().read(item.id).or_else(|error| {
+                    if matches!(error, AppError::WorkItemNotFound) {
+                        let document_revision = documents
+                            .iter()
+                            .find(|document| {
+                                document.document.owner == HierarchyOwner::WorkItem(item.id)
+                            })
+                            .map_or(1, |document| document.revision);
+                        Ok(workboard_core::WorkItemStateView {
+                            state: None,
+                            document_revision,
+                            reconciliation: None,
+                        })
+                    } else {
+                        Err(error)
+                    }
+                })
+            })
+            .transpose()?;
         Ok(AssignedContext {
-            schema_version: 2,
+            schema_version: 3,
             principal,
             epic,
             feature,
             work_item,
+            work_item_state,
             dependencies,
             repositories,
             documents,

@@ -8,7 +8,7 @@ use workboard_core::{
     AVAILABLE_ACTIONS_SCHEMA_VERSION, AvailableAction, AvailableActionKind, AvailableActions,
     CheckoutAccessMode, CheckoutId, CheckoutPurpose, ConversationId, HierarchyOwner, LaunchProfile,
     LiveStatus, ManagedSessionRole, RepositoryId, Resumability, Tool, WorkItem, WorkItemId,
-    WorkItemStatus, WorkspaceId,
+    WorkItemStateView, WorkItemStatus, WorkspaceId,
 };
 
 use crate::AppError;
@@ -64,6 +64,7 @@ pub struct WorkItemProjection {
     pub workspace_id: WorkspaceId,
     pub work_item: WorkItem,
     pub readiness: WorkItemReadiness,
+    pub state: WorkItemStateView,
     pub sessions: Vec<SessionChoice>,
     pub available_actions: AvailableActions,
 }
@@ -104,12 +105,14 @@ impl<'a> WorkProjectionService<'a> {
         let integration_blockers = self.integration_blockers(feature_id)?;
         let readiness = readiness(&work_item, &items, &edges, &integration_blockers)?;
         let sessions = self.sessions(work_item_id)?;
+        let state = crate::work_item_state::read_projection_view(self.store, work_item_id)?;
         let available_actions = work_item_actions(&work_item, &readiness, &sessions);
         Ok(WorkItemProjection {
-            schema_version: 1,
+            schema_version: 2,
             workspace_id,
             work_item,
             readiness,
+            state,
             sessions,
             available_actions,
         })

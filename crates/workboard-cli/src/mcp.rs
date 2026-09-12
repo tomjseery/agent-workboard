@@ -6,14 +6,12 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use workboard_application::AppError;
 use workboard_application::follow_up::{SendSessionFollowUp, SystemFollowUpExecutor};
-use workboard_application::workflow_operations::CheckpointWorkItem;
 use workboard_application::workspace::WorkboardApplication;
-use workboard_core::HierarchyOwner;
+use workboard_core::{HierarchyOwner, WorkItemStateUpdate};
 
 use super::{
     FeatureProposalRequest, FeaturePublicationRequest, ManagedSessionRequest,
-    SessionFollowUpRequest, WorkItemCheckpointRequest, execute_managed_session_request,
-    workflow_token,
+    SessionFollowUpRequest, execute_managed_session_request, workflow_token,
 };
 
 const MAX_MESSAGE_BYTES: usize = 2 * 1024 * 1024;
@@ -206,17 +204,24 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "work_checkpoint",
-            "description": "Record durable Work-item knowledge and its next action.",
+            "description": "Atomically publish a typed Work-item state update and checkpoint history entry.",
             "inputSchema": {
                 "type": "object",
-                "required": ["workItemId", "nextAction", "summary", "idempotencyKey"],
+                "required": ["schemaVersion", "workItemId", "expectedRevision", "expectedDocumentRevision", "currentState", "nextAction", "blockers", "decisions", "verification", "review", "delivery", "status", "idempotencyKey"],
                 "properties": {
+                    "schemaVersion": { "type": "integer", "const": 1 },
                     "workItemId": { "type": "string", "format": "uuid" },
-                    "nextAction": {
-                        "type": "string",
-                        "enum": ["actionable", "blocked", "paused", "review", "delivery"]
-                    },
-                    "summary": { "type": "string", "minLength": 1 },
+                    "expectedRevision": { "type": "integer", "minimum": 0 },
+                    "expectedDocumentRevision": { "type": "integer", "minimum": 1 },
+                    "currentState": { "type": "string", "minLength": 1, "maxLength": 8192 },
+                    "nextAction": { "type": "object" },
+                    "blockers": { "type": "array", "maxItems": 64 },
+                    "decisions": { "type": "array", "maxItems": 64 },
+                    "verification": { "type": "array", "maxItems": 64 },
+                    "review": { "type": "object" },
+                    "delivery": { "type": "object" },
+                    "status": { "type": "string", "enum": ["backlog", "ready", "in_progress", "blocked", "review", "cancelled"] },
+                    "terminalIntent": { "type": ["string", "null"], "enum": ["complete", "cancel", null] },
                     "idempotencyKey": { "type": "string", "minLength": 1 }
                 },
                 "additionalProperties": false
@@ -340,17 +345,12 @@ fn call_tool(application: &mut WorkboardApplication, request: &Value) -> Result<
             )?
         }
         "work_checkpoint" => {
-            let request: WorkItemCheckpointRequest = serde_json::from_value(arguments)?;
-            serde_json::to_value(application.workflow_operations().checkpoint(
-                &token,
-                CheckpointWorkItem {
-                    work_item_id: request.work_item_id,
-                    next_action: request.next_action,
-                    summary: request.summary,
-                    idempotency_key: request.idempotency_key,
-                    recorded_at: now,
-                },
-            )?)?
+            let request: WorkItemStateUpdate = serde_json::from_value(arguments)?;
+            serde_json::to_value(
+                application
+                    .work_item_states()
+                    .update_managed(&token, request, now)?,
+            )?
         }
         "session_request" => {
             let request: ManagedSessionRequest = serde_json::from_value(arguments)?;
@@ -456,6 +456,25 @@ mod tests {
                 .get("repositoryId")
                 .is_none()
         );
+        for property in [
+            "schemaVersion",
+            "expectedRevision",
+            "expectedDocumentRevision",
+            "currentState",
+            "nextAction",
+            "blockers",
+            "decisions",
+            "verification",
+            "review",
+            "delivery",
+            "status",
+        ] {
+            assert!(
+                checkpoint["inputSchema"]["properties"]
+                    .get(property)
+                    .is_some()
+            );
+        }
     }
 
     #[test]

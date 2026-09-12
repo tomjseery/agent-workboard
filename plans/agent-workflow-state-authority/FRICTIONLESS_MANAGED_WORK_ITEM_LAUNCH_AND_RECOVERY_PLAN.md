@@ -227,6 +227,22 @@ final Start/Resume/Start another choice, bind exact cwd before first turn, prove
 primary writer, send a follow-up, checkpoint through Workboard, and retain integration and rollback evidence.
 Only this accepted evidence may authorize the downstream Work item.
 
+Before live acceptance, replace the opaque checkpoint payload with one versioned structured Work-item state
+contract. The current projection must cover current state, one concrete next action, blockers, decisions,
+verification evidence, review and delivery state, and explicit status or terminal intent. One revision-checked,
+idempotent application mutation must serve authenticated managed sessions and Workspace-scoped local human/CLI
+callers without issuing workflow credentials to humans or creating a second write path. Preserve immutable
+checkpoint history as evidence while making the latest structured projection authoritative.
+
+Publish every accepted update into a dedicated managed-state section of the canonical planning-store Work-item
+document and keep its document revision, SQLite projection, and checkpoint history in parity. Stage intent before
+Git mutation, reject stale state or document revisions and changed documents, and retain an actionable
+reconciliation record whenever Git publication succeeds but database finalization does not. Authoritative reads,
+manual human and JSON CLI operations, request-file checkpointing, and MCP checkpointing must expose the same
+contract. Cover authorization, ownership, validation and size limits, transition rules, replays, restart,
+publication/database partial failure, reconciliation, and exact document/projection parity before provider smoke
+acceptance resumes.
+
 ## Current delivery state
 
 Phases 7 and 8 are implementation-complete as of 2026-08-31. `workboard work create` now launches a managed
@@ -240,7 +256,13 @@ to `done` only after every repository integration for that item is complete; dep
 that durable state. Clean `SessionEnd` retirement and interrupted-session recovery were already implemented and
 remain covered by deterministic tests.
 
-Phase 9 remains open. The first live attempt on 2026-08-31 preserved the existing recoverable Codex Feature
+Phase 9 remains open and now includes the structured Work-item state authority required to make repository
+`_PROGRESS.md` ledgers unnecessary for managed execution recovery. The existing checkpoint accepts only a coarse
+next-action enum and opaque summary, authenticates only managed sessions, changes status only in SQLite, and does
+not update the canonical Work-item document. Implement the shared structured mutation/read boundary and its
+planning-store reconciliation before resuming live provider acceptance.
+
+The first live attempt on 2026-08-31 preserved the existing recoverable Codex Feature
 planner and execution session, then exposed that new Feature planners incorrectly competed for the checkout's
 exclusive writer slot. Commit `11865de` corrected the rule: Feature planning is read-only and may share the
 Feature checkout, while execution and debugging writers remain exclusive; the focused exclusivity test passed.
@@ -250,10 +272,28 @@ hook or managed transcript arrived before the binding timeout. The process remai
 and Workboard has correctly created no managed association or recovery entry. Live acceptance must resume after
 the user clears or reports that native startup state; do not retire the existing recovery set to bypass it.
 
-The remaining delivery gate is the full installed live creation, execution, status, integration, clean-close
-exclusion, and `recover --since yesterday` journey under Claude and Codex. Review and PR publication follow
-that accepted evidence. Agent Standards migration compatibility work remains blocked until this foundation is
-accepted.
+The next delivery gate is a fully verified and reviewed structured Work-item state authority with human CLI and
+managed MCP/request-file parity. The remaining live gate then covers the full installed creation, execution,
+structured status/checkpoint, integration, clean-close exclusion, and `recover --since yesterday` journey under
+Claude and Codex. Review and PR publication follow that accepted evidence. Agent Standards migration compatibility
+work remains blocked until this foundation is accepted.
+
+The structured authority is implementation-complete on 2026-09-12. Schema 42 stores one current typed projection
+and immutable completed update history, including the caller class, idempotency and request hashes, expected state
+and document revisions, publication hashes, commit, and reconciliation failure. The shared application service
+authenticates either the managed workflow principal or the selected local Workspace before applying identical
+validation and transition semantics. It compare-and-publishes a `## Workboard state` JSON section and matching
+front-matter status into the canonical Work-item Markdown, then advances the SQLite document revision, Work-item
+projection, history, status, and review integration records in one finalization transaction. Interrupted Git or
+database finalization reports reconciliation rather than success; `work state` exposes the pending evidence after
+restart and `work reconcile` resumes the same staged idempotent operation.
+
+`work state`, `work update --request`, `work reconcile`, and the structured payload returned by `work open` provide
+human and stable JSON access without a managed credential. Assigned-context schema 3 and Work-item projection schema
+2 expose the same current state to managed agents, CLI, TUI, daemon, and Desktop consumers. MCP and request-file
+`work_checkpoint` now require the complete schema-v1 update and no longer expose the opaque summary contract. The
+next action is an independent review of the committed backend candidate; after any findings are resolved and the
+full gate remains green, resume the installed Claude/Codex acceptance journey.
 
 ## Verification and acceptance
 
@@ -269,5 +309,12 @@ accepted.
 - `cargo fmt --all -- --check` passed on 2026-08-31.
 - `cargo clippy --workspace --all-targets -- -D warnings` passed on 2026-08-31.
 - `cargo test --workspace` passed on 2026-08-31.
+- On 2026-09-12, structured-state tests passed for human and managed updates, strict authorization, exact Markdown
+  and SQLite parity, immutable history, idempotency conflicts, stale revisions, invalid transitions, external edits,
+  Git publication interruption, database finalization interruption, restart, and reconciliation. The complete
+  application suite passed 135 tests; CLI passed 31 tests with the two real-provider smokes still intentionally
+  ignored; core passed 30 tests; daemon passed four tests; adapter/native and doc tests passed.
+- `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, and
+  `cargo test --workspace` passed on 2026-09-12.
 - Installed dogfood proves exact managed cwd, no native-ID exposure, no global capability installation, no
   handwritten kickoff prompt, durable checkpoints, exact resume, and visible valid next actions.

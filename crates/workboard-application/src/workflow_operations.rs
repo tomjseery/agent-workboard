@@ -8,9 +8,11 @@ use time::OffsetDateTime;
 use workboard_core::{
     CheckoutAccessMode, CheckoutAvailability, CheckoutId, CheckoutPurpose, ConversationId,
     DocumentKind, Epic, Feature, HierarchyOwner, LaunchProfile, LiveStatus,
-    ManagedSessionRequestId, ManagedSessionRole, MarkdownDocument, NextActionKind, RepositoryId,
-    Resumability, Tool, WorkItem, WorkItemCheckpointId, WorkItemId, WorkItemStatus, WorkspaceId,
+    ManagedSessionRequestId, ManagedSessionRole, MarkdownDocument, RepositoryId, Resumability,
+    Tool, WorkItem, WorkItemId, WorkspaceId,
 };
+#[cfg(test)]
+use workboard_core::{NextActionKind, WorkItemCheckpointId, WorkItemStatus};
 
 use crate::AppError;
 use crate::storage::SqliteStore;
@@ -32,6 +34,7 @@ pub struct AssignedContext {
     pub epic: Option<Epic>,
     pub feature: Option<Feature>,
     pub work_item: Option<WorkItem>,
+    pub work_item_state: Option<workboard_core::WorkItemStateView>,
     pub dependencies: Vec<AssignedDependency>,
     pub repositories: Vec<AssignedRepository>,
     pub documents: Vec<AssignedDocument>,
@@ -103,6 +106,7 @@ pub struct RepositoryInstruction {
     pub required: bool,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CheckpointWorkItem {
     pub work_item_id: WorkItemId,
@@ -112,6 +116,7 @@ pub struct CheckpointWorkItem {
     pub recorded_at: OffsetDateTime,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkItemCheckpointOutcome {
     pub checkpoint_id: WorkItemCheckpointId,
@@ -716,6 +721,7 @@ impl<'a> WorkflowOperationService<'a> {
         })
     }
 
+    #[cfg(test)]
     pub fn checkpoint(
         &mut self,
         workflow_token: &str,
@@ -1276,6 +1282,7 @@ fn workspace_for_owner(
     parse_id(&value)
 }
 
+#[cfg(test)]
 fn checkpoint_status(next_action: NextActionKind) -> WorkItemStatus {
     match next_action {
         NextActionKind::Actionable => WorkItemStatus::InProgress,
@@ -1354,6 +1361,7 @@ fn validate_idempotency_key(value: &str) -> Result<(), AppError> {
     }
 }
 
+#[cfg(test)]
 fn wire_name<T: Serialize>(value: T) -> Result<String, AppError> {
     serde_json::to_value(value)?
         .as_str()
@@ -1763,7 +1771,7 @@ mod tests {
         let context = application
             .assigned_hierarchy(&fixture.token, fixture.at + time::Duration::minutes(3))
             .expect("read assigned context");
-        assert_eq!(context.schema_version, 2);
+        assert_eq!(context.schema_version, 3);
         assert_eq!(
             context.work_item.as_ref().map(|item| item.id),
             Some(fixture.work_item_id)
