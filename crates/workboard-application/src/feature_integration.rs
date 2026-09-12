@@ -321,6 +321,12 @@ impl<'a> FeatureIntegrationService<'a> {
                 );
             }
         }
+        let mut preflighted_work_items = HashSet::new();
+        for step in &outcome.steps {
+            if preflighted_work_items.insert(step.work_item_id) {
+                WorkItemStateService::new(self.store).preflight_integration(step.work_item_id)?;
+            }
+        }
         for step in outcome.steps.iter().filter(|step| step.status == "pending") {
             let candidate = self.candidate(step.work_item_id, outcome.repository_id)?;
             let source = git.resolve(&candidate.source_path)?;
@@ -1295,6 +1301,70 @@ mod tests {
             .project(fixture.leaf_id)
             .expect("leaf projection");
         assert!(leaf.readiness.ready);
+    }
+
+    #[test]
+    fn missing_structured_state_fails_before_merge_or_integration_mutation() {
+        let mut fixture = fixture();
+        fixture
+            .store
+            .write(|transaction| {
+                transaction.execute_batch(
+                    "DROP TRIGGER work_item_state_updates_no_delete;
+                     DELETE FROM work_item_states;
+                     DELETE FROM work_item_state_updates;",
+                )?;
+                Ok(())
+            })
+            .expect("remove structured fixture state");
+        let git = fake_git(&fixture, None);
+        let preview = FeatureIntegrationService::new(&mut fixture.store)
+            .preview(IntegrateFeatureBranches {
+                feature_id: fixture.feature_id,
+                repository_id: fixture.repository_id,
+                idempotency_key: "integrate-without-state".to_owned(),
+                observed_at: fixture.observed_at,
+            })
+            .expect("preview legacy branch");
+
+        let error = FeatureIntegrationService::new(&mut fixture.store)
+            .confirm_with(
+                ConfirmFeatureIntegration {
+                    run_id: preview.run.run_id,
+                    confirmation_token: preview.confirmation_token,
+                    confirmed_at: fixture.observed_at,
+                },
+                &git,
+            )
+            .expect_err("missing structured state must fail before merge");
+
+        assert_eq!(error.code(), "work_item_structured_state_required");
+        assert!(git.merged.borrow().is_empty());
+        let (integrated_steps, integrated_items, feature_head) = fixture
+            .store
+            .read(|connection| {
+                Ok((
+                    connection.query_row(
+                        "SELECT COUNT(*) FROM feature_integration_steps WHERE status='integrated'",
+                        [],
+                        |row| row.get::<_, i64>(0),
+                    )?,
+                    connection.query_row(
+                        "SELECT COUNT(*) FROM work_item_integrations WHERE status='integrated'",
+                        [],
+                        |row| row.get::<_, i64>(0),
+                    )?,
+                    connection.query_row(
+                        "SELECT head FROM checkouts WHERE git_worktree_identity='feature-identity'",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )?,
+                ))
+            })
+            .expect("unchanged integration state");
+        assert_eq!(integrated_steps, 0);
+        assert_eq!(integrated_items, 0);
+        assert_eq!(feature_head, "base");
     }
 
     #[test]
