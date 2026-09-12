@@ -215,6 +215,49 @@ impl PlanningStore {
         })
     }
 
+    pub fn publish_reconciled_update(
+        &self,
+        relative_path: &Path,
+        expected_hash: &str,
+        front_matter: &DocumentFrontMatter,
+        body: &str,
+        message: &str,
+    ) -> Result<StoredDocument, AppError> {
+        let candidate = render_document(front_matter, body)?;
+        let candidate_hash = content_hash(candidate.as_bytes());
+        let path = self.resolve_relative(relative_path)?;
+        let current =
+            fs::read(&path).map_err(|source| planning_io("reading a document", &path, source))?;
+        let current_hash = content_hash(&current);
+        if current_hash == expected_hash {
+            return self.publish_update(relative_path, expected_hash, front_matter, body, message);
+        }
+        if current_hash != candidate_hash {
+            return Err(AppError::PlanningDocumentConcurrentEdit(path));
+        }
+        let observed_commit = if self.path_is_changed(relative_path)? {
+            self.commit_paths([relative_path], message)?
+        } else {
+            self.head()?
+        };
+        Ok(StoredDocument {
+            front_matter: front_matter.clone(),
+            body: normalise_body(body),
+            relative_path: relative_path.to_path_buf(),
+            content_hash: candidate_hash,
+            observed_commit: Some(observed_commit),
+        })
+    }
+
+    pub fn rendered_document_hash(
+        front_matter: &DocumentFrontMatter,
+        body: &str,
+    ) -> Result<String, AppError> {
+        Ok(content_hash(
+            render_document(front_matter, body)?.as_bytes(),
+        ))
+    }
+
     pub fn publish_batch_new(
         &self,
         documents: &[NewPlanningDocument],
@@ -307,6 +350,13 @@ impl PlanningStore {
             content_hash: content_hash(&bytes),
             observed_commit: self.head().ok(),
         })
+    }
+
+    pub fn document_content_hash(&self, relative_path: &Path) -> Result<String, AppError> {
+        let path = self.resolve_relative(relative_path)?;
+        let bytes =
+            fs::read(&path).map_err(|source| planning_io("reading a document", &path, source))?;
+        Ok(content_hash(&bytes))
     }
 
     pub fn commit_paths<'a>(

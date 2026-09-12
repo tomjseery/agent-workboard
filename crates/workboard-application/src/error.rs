@@ -193,6 +193,14 @@ pub enum AppError {
     PlanningDocumentInvalid(String),
     #[error("the planning document changed since it was read: {0}")]
     PlanningDocumentConcurrentEdit(PathBuf),
+    #[error("the Work-item state revision is stale: expected {expected}, current {current}")]
+    WorkItemStateRevisionStale { expected: u64, current: u64 },
+    #[error("the Work-item document revision is stale: expected {expected}, current {current}")]
+    WorkItemDocumentRevisionStale { expected: u64, current: u64 },
+    #[error("invalid Work-item status transition from {from} to {to}")]
+    WorkItemStatusTransitionInvalid { from: String, to: String },
+    #[error("the Work-item state update requires reconciliation: {reason}")]
+    WorkItemStateReconciliationRequired { reason: String },
     #[error("the planning-store Git operation failed: {message}")]
     PlanningGit { message: String },
     #[error("failed to encode the association event: {0}")]
@@ -320,6 +328,12 @@ impl AppError {
             Self::PlanningDocumentExists(_) => "planning_document_exists",
             Self::PlanningDocumentInvalid(_) => "planning_document_invalid",
             Self::PlanningDocumentConcurrentEdit(_) => "planning_document_concurrent_edit",
+            Self::WorkItemStateRevisionStale { .. } => "work_item_state_revision_stale",
+            Self::WorkItemDocumentRevisionStale { .. } => "work_item_document_revision_stale",
+            Self::WorkItemStatusTransitionInvalid { .. } => "work_item_status_transition_invalid",
+            Self::WorkItemStateReconciliationRequired { .. } => {
+                "work_item_state_reconciliation_required"
+            }
             Self::PlanningGit { .. } => "planning_git",
             Self::Encode(_) => "encode",
             Self::Adapter { .. } => "adapter",

@@ -39,7 +39,7 @@ use workboard_application::planning_workflow::FeatureProposal;
 use workboard_application::planning_workflow::{CreateFeaturePlanning, planner_bootstrap_prompt};
 use workboard_application::session_launch::{BeginManagedSessionLaunch, CapabilityLaunchInputs};
 use workboard_application::workflow_operations::{
-    CheckpointWorkItem, RequestManagedSession, work_item_bootstrap_prompt,
+    RequestManagedSession, work_item_bootstrap_prompt,
 };
 use workboard_application::workspace::{
     CreateEpic, InitialiseWorkspace, RegisterRepository, WorkboardApplication,
@@ -50,8 +50,8 @@ use workboard_application::workspace_planning::{
 };
 use workboard_core::{
     Checkout, CheckoutAvailability, Epic, Feature, HierarchyOwner, ManagedLaunchMode,
-    ManagedSessionRole, NativeSession, NextActionKind, PRODUCT_NAME, Repository, Slug, Tool,
-    WORKBOARD_LAUNCH_TOKEN_ENV, WorkItem, WorkItemId, WorkspaceId,
+    ManagedSessionRole, NativeSession, PRODUCT_NAME, Repository, Slug, Tool,
+    WORKBOARD_LAUNCH_TOKEN_ENV, WorkItem, WorkItemId, WorkItemStateUpdate, WorkspaceId,
 };
 
 use crate::selector::{SelectionCandidate, SelectionResult};
@@ -282,6 +282,19 @@ enum WorkCommand {
     },
     Open {
         work_item: Option<String>,
+    },
+    State {
+        work_item: Option<String>,
+    },
+    Update {
+        work_item: Option<String>,
+        #[arg(long)]
+        request: PathBuf,
+    },
+    Reconcile {
+        work_item: Option<String>,
+        #[arg(long)]
+        idempotency_key: String,
     },
     Start {
         work_item: Option<String>,
@@ -523,15 +536,6 @@ struct FeatureProposalRequest {
 #[serde(rename_all = "camelCase")]
 struct FeaturePublicationRequest {
     feature_id: workboard_core::FeatureId,
-}
-
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct WorkItemCheckpointRequest {
-    work_item_id: WorkItemId,
-    next_action: NextActionKind,
-    summary: String,
-    idempotency_key: String,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -1248,14 +1252,28 @@ fn execute(cli: Cli) -> Result<String, AppError> {
             } else {
                 format!("\nAvailable actions: {actions}")
             };
+            let state = application
+                .work_item_states()
+                .read_for_workspace(workspace_id, work_item.id)?;
+            let open = serde_json::json!({ "projection": projection, "state": state });
+            let state_summary = state.state.as_ref().map_or_else(
+                || "No structured state recorded".to_owned(),
+                |state| {
+                    format!(
+                        "{}\nNext: {}",
+                        state.current_state, state.next_action.description
+                    )
+                },
+            );
             output(
-                &projection,
+                &open,
                 cli.json,
                 format!(
-                    "{} ({}) — {:?}\nSessions:\n{}{}",
+                    "{} ({}) — {:?}\n{}\nSessions:\n{}{}",
                     work_item.title,
                     work_item.key,
                     work_item.status,
+                    state_summary,
                     if sessions.is_empty() {
                         "None"
                     } else {
@@ -1263,6 +1281,76 @@ fn execute(cli: Cli) -> Result<String, AppError> {
                     },
                     suffix,
                 ),
+            )
+        }
+        Some(Command::Work(WorkArgs {
+            command: WorkCommand::State { work_item },
+        })) => {
+            let workspace_id = resolve_workspace(&application, cli.workspace)?;
+            let snapshot = application.snapshot(workspace_id)?;
+            let work_item = select_work_item(&snapshot, work_item.as_deref(), cli.json)?;
+            let view = application
+                .work_item_states()
+                .read_for_workspace(workspace_id, work_item.id)?;
+            let human = view.state.as_ref().map_or_else(
+                || format!("{} has no structured state", work_item.title),
+                |state| format!(
+                    "{} — {:?} (state revision {}, document revision {})\nCurrent: {}\nNext: {}",
+                    work_item.title, state.status, state.revision, state.document_revision,
+                    state.current_state, state.next_action.description
+                ),
+            );
+            output(&view, cli.json, human)
+        }
+        Some(Command::Work(WorkArgs {
+            command: WorkCommand::Update { work_item, request },
+        })) => {
+            let workspace_id = resolve_workspace(&application, cli.workspace)?;
+            let request: WorkItemStateUpdate =
+                read_request(&absolute(&current_directory, &request))?;
+            if let Some(selector) = work_item.as_deref() {
+                let snapshot = application.snapshot(workspace_id)?;
+                if select_work_item(&snapshot, Some(selector), cli.json)?.id != request.work_item_id
+                {
+                    return Err(AppError::WorkItemRepositoryMismatch);
+                }
+            }
+            let outcome = application.work_item_states().update_human(
+                workspace_id,
+                request,
+                time::OffsetDateTime::now_utc(),
+            )?;
+            output(
+                &outcome,
+                cli.json,
+                format!(
+                    "Updated Work item {} to {:?}; next: {}",
+                    outcome.state.work_item_id,
+                    outcome.state.status,
+                    outcome.state.next_action.description
+                ),
+            )
+        }
+        Some(Command::Work(WorkArgs {
+            command:
+                WorkCommand::Reconcile {
+                    work_item,
+                    idempotency_key,
+                },
+        })) => {
+            let workspace_id = resolve_workspace(&application, cli.workspace)?;
+            let snapshot = application.snapshot(workspace_id)?;
+            let work_item = select_work_item(&snapshot, work_item.as_deref(), cli.json)?;
+            let outcome = application.work_item_states().reconcile_human(
+                workspace_id,
+                work_item.id,
+                &idempotency_key,
+                time::OffsetDateTime::now_utc(),
+            )?;
+            output(
+                &outcome,
+                cli.json,
+                format!("Reconciled Work item {}", work_item.id),
             )
         }
         Some(Command::Work(WorkArgs {
@@ -1983,22 +2071,17 @@ fn execute(cli: Cli) -> Result<String, AppError> {
                     )
                 }
                 WorkflowCommand::CheckpointWorkItem(arguments) => {
-                    let request: WorkItemCheckpointRequest =
+                    let request: WorkItemStateUpdate =
                         read_request(&absolute(&current_directory, &arguments.request))?;
-                    let outcome = application.workflow_operations().checkpoint(
+                    let outcome = application.work_item_states().update_managed(
                         &workflow_token,
-                        CheckpointWorkItem {
-                            work_item_id: request.work_item_id,
-                            next_action: request.next_action,
-                            summary: request.summary,
-                            idempotency_key: request.idempotency_key,
-                            recorded_at: now,
-                        },
+                        request,
+                        now,
                     )?;
                     output(
                         &outcome,
                         cli.json,
-                        format!("Checkpointed Work item {}", outcome.work_item_id),
+                        format!("Checkpointed Work item {}", outcome.state.work_item_id),
                     )
                 }
                 WorkflowCommand::RequestSession(arguments) => {
@@ -4072,9 +4155,9 @@ mod tests {
     use crate::selector::SelectionCandidate;
 
     use super::{
-        Cli, Command as CliCommand, FeatureCommand, SessionCommand, Tool, WorkBatchCommand,
-        WorkCommand, WorkIntegrationCommand, codex_app_executable, default_native_executable,
-        execute_from, select_candidate, slugify,
+        Cli, Command as CliCommand, FeatureCommand, SessionCommand, Tool, WorkArgs,
+        WorkBatchCommand, WorkCommand, WorkIntegrationCommand, codex_app_executable,
+        default_native_executable, execute_from, select_candidate, slugify,
     };
 
     #[test]
@@ -4225,6 +4308,49 @@ mod tests {
             panic!("expected Work command");
         };
         assert!(matches!(continued.command, WorkCommand::Continue { .. }));
+    }
+
+    #[test]
+    fn work_state_update_and_reconcile_commands_are_manual_and_json_capable() {
+        let state = Cli::try_parse_from(["workboard", "--json", "work", "state", "item"])
+            .expect("parse state command");
+        assert!(matches!(
+            state.command,
+            Some(CliCommand::Work(WorkArgs {
+                command: WorkCommand::State { .. }
+            }))
+        ));
+        let update = Cli::try_parse_from([
+            "workboard",
+            "--json",
+            "work",
+            "update",
+            "item",
+            "--request",
+            "state.json",
+        ])
+        .expect("parse update command");
+        assert!(matches!(
+            update.command,
+            Some(CliCommand::Work(WorkArgs {
+                command: WorkCommand::Update { .. }
+            }))
+        ));
+        let reconcile = Cli::try_parse_from([
+            "workboard",
+            "work",
+            "reconcile",
+            "item",
+            "--idempotency-key",
+            "update-1",
+        ])
+        .expect("parse reconcile command");
+        assert!(matches!(
+            reconcile.command,
+            Some(CliCommand::Work(WorkArgs {
+                command: WorkCommand::Reconcile { .. }
+            }))
+        ));
     }
 
     #[test]
