@@ -7,7 +7,7 @@ import { Input } from "../../../components/ui/input";
 import { Label } from "../../../components/ui/label";
 import { Select } from "../../../components/ui/select";
 import { Textarea } from "../../../components/ui/textarea";
-import type { WorkItemDetail, WorkItemStateInput } from "../../../core/contracts";
+import type { WorkItemDetail } from "../../../core/contracts";
 import type { useCheckpointWorkItemMutation } from "../hooks/useCheckpointWorkItemMutation";
 import { allowedWorkItemStatuses, createWorkItemStateSchema, type WorkItemStateForm } from "../schemas/workItemStateSchema";
 
@@ -30,7 +30,13 @@ export function WorkItemStateEditor({ detail, refresh, checkpoint }: WorkItemSta
   const saved = checkpoint.data?.result?.type === "work_item_detail" && checkpoint.data.error == null;
   const schema = createWorkItemStateSchema(detail.status);
   const allowedStatuses = allowedWorkItemStatuses(detail.status);
+  const formIsValid = schema.safeParse(form).success;
+  const validationProps = (path: string) => ({
+    "aria-describedby": validation.some((issue) => issue.path === path) ? "state-validation-errors" : undefined,
+    "aria-invalid": validation.some((issue) => issue.path === path) || undefined,
+  });
   const setForm = (value: WorkItemStateForm) => {
+    if (checkpoint.isPending) return;
     checkpoint.reset();
     setValidation([]);
     setFormState(value);
@@ -45,13 +51,13 @@ export function WorkItemStateEditor({ detail, refresh, checkpoint }: WorkItemSta
     const parsed = schema.safeParse(form);
     if (!parsed.success) {
       setValidation(parsed.error.issues.map((issue) => ({
-        path: issue.path.map(String).join(" → "),
+        path: issue.path.map(String).join("."),
         message: issue.message,
       })));
       return;
     }
     setValidation([]);
-    checkpoint.mutate({ expectedRevision: detail.revision, state: parsed.data as WorkItemStateInput });
+    checkpoint.mutate({ expectedRevision: detail.revision, startingStatus: detail.status, state: form });
   };
 
   return (
@@ -68,19 +74,20 @@ export function WorkItemStateEditor({ detail, refresh, checkpoint }: WorkItemSta
           </Alert>
         )}
 
-        <form className="mt-5 space-y-6" onSubmit={(event) => { event.preventDefault(); submit(); }}>
+        <form className="mt-5 space-y-6" aria-busy={checkpoint.isPending} onSubmit={(event) => { event.preventDefault(); submit(); }}>
+          <fieldset disabled={checkpoint.isPending} className="contents">
           <Field label="Current state" htmlFor="work-item-current-state">
-            <Textarea id="work-item-current-state" rows={5} value={form.currentState} onChange={(event) => setForm({ ...form, currentState: event.target.value })} />
+            <Textarea id="work-item-current-state" rows={5} value={form.currentState} {...validationProps("currentState")} onChange={(event) => setForm({ ...form, currentState: event.target.value })} />
           </Field>
 
           <div className="grid gap-4 md:grid-cols-2">
             <Field label="Status" htmlFor="work-item-status">
-              <Select id="work-item-status" value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value as WorkItemStateForm["status"] })}>
+              <Select id="work-item-status" value={form.status} {...validationProps("status")} onChange={(event) => setForm({ ...form, status: event.target.value as WorkItemStateForm["status"] })}>
                 {statuses.map((status) => <option key={status} value={status} disabled={!allowedStatuses.includes(status)}>{status === "done" ? "done — set by integration" : label(status)}</option>)}
               </Select>
             </Field>
             <Field label="Terminal intent" htmlFor="work-item-terminal-intent">
-              <Select id="work-item-terminal-intent" value={form.terminalIntent ?? ""} onChange={(event) => setForm({ ...form, terminalIntent: event.target.value === "" ? null : event.target.value as "complete" | "cancel" })}>
+              <Select id="work-item-terminal-intent" value={form.terminalIntent ?? ""} {...validationProps("terminalIntent")} onChange={(event) => setForm({ ...form, terminalIntent: event.target.value === "" ? null : event.target.value as "complete" | "cancel" })}>
                 <option value="">None</option>
                 <option value="complete">Complete after integration</option>
                 <option value="cancel">Cancel</option>
@@ -90,22 +97,22 @@ export function WorkItemStateEditor({ detail, refresh, checkpoint }: WorkItemSta
 
           <div className="grid gap-4 md:grid-cols-[12rem_1fr]">
             <Field label="Next action kind" htmlFor="work-item-next-kind">
-              <Select id="work-item-next-kind" value={form.nextAction.kind} onChange={(event) => setForm({ ...form, nextAction: { ...form.nextAction, kind: event.target.value as WorkItemStateForm["nextAction"]["kind"] } })}>
+              <Select id="work-item-next-kind" value={form.nextAction.kind} {...validationProps("nextAction.kind")} onChange={(event) => setForm({ ...form, nextAction: { ...form.nextAction, kind: event.target.value as WorkItemStateForm["nextAction"]["kind"] } })}>
                 {nextActions.map((kind) => <option key={kind} value={kind}>{label(kind)}</option>)}
               </Select>
             </Field>
             <Field label="Concrete next action" htmlFor="work-item-next-action">
-              <Textarea id="work-item-next-action" rows={3} value={form.nextAction.description} onChange={(event) => setForm({ ...form, nextAction: { ...form.nextAction, description: event.target.value } })} />
+              <Textarea id="work-item-next-action" rows={3} value={form.nextAction.description} {...validationProps("nextAction.description")} onChange={(event) => setForm({ ...form, nextAction: { ...form.nextAction, description: event.target.value } })} />
             </Field>
           </div>
 
           <Collection title="Blockers" addLabel="Add blocker" onAdd={() => setForm({ ...form, blockers: [...form.blockers, { description: "", owner: "", unblockAction: "", resumeWhen: "" }] })}>
             {form.blockers.map((blocker, index) => (
               <EditorRow key={index} remove={() => setForm({ ...form, blockers: form.blockers.filter((_, candidate) => candidate !== index) })}>
-                <TextInput label="Description" value={blocker.description} onChange={(description) => updateAt(form.blockers, index, { ...blocker, description }, (blockers) => setForm({ ...form, blockers }))} />
-                <TextInput label="Owner" value={blocker.owner} onChange={(owner) => updateAt(form.blockers, index, { ...blocker, owner }, (blockers) => setForm({ ...form, blockers }))} />
-                <TextInput label="Unblock action" value={blocker.unblockAction} onChange={(unblockAction) => updateAt(form.blockers, index, { ...blocker, unblockAction }, (blockers) => setForm({ ...form, blockers }))} />
-                <TextInput label="Resume when" value={blocker.resumeWhen} onChange={(resumeWhen) => updateAt(form.blockers, index, { ...blocker, resumeWhen }, (blockers) => setForm({ ...form, blockers }))} />
+                <TextInput label="Description" value={blocker.description} validation={validationProps(`blockers.${index}.description`)} onChange={(description) => updateAt(form.blockers, index, { ...blocker, description }, (blockers) => setForm({ ...form, blockers }))} />
+                <TextInput label="Owner" value={blocker.owner} validation={validationProps(`blockers.${index}.owner`)} onChange={(owner) => updateAt(form.blockers, index, { ...blocker, owner }, (blockers) => setForm({ ...form, blockers }))} />
+                <TextInput label="Unblock action" value={blocker.unblockAction} validation={validationProps(`blockers.${index}.unblockAction`)} onChange={(unblockAction) => updateAt(form.blockers, index, { ...blocker, unblockAction }, (blockers) => setForm({ ...form, blockers }))} />
+                <TextInput label="Resume when" value={blocker.resumeWhen} validation={validationProps(`blockers.${index}.resumeWhen`)} onChange={(resumeWhen) => updateAt(form.blockers, index, { ...blocker, resumeWhen }, (blockers) => setForm({ ...form, blockers }))} />
               </EditorRow>
             ))}
           </Collection>
@@ -113,8 +120,8 @@ export function WorkItemStateEditor({ detail, refresh, checkpoint }: WorkItemSta
           <Collection title="Decisions" addLabel="Add decision" onAdd={() => setForm({ ...form, decisions: [...form.decisions, { decision: "", rationale: "" }] })}>
             {form.decisions.map((decision, index) => (
               <EditorRow key={index} remove={() => setForm({ ...form, decisions: form.decisions.filter((_, candidate) => candidate !== index) })}>
-                <TextInput label="Decision" value={decision.decision} onChange={(value) => updateAt(form.decisions, index, { ...decision, decision: value }, (decisions) => setForm({ ...form, decisions }))} />
-                <TextInput label="Rationale" value={decision.rationale} onChange={(rationale) => updateAt(form.decisions, index, { ...decision, rationale }, (decisions) => setForm({ ...form, decisions }))} />
+                <TextInput label="Decision" value={decision.decision} validation={validationProps(`decisions.${index}.decision`)} onChange={(value) => updateAt(form.decisions, index, { ...decision, decision: value }, (decisions) => setForm({ ...form, decisions }))} />
+                <TextInput label="Rationale" value={decision.rationale} validation={validationProps(`decisions.${index}.rationale`)} onChange={(rationale) => updateAt(form.decisions, index, { ...decision, rationale }, (decisions) => setForm({ ...form, decisions }))} />
               </EditorRow>
             ))}
           </Collection>
@@ -122,27 +129,28 @@ export function WorkItemStateEditor({ detail, refresh, checkpoint }: WorkItemSta
           <Collection title="Verification" addLabel="Add verification" onAdd={() => setForm({ ...form, verification: [...form.verification, { check: "", result: "not_run", evidence: null }] })}>
             {form.verification.map((verification, index) => (
               <EditorRow key={index} remove={() => setForm({ ...form, verification: form.verification.filter((_, candidate) => candidate !== index) })}>
-                <TextInput label="Check" value={verification.check} onChange={(check) => updateAt(form.verification, index, { ...verification, check }, (items) => setForm({ ...form, verification: items }))} />
+                <TextInput label="Check" value={verification.check} validation={validationProps(`verification.${index}.check`)} onChange={(check) => updateAt(form.verification, index, { ...verification, check }, (items) => setForm({ ...form, verification: items }))} />
                 <Field label="Result" htmlFor={`verification-result-${index}`}>
-                  <Select id={`verification-result-${index}`} value={verification.result} onChange={(event) => updateAt(form.verification, index, { ...verification, result: event.target.value as typeof verification.result }, (items) => setForm({ ...form, verification: items }))}>
+                  <Select id={`verification-result-${index}`} value={verification.result} {...validationProps(`verification.${index}.result`)} onChange={(event) => updateAt(form.verification, index, { ...verification, result: event.target.value as typeof verification.result }, (items) => setForm({ ...form, verification: items }))}>
                     <option value="not_run">Not run</option><option value="passed">Passed</option><option value="failed">Failed</option>
                   </Select>
                 </Field>
-                <TextInput label="Evidence" value={verification.evidence ?? ""} onChange={(evidence) => updateAt(form.verification, index, { ...verification, evidence: evidence.trim() === "" ? null : evidence }, (items) => setForm({ ...form, verification: items }))} />
+                <TextInput label="Evidence" value={verification.evidence ?? ""} validation={validationProps(`verification.${index}.evidence`)} onChange={(evidence) => updateAt(form.verification, index, { ...verification, evidence: evidence.trim() === "" ? null : evidence }, (items) => setForm({ ...form, verification: items }))} />
               </EditorRow>
             ))}
           </Collection>
 
           <div className="grid gap-5 md:grid-cols-2">
-            <StatePhase title="Review" status={form.review.status} statuses={reviewStatuses} evidence={form.review.evidence} onStatus={(status) => setForm({ ...form, review: { ...form.review, status } })} onEvidence={(evidence) => setForm({ ...form, review: { ...form.review, evidence } })} />
-            <StatePhase title="Delivery" status={form.delivery.status} statuses={deliveryStatuses} evidence={form.delivery.evidence} onStatus={(status) => setForm({ ...form, delivery: { ...form.delivery, status } })} onEvidence={(evidence) => setForm({ ...form, delivery: { ...form.delivery, evidence } })} />
+            <StatePhase title="Review" status={form.review.status} statuses={reviewStatuses} evidence={form.review.evidence} validationProps={validationProps} onStatus={(status) => setForm({ ...form, review: { ...form.review, status } })} onEvidence={(evidence) => setForm({ ...form, review: { ...form.review, evidence } })} />
+            <StatePhase title="Delivery" status={form.delivery.status} statuses={deliveryStatuses} evidence={form.delivery.evidence} validationProps={validationProps} onStatus={(status) => setForm({ ...form, delivery: { ...form.delivery, status } })} onEvidence={(evidence) => setForm({ ...form, delivery: { ...form.delivery, evidence } })} />
           </div>
 
-          {validation.length > 0 && <Alert id="state-validation-errors" role="alert"><strong>Review these state fields</strong><ul className="list-disc pl-5">{validation.map((issue, index) => <li key={`${issue.path}:${issue.message}:${index}`}><strong>{issue.path || "State"}:</strong> {issue.message}</li>)}</ul></Alert>}
+          {validation.length > 0 && <Alert id="state-validation-errors" role="alert"><strong>Review these state fields</strong><ul className="list-disc pl-5">{validation.map((issue, index) => <li key={`${issue.path}:${issue.message}:${index}`}><strong>{issue.path.replaceAll(".", " → ") || "State"}:</strong> {issue.message}</li>)}</ul></Alert>}
           {remoteError != null && <Alert role="alert"><strong>{label(remoteError.code)}</strong><p>{remoteError.message}</p>{isStale(remoteError.code) && <Button type="button" className="mt-3" onClick={refreshAuthoritative}>Refresh and review changes</Button>}</Alert>}
           {checkpoint.isError && <Alert role="alert">Workboard is disconnected. The state was not reported as saved.</Alert>}
           <div aria-live="polite">{checkpoint.isPending ? "Saving authoritative state..." : saved ? "Authoritative Work-item state saved." : ""}</div>
-          <Button type="submit" variant="solid" disabled={checkpoint.isPending || reconciliation != null}>{checkpoint.isPending ? "Saving..." : "Save durable state"}</Button>
+          <Button type="submit" variant="solid" disabled={!formIsValid || checkpoint.isPending || reconciliation != null}>{checkpoint.isPending ? "Saving..." : "Save durable state"}</Button>
+          </fieldset>
         </form>
       </section>
     </Card>
@@ -182,9 +190,9 @@ function Field({ label: fieldLabel, htmlFor, children }: { label: string; htmlFo
   return <div className="grid gap-1.5"><Label htmlFor={htmlFor}>{fieldLabel}</Label>{children}</div>;
 }
 
-function TextInput({ label: fieldLabel, value, onChange }: { label: string; value: string; onChange(value: string): void }) {
+function TextInput({ label: fieldLabel, value, validation, onChange }: { label: string; value: string; validation?: ValidationProps; onChange(value: string): void }) {
   const id = useId();
-  return <Field label={fieldLabel} htmlFor={id}><Input id={id} value={value} onChange={(event) => onChange(event.target.value)} /></Field>;
+  return <Field label={fieldLabel} htmlFor={id}><Input id={id} value={value} {...validation} onChange={(event) => onChange(event.target.value)} /></Field>;
 }
 
 function Collection({ title, addLabel, onAdd, children }: { title: string; addLabel: string; onAdd(): void; children: ReactNode }) {
@@ -195,9 +203,14 @@ function EditorRow({ remove, children }: { remove(): void; children: ReactNode }
   return <div className="grid gap-3 rounded-lg border border-border p-3 md:grid-cols-2">{children}<Button type="button" size="sm" onClick={remove}>Remove</Button></div>;
 }
 
-function StatePhase<T extends string>({ title, status, statuses: options, evidence, onStatus, onEvidence }: { title: string; status: T; statuses: readonly T[]; evidence: string[]; onStatus(value: T): void; onEvidence(value: string[]): void }) {
+function StatePhase<T extends string>({ title, status, statuses: options, evidence, validationProps, onStatus, onEvidence }: { title: string; status: T; statuses: readonly T[]; evidence: string[]; validationProps(path: string): ValidationProps; onStatus(value: T): void; onEvidence(value: string[]): void }) {
   const id = title.toLowerCase();
-  return <fieldset className="space-y-3"><legend className="font-semibold">{title}</legend><Field label={`${title} status`} htmlFor={`${id}-status`}><Select id={`${id}-status`} value={status} onChange={(event) => onStatus(event.target.value as T)}>{options.map((option) => <option key={option} value={option}>{label(option)}</option>)}</Select></Field>{evidence.map((item, index) => <EditorRow key={index} remove={() => onEvidence(evidence.filter((_, candidate) => candidate !== index))}><TextInput label={`${title} evidence`} value={item} onChange={(value) => updateAt(evidence, index, value, onEvidence)} /></EditorRow>)}<Button type="button" size="sm" onClick={() => onEvidence([...evidence, ""])}>Add {title.toLowerCase()} evidence</Button></fieldset>;
+  return <fieldset className="space-y-3"><legend className="font-semibold">{title}</legend><Field label={`${title} status`} htmlFor={`${id}-status`}><Select id={`${id}-status`} value={status} {...validationProps(`${id}.status`)} onChange={(event) => onStatus(event.target.value as T)}>{options.map((option) => <option key={option} value={option}>{label(option)}</option>)}</Select></Field>{evidence.map((item, index) => <EditorRow key={index} remove={() => onEvidence(evidence.filter((_, candidate) => candidate !== index))}><TextInput label={`${title} evidence`} value={item} validation={validationProps(`${id}.evidence.${index}`)} onChange={(value) => updateAt(evidence, index, value, onEvidence)} /></EditorRow>)}<Button type="button" size="sm" onClick={() => onEvidence([...evidence, ""])}>Add {title.toLowerCase()} evidence</Button></fieldset>;
+}
+
+interface ValidationProps {
+  "aria-describedby": string | undefined;
+  "aria-invalid": true | undefined;
 }
 
 function updateAt<T>(values: T[], index: number, value: T, update: (values: T[]) => void) {
