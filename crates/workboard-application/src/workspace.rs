@@ -260,6 +260,10 @@ impl WorkboardApplication {
         WorkflowOperationService::new(&mut self.store)
     }
 
+    pub fn work_item_states(&mut self) -> crate::work_item_state::WorkItemStateService<'_> {
+        crate::work_item_state::WorkItemStateService::new(&mut self.store)
+    }
+
     pub fn follow_ups(&mut self) -> FollowUpService<'_> {
         FollowUpService::new(&mut self.store)
     }
@@ -414,12 +418,17 @@ impl WorkboardApplication {
                 })
             })
             .collect::<Result<Vec<_>, AppError>>()?;
+        let work_item_state = work_item
+            .as_ref()
+            .map(|item| self.work_item_states().read(item.id))
+            .transpose()?;
         Ok(AssignedContext {
-            schema_version: 2,
+            schema_version: 3,
             principal,
             epic,
             feature,
             work_item,
+            work_item_state,
             dependencies,
             repositories,
             documents,

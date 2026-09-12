@@ -1760,6 +1760,8 @@ mod tests {
 
     #[test]
     fn a_managed_launch_injects_only_its_role_bundle_and_never_the_provider_home() {
+        let workflow_token_before = std::env::var_os("WORKBOARD_WORKFLOW_TOKEN");
+        let codex_home_before = std::env::var_os("CODEX_HOME");
         let mut fixture = fixture();
         let request = request(&fixture, "bundle-injection");
         let provider_home = request.capability.provider_home.clone();
@@ -1860,8 +1862,11 @@ mod tests {
         assert!(environment.contains_key("WORKBOARD_REPOSITORY"));
         assert!(environment.contains_key("WORKBOARD_CHECKOUT"));
 
-        assert!(std::env::var("WORKBOARD_WORKFLOW_TOKEN").is_err());
-        assert!(std::env::var("CODEX_HOME").is_err());
+        assert_eq!(
+            std::env::var_os("WORKBOARD_WORKFLOW_TOKEN"),
+            workflow_token_before
+        );
+        assert_eq!(std::env::var_os("CODEX_HOME"), codex_home_before);
     }
 
     #[test]

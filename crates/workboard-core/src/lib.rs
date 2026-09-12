@@ -6,6 +6,7 @@ mod identity;
 mod launch;
 mod live;
 mod profile;
+mod work_item_state;
 mod workflow;
 
 pub use actions::{
@@ -48,6 +49,13 @@ pub use live::{
 pub use profile::{
     LAUNCH_PROFILE_SCHEMA_VERSION, LaunchProfile, LaunchProfileError, LaunchProfileSource,
     ReasoningEffort,
+};
+pub use work_item_state::{
+    WORK_ITEM_STATE_SCHEMA_VERSION, WorkItemBlocker, WorkItemDecision, WorkItemDeliveryState,
+    WorkItemDeliveryStatus, WorkItemNextAction, WorkItemReviewState, WorkItemReviewStatus,
+    WorkItemState, WorkItemStateOutcome, WorkItemStatePublicationStatus,
+    WorkItemStateReconciliation, WorkItemStateUpdate, WorkItemStateView, WorkItemTerminalIntent,
+    WorkItemVerification, WorkItemVerificationResult,
 };
 pub use workflow::{
     DocumentKind, GitOperationKind, IntentStatus, ManagedSessionRole, NextActionKind,
