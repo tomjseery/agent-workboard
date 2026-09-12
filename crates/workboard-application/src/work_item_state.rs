@@ -77,6 +77,11 @@ impl<'a> WorkItemStateService<'a> {
 
     pub(crate) fn preflight_integration(&self, work_item_id: WorkItemId) -> Result<(), AppError> {
         let view = read_view(self.store, work_item_id)?;
+        if let Some(reconciliation) = view.reconciliation {
+            return Err(AppError::WorkItemStateReconciliationRequired {
+                reason: reconciliation.reason,
+            });
+        }
         match view.state {
             Some(state) if state.status == WorkItemStatus::Review => Ok(()),
             Some(state) => Err(AppError::WorkItemStatusTransitionInvalid {
@@ -161,6 +166,14 @@ impl<'a> WorkItemStateService<'a> {
             return Err(structured_state_required());
         }
         let view = read_view(self.store, work_item_id)?;
+        let idempotency_key = format!("integration:{run_id}:{work_item_id}");
+        if let Some(reconciliation) = &view.reconciliation
+            && reconciliation.idempotency_key != idempotency_key
+        {
+            return Err(AppError::WorkItemStateReconciliationRequired {
+                reason: reconciliation.reason.clone(),
+            });
+        }
         let state = view.state.ok_or(AppError::WorkItemNotFound)?;
         if state.status == WorkItemStatus::Done {
             return Ok(());
@@ -193,7 +206,7 @@ impl<'a> WorkItemStateService<'a> {
             },
             status: WorkItemStatus::Done,
             terminal_intent: None,
-            idempotency_key: format!("integration:{run_id}:{work_item_id}"),
+            idempotency_key,
         };
         self.update(StateActor::Integration, request, recorded_at)?;
         Ok(())
