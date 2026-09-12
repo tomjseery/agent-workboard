@@ -24,13 +24,16 @@ const deliveryStatuses = ["not_started", "in_progress", "blocked", "ready", "del
 
 export function WorkItemStateEditor({ detail, refresh, checkpoint }: WorkItemStateEditorProps) {
   const [form, setFormState] = useState<WorkItemStateForm>(() => initialForm(detail));
-  const [validation, setValidation] = useState<Array<{ path: string; message: string }>>([]);
   const reconciliation = detail.structuredState.reconciliation;
   const remoteError = checkpoint.data?.error;
   const saved = checkpoint.data?.result?.type === "work_item_detail" && checkpoint.data.error == null;
   const schema = createWorkItemStateSchema(detail.status);
   const allowedStatuses = allowedWorkItemStatuses(detail.status);
-  const formIsValid = schema.safeParse(form).success;
+  const parsedForm = schema.safeParse(form);
+  const validation = parsedForm.success ? [] : parsedForm.error.issues.map((issue) => ({
+    path: issue.path.map(String).join("."),
+    message: issue.message,
+  }));
   const validationProps = (path: string) => ({
     "aria-describedby": validation.some((issue) => issue.path === path) ? "state-validation-errors" : undefined,
     "aria-invalid": validation.some((issue) => issue.path === path) || undefined,
@@ -38,25 +41,15 @@ export function WorkItemStateEditor({ detail, refresh, checkpoint }: WorkItemSta
   const setForm = (value: WorkItemStateForm) => {
     if (checkpoint.isPending) return;
     checkpoint.reset();
-    setValidation([]);
     setFormState(value);
   };
   const refreshAuthoritative = () => {
     checkpoint.reset();
-    setValidation([]);
     refresh();
   };
 
   const submit = () => {
-    const parsed = schema.safeParse(form);
-    if (!parsed.success) {
-      setValidation(parsed.error.issues.map((issue) => ({
-        path: issue.path.map(String).join("."),
-        message: issue.message,
-      })));
-      return;
-    }
-    setValidation([]);
+    if (!parsedForm.success) return;
     checkpoint.mutate({ expectedRevision: detail.revision, startingStatus: detail.status, state: form });
   };
 
@@ -149,7 +142,7 @@ export function WorkItemStateEditor({ detail, refresh, checkpoint }: WorkItemSta
           {remoteError != null && <Alert role="alert"><strong>{label(remoteError.code)}</strong><p>{remoteError.message}</p>{isStale(remoteError.code) && <Button type="button" className="mt-3" onClick={refreshAuthoritative}>Refresh and review changes</Button>}</Alert>}
           {checkpoint.isError && <Alert role="alert">Workboard is disconnected. The state was not reported as saved.</Alert>}
           <div aria-live="polite">{checkpoint.isPending ? "Saving authoritative state..." : saved ? "Authoritative Work-item state saved." : ""}</div>
-          <Button type="submit" variant="solid" disabled={!formIsValid || checkpoint.isPending || reconciliation != null}>{checkpoint.isPending ? "Saving..." : "Save durable state"}</Button>
+          <Button type="submit" variant="solid" disabled={!parsedForm.success || checkpoint.isPending || reconciliation != null}>{checkpoint.isPending ? "Saving..." : "Save durable state"}</Button>
           </fieldset>
         </form>
       </section>

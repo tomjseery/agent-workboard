@@ -75,6 +75,18 @@ impl<'a> WorkItemStateService<'a> {
         read_view(self.store, work_item_id)
     }
 
+    pub(crate) fn preflight_integration(&self, work_item_id: WorkItemId) -> Result<(), AppError> {
+        let view = read_view(self.store, work_item_id)?;
+        match view.state {
+            Some(state) if state.status == WorkItemStatus::Review => Ok(()),
+            Some(state) => Err(AppError::WorkItemStatusTransitionInvalid {
+                from: wire_name(state.status)?,
+                to: wire_name(WorkItemStatus::Done)?,
+            }),
+            None => Err(structured_state_required()),
+        }
+    }
+
     pub fn update_managed(
         &mut self,
         workflow_token: &str,
@@ -146,11 +158,7 @@ impl<'a> WorkItemStateService<'a> {
                 .map_err(Into::into)
         })?;
         if !has_structured_state {
-            return Err(AppError::External {
-                code: "work_item_structured_state_required".to_owned(),
-                message: "integration requires an authoritative structured Work-item checkpoint"
-                    .to_owned(),
-            });
+            return Err(structured_state_required());
         }
         let view = read_view(self.store, work_item_id)?;
         let state = view.state.ok_or(AppError::WorkItemNotFound)?;
@@ -926,6 +934,12 @@ fn managed_state_section(body: &str) -> Result<Option<ManagedStateSection>, AppE
 
 fn invalid<T>(message: &str) -> Result<T, AppError> {
     Err(AppError::PlanningDocumentInvalid(message.to_owned()))
+}
+fn structured_state_required() -> AppError {
+    AppError::External {
+        code: "work_item_structured_state_required".to_owned(),
+        message: "integration requires an authoritative structured Work-item checkpoint".to_owned(),
+    }
 }
 fn hash_serialized(value: &impl Serialize) -> Result<String, AppError> {
     Ok(format!("{:x}", Sha256::digest(serde_json::to_vec(value)?)))
