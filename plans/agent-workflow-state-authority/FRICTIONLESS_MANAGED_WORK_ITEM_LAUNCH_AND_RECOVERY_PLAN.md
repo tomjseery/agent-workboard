@@ -312,9 +312,10 @@ action is a clean incremental review of the fixing commit, followed by the insta
 - `cargo clippy --workspace --all-targets -- -D warnings` passed on 2026-08-31.
 - `cargo test --workspace` passed on 2026-08-31.
 - On 2026-09-12, structured-state tests passed for human and managed updates, strict authorization, exact managed
-  checkout integration, missing-authority rejection, exact Markdown
+checkout integration, missing-authority rejection, exact Markdown
   and SQLite parity, immutable history, idempotency conflicts, stale revisions, invalid transitions, external edits,
-  Git publication interruption, database finalization interruption, restart, and reconciliation. The complete
+  Git publication interruption, database finalization interruption, restart, reconciliation, and multi-repository
+  completion only after every configured repository has integrated evidence. The complete
   application suite passed 136 tests; CLI passed 31 tests with the two real-provider smokes still intentionally
   ignored; core passed 30 tests; daemon passed four tests; adapter/native and doc tests passed.
 - `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, and
