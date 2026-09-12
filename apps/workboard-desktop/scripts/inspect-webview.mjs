@@ -28,6 +28,13 @@ if (action === "read") {
   await page.evaluate(() => window.dispatchEvent(new PopStateEvent("popstate")));
   await page.waitForTimeout(1500);
   await dump(`after navigating to ${argument}`);
+} else if (action === "first-card") {
+  await page.locator("[data-board-card]").first().click();
+  await page.waitForTimeout(1500);
+  await dump("after opening the first board card");
+} else if (action === "section") {
+  await page.waitForTimeout(1000);
+  console.log(await page.locator(`#${argument}`).innerText());
 } else if (action === "sidebar") {
   await page.waitForTimeout(1500);
   console.log(await page.getByRole("complementary", { name: "Workspace navigation" }).innerText());

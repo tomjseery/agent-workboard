@@ -477,9 +477,14 @@ fn work_item_actions(
                 "session_follow_up_unavailable",
                 "Sending a follow-up is unavailable; Workboard cannot yet deliver a prompt to a live session.",
             ),
+            protocol::CommandCode::RecoverSession if sessions.has_resumable => None,
+            protocol::CommandCode::RecoverSession if sessions.has_live => unavailable(
+                "session_already_live",
+                "The bound session is already running and does not need recovery.",
+            ),
             protocol::CommandCode::RecoverSession => unavailable(
-                "session_recovery_unavailable",
-                "Recovery is unavailable from Desktop; it must preview before executing.",
+                "no_recoverable_session",
+                "This Work item has no session with validated recovery evidence.",
             ),
             _ => unavailable(
                 "upstream_capability_not_accepted",
@@ -613,7 +618,7 @@ mod tests {
         );
         assert_eq!(
             reason(protocol::CommandCode::RecoverSession),
-            Some("session_recovery_unavailable")
+            Some("no_recoverable_session")
         );
     }
 }

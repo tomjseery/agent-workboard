@@ -1,6 +1,7 @@
 import { Link } from "@tanstack/react-router";
 
 import { Badge } from "../../../components/ui/badge";
+import { Alert } from "../../../components/ui/alert";
 import { Card, CardTitle } from "../../../components/ui/card";
 import type { FeatureId, WorkspaceId } from "../../../core/contracts";
 import { laneOrder, lanePresentations } from "../../board/model/presentation";
@@ -37,7 +38,13 @@ export function FeatureDetail({ workspaceId, featureId }: FeatureDetailProps) {
       </Card>
       <Card asChild>
         <section aria-labelledby="feature-items-title">
-          <CardTitle id="feature-items-title">Work items</CardTitle>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <CardTitle id="feature-items-title">Work items</CardTitle>
+            <Badge tone="muted">Creation unavailable</Badge>
+          </div>
+          <Alert className="mt-3">
+            Desktop cannot create or edit Work items until the daemon client protocol exposes the accepted Work-item planning and structured-state operations.
+          </Alert>
           {workItems.length === 0 ? (
             <p className="mt-2">No Work items are recorded for this Feature.</p>
           ) : (

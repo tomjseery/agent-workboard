@@ -105,6 +105,7 @@ it("keeps Detail and Proposal as tabs on the Feature page and opens a Work item 
   await expect.element(tabs.getByRole("link", { name: "Detail" })).toBeVisible();
   await tabs.getByRole("link", { name: "Detail" }).click();
   await expect.element(page.getByRole("heading", { name: "Work items", level: 2 })).toBeVisible();
+  await expect.element(page.getByText(/Desktop cannot create or edit Work items/)).toBeVisible();
   await tabs.getByRole("link", { name: "Proposal", exact: true }).click();
   await expect.element(page.getByText(/proposal/i).first()).toBeVisible();
 

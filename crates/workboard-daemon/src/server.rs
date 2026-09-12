@@ -609,11 +609,20 @@ fn dispatch_command(
             )
             .map(session_result)
             .map_err(CommandFailure::Application),
+        CommandOperation::RecoverSession { session_id } => application
+            .recover_client_session(
+                core_workspace_id(context.workspace_id),
+                context.expected_revision,
+                &context.idempotency_key,
+                context.request_id,
+                workboard_core::ConversationId::from_uuid(*session_id.as_uuid()),
+            )
+            .map(session_result)
+            .map_err(CommandFailure::Application),
         CommandOperation::RejectFeature { .. }
         | CommandOperation::CheckpointWorkItem { .. }
         | CommandOperation::FocusSession { .. }
-        | CommandOperation::FollowUpSession { .. }
-        | CommandOperation::RecoverSession { .. } => Err(CommandFailure::Unavailable(
+        | CommandOperation::FollowUpSession { .. } => Err(CommandFailure::Unavailable(
             command_unavailable_reason(command.code()).unwrap_or_else(accepted_capability_reason),
         )),
     }
@@ -657,7 +666,9 @@ fn command_unavailable_reason(code: CommandCode) -> Option<UnavailableReason> {
             "structured_checkpoint_unavailable",
             "Structured checkpoint editing is unavailable because the daemon has not accepted a revision-checked atomic structured checkpoint operation.",
         ),
-        CommandCode::StartSession | CommandCode::ResumeSession => return None,
+        CommandCode::StartSession | CommandCode::ResumeSession | CommandCode::RecoverSession => {
+            return None;
+        }
         CommandCode::FocusSession => (
             "session_focus_unavailable",
             "Focusing a running session is unavailable; Workboard cannot yet activate a terminal window.",
@@ -665,10 +676,6 @@ fn command_unavailable_reason(code: CommandCode) -> Option<UnavailableReason> {
         CommandCode::FollowUpSession => (
             "session_follow_up_unavailable",
             "Sending a follow-up is unavailable; Workboard cannot yet deliver a prompt to a live session.",
-        ),
-        CommandCode::RecoverSession => (
-            "session_recovery_unavailable",
-            "Recovery is unavailable from Desktop; it must preview before executing.",
         ),
     };
     Some(UnavailableReason {

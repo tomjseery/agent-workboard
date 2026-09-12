@@ -1,4 +1,5 @@
 import type { SessionId, WorkspaceId } from "../../../core/contracts";
+import { useRecoverSessionMutation } from "./useRecoverSessionMutation";
 import { useRecoveryPreviewQuery, useSessionQuery } from "./useSessionQuery";
 
 export function useSession(workspaceId: WorkspaceId, sessionId: SessionId) {
@@ -14,8 +15,9 @@ export function useSession(workspaceId: WorkspaceId, sessionId: SessionId) {
   };
 }
 
-export function useRecoveryPreview(workspaceId: WorkspaceId, sessionId: SessionId) {
+export function useRecovery(workspaceId: WorkspaceId, sessionId: SessionId) {
   const query = useRecoveryPreviewQuery(workspaceId, sessionId);
+  const mutation = useRecoverSessionMutation(workspaceId, sessionId);
   return {
     projection: query.data?.result?.type === "recovery_preview" ? query.data.result.value : undefined,
     error: query.data?.error,
@@ -23,6 +25,10 @@ export function useRecoveryPreview(workspaceId: WorkspaceId, sessionId: SessionI
     isRefreshing: query.isFetching && !query.isPending,
     isDisconnected: query.isError,
     isPartial: (query.data?.partialOutcomes.length ?? 0) > 0,
+    isRecovering: mutation.isPending,
+    outcome: mutation.data,
+    recoveryError: mutation.error,
+    recover: (expectedRevision: number) => mutation.mutate(expectedRevision),
     retry: query.refetch,
   };
 }
