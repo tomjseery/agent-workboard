@@ -485,6 +485,15 @@ Disable mutation capabilities and retain read-only proposal/queue views. Daemon 
 - Dependencies: items 4 and 6
 - Mutation gate: accepted revision-checked atomic structured checkpoint operation
 
+The state-authority backend landed as `cdf3088` with its authority-boundary fix
+`80b12a3` and was integrated here as `e7affa0`. Client protocol v9 now carries
+the complete structured state, and Desktop submits that exact value through the
+human state operation. The daemon returns the authoritative reprojection after
+the planning-store commit and safely replays a lost response by idempotency key.
+The editor exposes current state, status, terminal intent, next action, blockers,
+decisions, verification, review and delivery, with explicit stale,
+reconciliation, disconnected and incompatible states.
+
 #### Objective
 
 Present complete durable Work-item state and add editing only when Workboard exposes a structured checkpoint contract.
@@ -519,25 +528,13 @@ Disable editors while retaining read-only detail. Accepted checkpoints remain ca
 - Status: [ ]
 - Slug: `deliver-zero-one-many-session-controls`
 - Dependencies: items 5, 6, and 8
-- Mutation gate: blocked on schema reconciliation with Frictionless, not on capability acceptance
+- Mutation gate: partially accepted; focus, follow-up, additional-writer fan-out,
+  provider-profile selection and close remain unavailable
 
-The gate wording was investigated on 2026-09-01. The named operations are not
-absent: `Feature/Frictionless-Managed-Work-Item-Launch` is at schema 41 and
-owns `feature-proposal-decision` (35), `session-binding-generation` (36),
-`session-follow-up` (37), `writer-session-reservation` (38),
-`managed-launch-batch` (39), `feature-branch-integration` (40) and
-`feature-work-item-proposal` (41).
-
-The live Workspace database has already been migrated to schema 41 by that
-branch. This branch is at 34 and fails to open it with
-`schema migration 32 checksum mismatch`, so Desktop on this branch cannot read
-the real Workspace at all. This branch's own migration 35
-(`proposal-revision-request`) also collides with the live 35.
-
-Reconciliation was deferred by explicit instruction on 2026-09-01: the Desktop
-increment is being completed first. Item 9 therefore proceeds on this branch for
-the operations this branch can actually back, and Desktop remains unable to open
-the live Workspace until the schemas are reconciled.
+The schema lines are reconciled through schema 44 and the installed Desktop can
+open the live Workspace. Start, Resume and recovery execute through accepted
+daemon operations. Recovery is preview-first and reports stale session evidence,
+resumability and child outcomes before execution.
 
 Delivered here: Start and Resume execute against the existing checkout and
 launch services, and the Work-item view renders the zero, one and many
@@ -547,13 +544,12 @@ choice only where the Work item targets more than one. Work-item
 `available_actions` are derived from observed session evidence rather than a
 fixed list.
 
-Not delivered here, because this branch has no backing application capability:
-OS window focus, follow-up delivery and its receipt evidence, second-writer
-fan-out onto an isolated checkout, provider-profile selection, and a user-actor
-structured checkpoint (`workflow_operations::checkpoint` authenticates a
-managed-session workflow token, which a human Desktop client does not hold).
-Each renders its own typed reason rather than being hidden. Recovery is
-implementable here and is the next item on this branch.
+Not delivered here, because there is no accepted backing application capability:
+OS window focus, follow-up delivery and receipt evidence, second-writer fan-out
+onto an isolated checkout, provider-profile selection and session close. Each
+renders its own typed reason rather than being hidden. Human structured state is
+now accepted separately through the state-authority operation delivered by item
+8.
 
 #### Objective
 
@@ -591,6 +587,20 @@ Disable command capabilities to return Desktop to read-only. Daemon recovery/ide
 - Slug: `harden-package-and-accept-desktop-client`
 - Dependencies: items 5, 7, 8, and 9
 - Delivery type: cross-cutting release qualification
+
+The current Windows build was installed and attached over WebView2 against the
+real Concertable Workspace. It navigated the board, opened a real Work item,
+showed the complete durable-state editor and exposed a direct Update state link
+on board cards. Start, Resume and recovery were also exercised against real
+session evidence; recovery correctly refused stale preview evidence. No unrelated
+live Work item was mutated. The isolated planning-store integration test performs
+the actual Git-backed state update and proves revision increment, authoritative
+reprojection and idempotent lost-response replay.
+
+The production build currently reports a 591.31 kB JavaScript chunk, above the
+500 kB warning threshold. Item 10 remains open until route/feature splitting and
+the complete packaging, accessibility, security and performance acceptance gates
+below are satisfied.
 
 #### Objective
 
@@ -749,6 +759,26 @@ Item 11 shipped the information architecture without the styling and structure r
 Full gate green: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --all-features -D
 warnings`, `cargo test --workspace --all-targets` (265 tests), `npm run generate:check`,
 `npm run typecheck`, 47 Vitest Node tests, 22 browser tests, `npm run build`.
+
+## Current delivery checkpoint
+
+The Desktop board/session-control increment now includes installed navigation,
+zero/one/many session presentation, Start, Resume, preview-first recovery and the
+authoritative structured Work-item state editor. Protocol v9, daemon dispatch,
+planning-store publication and React all use the same complete state contract.
+
+Remaining delivery gates are:
+
+1. Item 9 needs accepted daemon/application operations for focus, follow-up,
+   provider-profile selection, isolated additional-writer fan-out and close.
+2. Manual Work-item creation/edit remains unavailable because Workboard advertises
+   no accepted planning mutation for it; Desktop surfaces that exact gate.
+3. Item 10 needs code splitting for the 591.31 kB production chunk and the full
+   security, accessibility, performance, package lifecycle and rollback matrix.
+
+The next delivery action is for the backend owners to accept the remaining item
+9 planning/session operations. Desktop can then consume them without inventing
+client-side authority.
 
 ## Feature completion
 

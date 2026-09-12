@@ -27,6 +27,7 @@ it("bounds mounted cards and supports the complete non-drag keyboard path at 200
   await expect.element(page.getByLabelText("Work item board")).toBeVisible();
   await vi.waitFor(() => expect(document.querySelectorAll("[data-board-card]").length).toBeGreaterThan(0));
   expect(document.querySelectorAll("[data-board-card]").length).toBeLessThanOrEqual(200);
+  expect((page.getByRole("link", { name: "Update state" }).first().element() as HTMLAnchorElement).getAttribute("href")).toMatch(/#state-editor$/);
   const first = page.getByRole("button", { name: /F0000\/WI0:/ });
   await first.click();
   expect(onOpen).toHaveBeenCalledOnce();

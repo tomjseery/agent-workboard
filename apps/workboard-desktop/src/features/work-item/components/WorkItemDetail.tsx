@@ -10,10 +10,12 @@ import type { DurableWorkItemSection, WorkItemId, WorkspaceId } from "../../../c
 import { formatTimestamp } from "../../../lib/dates";
 import { useWorkItemDetail } from "../hooks/useWorkItem";
 import { SessionControls } from "./SessionControls";
+import { WorkItemStateEditor } from "./WorkItemStateEditor";
 
 const sections = [
   ["outcome", "Outcome and design"],
   ["state", "Current state"],
+  ["state-editor", "Update state"],
   ["dependencies", "Dependencies and blockers"],
   ["decisions", "Decisions"],
   ["verification", "Verification"],
@@ -84,6 +86,14 @@ export function WorkItemDetail({ workspaceId, workItemId }: { workspaceId: Works
 
       <TextSection id="outcome" title="Outcome and design" content={detail.outcomeDesignSummary} empty="No outcome or design summary is recorded." />
       <DurableSection id="state" title="Current state" section={detail.currentState} empty="No structured current state is recorded." />
+      {checkpointGate == null && (
+        <WorkItemStateEditor
+          key={`${detail.structuredState.state?.revision ?? 0}:${detail.structuredState.documentRevision}`}
+          detail={detail}
+          refresh={() => void model.retry()}
+          checkpoint={model.checkpoint}
+        />
+      )}
 
       <DetailSection id="dependencies" title="Dependencies and blockers">
         <p className="mt-2">Readiness: {detail.dependencyReadiness.replaceAll("_", " ")}</p>

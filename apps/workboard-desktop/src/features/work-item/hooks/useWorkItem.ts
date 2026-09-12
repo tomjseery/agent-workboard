@@ -1,8 +1,10 @@
 import type { WorkItemId, WorkspaceId } from "../../../core/contracts";
 import { useWorkItemDetailQuery } from "./useWorkItemQuery";
+import { useCheckpointWorkItemMutation } from "./useCheckpointWorkItemMutation";
 
 export function useWorkItemDetail(workspaceId: WorkspaceId, workItemId: WorkItemId) {
   const query = useWorkItemDetailQuery(workspaceId, workItemId);
+  const checkpoint = useCheckpointWorkItemMutation(workspaceId, workItemId);
   return {
     projection: query.data?.result?.type === "work_item_detail" ? query.data.result.value : undefined,
     error: query.data?.error,
@@ -13,5 +15,6 @@ export function useWorkItemDetail(workspaceId: WorkspaceId, workItemId: WorkItem
     isStale: query.isStale,
     isDisconnected: query.isError,
     retry: query.refetch,
+    checkpoint,
   };
 }

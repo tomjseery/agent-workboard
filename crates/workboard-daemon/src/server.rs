@@ -582,6 +582,20 @@ fn dispatch_command(
             )
             .map(proposal_result)
             .map_err(CommandFailure::Application),
+        CommandOperation::CheckpointWorkItem {
+            work_item_id,
+            state,
+        } => application
+            .checkpoint_client_work_item(
+                core_workspace_id(context.workspace_id),
+                context.expected_revision,
+                &context.idempotency_key,
+                context.request_id,
+                workboard_core::WorkItemId::from_uuid(*work_item_id.as_uuid()),
+                state.clone(),
+            )
+            .map(ResponseResult::WorkItemDetail)
+            .map_err(CommandFailure::Application),
         CommandOperation::StartSession {
             work_item_id,
             repository_id,
@@ -620,7 +634,6 @@ fn dispatch_command(
             .map(session_result)
             .map_err(CommandFailure::Application),
         CommandOperation::RejectFeature { .. }
-        | CommandOperation::CheckpointWorkItem { .. }
         | CommandOperation::FocusSession { .. }
         | CommandOperation::FollowUpSession { .. } => Err(CommandFailure::Unavailable(
             command_unavailable_reason(command.code()).unwrap_or_else(accepted_capability_reason),
@@ -662,10 +675,7 @@ fn command_unavailable_reason(code: CommandCode) -> Option<UnavailableReason> {
             "terminal_rejection_unavailable",
             "Rejecting a proposal outright is unavailable; request a revision instead.",
         ),
-        CommandCode::CheckpointWorkItem => (
-            "structured_checkpoint_unavailable",
-            "Structured checkpoint editing is unavailable because the daemon has not accepted a revision-checked atomic structured checkpoint operation.",
-        ),
+        CommandCode::CheckpointWorkItem => return None,
         CommandCode::StartSession | CommandCode::ResumeSession | CommandCode::RecoverSession => {
             return None;
         }
@@ -738,8 +748,19 @@ fn application_failure(
 }
 
 fn protocol_application_error(error: AppError) -> ProtocolError {
+    let revisions = match &error {
+        AppError::WorkItemStateRevisionStale { expected, current }
+        | AppError::WorkItemDocumentRevisionStale { expected, current } => {
+            Some((*expected, *current))
+        }
+        _ => None,
+    };
     let mut remote = ProtocolError::new(error.code(), error.to_string());
     remote.retryable = matches!(error.code(), "storage" | "storage_io" | "git_io");
+    if let Some((expected, current)) = revisions {
+        remote.stale_revision = Some(expected);
+        remote.current_revision = Some(current);
+    }
     remote
 }
 

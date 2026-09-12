@@ -308,7 +308,7 @@ describe("generated protocol conformance", () => {
       succeeded: false,
       reconciliationRequired: true,
     });
-    expect(previous.protocolVersion).toBe(7);
-    expect(current.protocolVersion).toBe(8);
+    expect(previous.protocolVersion).toBe(8);
+    expect(current.protocolVersion).toBe(9);
   });
 });
