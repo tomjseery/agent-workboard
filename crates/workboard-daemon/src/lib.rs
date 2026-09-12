@@ -32,8 +32,7 @@ mod tests {
     use workboard_client_protocol::{
         CURRENT_PROTOCOL_VERSION, CommandCode, CommandOperation, EntityRef, EventCursor,
         EventEnvelope, EventId, EventKind, EventPayload, FeatureId, InvalidationScope,
-        ReadQueryCode, RequestId, ResyncReason, SessionId, WorkItemId,
-        WorkspaceId as ClientWorkspaceId,
+        ReadQueryCode, RequestId, ResyncReason, SessionId, WorkspaceId as ClientWorkspaceId,
     };
     use workboard_core::{RepositoryId, WorkspaceId};
 
@@ -221,12 +220,6 @@ mod tests {
                 "terminal_rejection_unavailable",
             ),
             (
-                CommandOperation::CheckpointWorkItem {
-                    work_item_id: WorkItemId::generate(),
-                },
-                "structured_checkpoint_unavailable",
-            ),
-            (
                 CommandOperation::FocusSession {
                     session_id: SessionId::generate(),
                 },
@@ -291,6 +284,7 @@ mod tests {
                 CommandCode::SaveBoardView,
                 CommandCode::ApproveFeature,
                 CommandCode::RequestFeatureRevision,
+                CommandCode::CheckpointWorkItem,
                 CommandCode::StartSession,
                 CommandCode::ResumeSession,
                 CommandCode::RecoverSession,
@@ -306,6 +300,7 @@ mod tests {
                     CommandCode::SaveBoardView
                         | CommandCode::ApproveFeature
                         | CommandCode::RequestFeatureRevision
+                        | CommandCode::CheckpointWorkItem
                         | CommandCode::StartSession
                         | CommandCode::ResumeSession
                         | CommandCode::RecoverSession

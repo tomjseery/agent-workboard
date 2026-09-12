@@ -132,16 +132,70 @@ fn validate_command(command: &CommandOperation) -> Result<(), Box<ProtocolError>
         CommandOperation::RequestFeatureRevision { feedback, .. } => {
             validate_operator_text("feedback", feedback)
         }
+        CommandOperation::CheckpointWorkItem { state, .. } => validate_work_item_state(state),
         CommandOperation::SaveBoardView { .. }
         | CommandOperation::ApproveFeature { .. }
         | CommandOperation::RejectFeature { .. }
-        | CommandOperation::CheckpointWorkItem { .. }
         | CommandOperation::StartSession { .. }
         | CommandOperation::ResumeSession { .. }
         | CommandOperation::FocusSession { .. }
         | CommandOperation::FollowUpSession { .. }
         | CommandOperation::RecoverSession { .. } => Ok(()),
     }
+}
+
+fn validate_work_item_state(state: &crate::WorkItemStateInput) -> Result<(), Box<ProtocolError>> {
+    if state.schema_version != 1 {
+        return Err(Box::new(ProtocolError::validation(
+            "state.schema_version",
+            "unsupported_schema_version",
+        )));
+    }
+    validate_operator_text("state.current_state", &state.current_state)?;
+    validate_operator_text(
+        "state.next_action.description",
+        &state.next_action.description,
+    )?;
+    if [
+        state.blockers.len(),
+        state.decisions.len(),
+        state.verification.len(),
+        state.review.evidence.len(),
+        state.delivery.evidence.len(),
+    ]
+    .into_iter()
+    .any(|length| length > 64)
+    {
+        return Err(Box::new(ProtocolError::validation(
+            "state",
+            "collection_too_large",
+        )));
+    }
+    for blocker in &state.blockers {
+        validate_operator_text("state.blockers.description", &blocker.description)?;
+        validate_operator_text("state.blockers.owner", &blocker.owner)?;
+        validate_operator_text("state.blockers.unblock_action", &blocker.unblock_action)?;
+        validate_operator_text("state.blockers.resume_when", &blocker.resume_when)?;
+    }
+    for decision in &state.decisions {
+        validate_operator_text("state.decisions.decision", &decision.decision)?;
+        validate_operator_text("state.decisions.rationale", &decision.rationale)?;
+    }
+    for verification in &state.verification {
+        validate_operator_text("state.verification.check", &verification.check)?;
+        if let Some(evidence) = &verification.evidence {
+            validate_operator_text("state.verification.evidence", evidence)?;
+        }
+    }
+    for evidence in state
+        .review
+        .evidence
+        .iter()
+        .chain(state.delivery.evidence.iter())
+    {
+        validate_operator_text("state.evidence", evidence)?;
+    }
+    Ok(())
 }
 
 fn validate_operator_text(field: &str, value: &str) -> Result<(), Box<ProtocolError>> {
@@ -304,6 +358,7 @@ pub enum CommandOperation {
     },
     CheckpointWorkItem {
         work_item_id: crate::WorkItemId,
+        state: crate::WorkItemStateInput,
     },
     StartSession {
         work_item_id: crate::WorkItemId,

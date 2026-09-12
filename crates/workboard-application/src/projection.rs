@@ -530,6 +530,83 @@ impl WorkboardApplication {
         })
     }
 
+    pub fn checkpoint_client_work_item(
+        &mut self,
+        workspace_id: core::WorkspaceId,
+        expected_revision: u64,
+        idempotency_key: &str,
+        request_id: protocol::RequestId,
+        item_id: core::WorkItemId,
+        input: protocol::WorkItemStateInput,
+    ) -> Result<Box<protocol::WorkItemDetailProjection>, AppError> {
+        let update = core_work_item_state_update(item_id, idempotency_key, input);
+        let current_revision = self.projection_revision(workspace_id)?;
+        if current_revision != expected_revision {
+            let recorded = self.store.read(|connection| {
+                connection
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM client_operation_outcomes
+                         WHERE workspace_id = ?1 AND idempotency_key = ?2
+                           AND operation_name = 'checkpoint_work_item')",
+                        params![workspace_id.to_string(), idempotency_key],
+                        |row| row.get::<_, bool>(0),
+                    )
+                    .map_err(Into::into)
+            })?;
+            if recorded {
+                self.work_item_states().update_human(
+                    workspace_id,
+                    update,
+                    OffsetDateTime::now_utc(),
+                )?;
+                return self
+                    .client_work_item_detail(workspace_id, item_id)
+                    .map(Box::new);
+            }
+            return Err(AppError::External {
+                code: "stale_revision".to_owned(),
+                message: format!(
+                    "Workspace revision {expected_revision} is stale; current revision is {current_revision}"
+                ),
+            });
+        }
+
+        self.work_item_states()
+            .update_human(workspace_id, update, OffsetDateTime::now_utc())?;
+        self.store.write_projected(
+            workspace_id,
+            expected_revision,
+            idempotency_key,
+            "checkpoint_work_item",
+            |_| Ok(()),
+            |revision, ()| protocol::EventEnvelope {
+                protocol_version: protocol::CURRENT_PROTOCOL_VERSION,
+                event_version: 1,
+                workspace_id: wire_workspace_id(workspace_id),
+                sequence: revision,
+                event_id: protocol::EventId::generate(),
+                occurred_at: OffsetDateTime::now_utc(),
+                owner: protocol::EntityRef::WorkItem(work_item_id(item_id)),
+                entity_revision: revision,
+                kind: protocol::EventKind::WorkItemChanged,
+                payload: None,
+                invalidation_scope: Some(protocol::InvalidationScope {
+                    queries: vec![
+                        protocol::ReadQueryCode::WorkItemDetail,
+                        protocol::ReadQueryCode::Board,
+                        protocol::ReadQueryCode::Attention,
+                        protocol::ReadQueryCode::WorkspaceHierarchy,
+                    ],
+                    owners: vec![protocol::EntityRef::WorkItem(work_item_id(item_id))],
+                }),
+                operation_correlation_id: request_id,
+                partial_outcomes: Vec::new(),
+            },
+        )?;
+        self.client_work_item_detail(workspace_id, item_id)
+            .map(Box::new)
+    }
+
     pub fn reject_client_feature(
         &mut self,
         workspace_id: core::WorkspaceId,
@@ -1184,6 +1261,113 @@ fn map_hierarchy_features(
 
 pub fn core_workspace_id(id: protocol::WorkspaceId) -> core::WorkspaceId {
     core::WorkspaceId::from_uuid(*id.as_uuid())
+}
+
+fn core_work_item_state_update(
+    work_item_id: core::WorkItemId,
+    idempotency_key: &str,
+    input: protocol::WorkItemStateInput,
+) -> core::WorkItemStateUpdate {
+    core::WorkItemStateUpdate {
+        schema_version: input.schema_version,
+        work_item_id,
+        expected_revision: input.expected_state_revision,
+        expected_document_revision: input.expected_document_revision,
+        current_state: input.current_state,
+        next_action: core::WorkItemNextAction {
+            kind: match input.next_action.kind {
+                protocol::WorkItemNextActionKind::Actionable => core::NextActionKind::Actionable,
+                protocol::WorkItemNextActionKind::Blocked => core::NextActionKind::Blocked,
+                protocol::WorkItemNextActionKind::Paused => core::NextActionKind::Paused,
+                protocol::WorkItemNextActionKind::Review => core::NextActionKind::Review,
+                protocol::WorkItemNextActionKind::Delivery => core::NextActionKind::Delivery,
+            },
+            description: input.next_action.description,
+        },
+        blockers: input
+            .blockers
+            .into_iter()
+            .map(|blocker| core::WorkItemBlocker {
+                description: blocker.description,
+                owner: blocker.owner,
+                unblock_action: blocker.unblock_action,
+                resume_when: blocker.resume_when,
+            })
+            .collect(),
+        decisions: input
+            .decisions
+            .into_iter()
+            .map(|decision| core::WorkItemDecision {
+                decision: decision.decision,
+                rationale: decision.rationale,
+            })
+            .collect(),
+        verification: input
+            .verification
+            .into_iter()
+            .map(|verification| core::WorkItemVerification {
+                check: verification.check,
+                result: match verification.result {
+                    protocol::WorkItemVerificationResult::Passed => {
+                        core::WorkItemVerificationResult::Passed
+                    }
+                    protocol::WorkItemVerificationResult::Failed => {
+                        core::WorkItemVerificationResult::Failed
+                    }
+                    protocol::WorkItemVerificationResult::NotRun => {
+                        core::WorkItemVerificationResult::NotRun
+                    }
+                },
+                evidence: verification.evidence,
+            })
+            .collect(),
+        review: core::WorkItemReviewState {
+            status: match input.review.status {
+                protocol::WorkItemReviewStatus::NotStarted => {
+                    core::WorkItemReviewStatus::NotStarted
+                }
+                protocol::WorkItemReviewStatus::InProgress => {
+                    core::WorkItemReviewStatus::InProgress
+                }
+                protocol::WorkItemReviewStatus::ChangesRequested => {
+                    core::WorkItemReviewStatus::ChangesRequested
+                }
+                protocol::WorkItemReviewStatus::Ready => core::WorkItemReviewStatus::Ready,
+                protocol::WorkItemReviewStatus::Accepted => core::WorkItemReviewStatus::Accepted,
+            },
+            evidence: input.review.evidence,
+        },
+        delivery: core::WorkItemDeliveryState {
+            status: match input.delivery.status {
+                protocol::WorkItemDeliveryStatus::NotStarted => {
+                    core::WorkItemDeliveryStatus::NotStarted
+                }
+                protocol::WorkItemDeliveryStatus::InProgress => {
+                    core::WorkItemDeliveryStatus::InProgress
+                }
+                protocol::WorkItemDeliveryStatus::Blocked => core::WorkItemDeliveryStatus::Blocked,
+                protocol::WorkItemDeliveryStatus::Ready => core::WorkItemDeliveryStatus::Ready,
+                protocol::WorkItemDeliveryStatus::Delivered => {
+                    core::WorkItemDeliveryStatus::Delivered
+                }
+            },
+            evidence: input.delivery.evidence,
+        },
+        status: match input.status {
+            protocol::WorkItemStatus::Backlog => core::WorkItemStatus::Backlog,
+            protocol::WorkItemStatus::Ready => core::WorkItemStatus::Ready,
+            protocol::WorkItemStatus::InProgress => core::WorkItemStatus::InProgress,
+            protocol::WorkItemStatus::Blocked => core::WorkItemStatus::Blocked,
+            protocol::WorkItemStatus::Review => core::WorkItemStatus::Review,
+            protocol::WorkItemStatus::Done => core::WorkItemStatus::Done,
+            protocol::WorkItemStatus::Cancelled => core::WorkItemStatus::Cancelled,
+        },
+        terminal_intent: input.terminal_intent.map(|intent| match intent {
+            protocol::WorkItemTerminalIntent::Complete => core::WorkItemTerminalIntent::Complete,
+            protocol::WorkItemTerminalIntent::Cancel => core::WorkItemTerminalIntent::Cancel,
+        }),
+        idempotency_key: idempotency_key.to_owned(),
+    }
 }
 
 fn sorted_repository_ids(ids: HashSet<core::RepositoryId>) -> Vec<protocol::RepositoryId> {

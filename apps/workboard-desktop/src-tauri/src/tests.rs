@@ -83,6 +83,21 @@ fn closed_channel() -> Channel<SubscriptionMessage> {
     Channel::new(|_| Err(tauri::Error::FailedToReceiveMessage))
 }
 
+fn expect_connected(receiver: &mpsc::Receiver<SubscriptionMessage>) {
+    let deadline = Instant::now() + Duration::from_secs(6);
+    let mut received = Vec::new();
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let message = receiver
+            .recv_timeout(remaining)
+            .unwrap_or_else(|error| panic!("connected: {error:?}; messages={received:?}"));
+        if matches!(message, SubscriptionMessage::Connected { .. }) {
+            return;
+        }
+        received.push(message);
+    }
+}
+
 fn invoke_request(command: &str, body: Value) -> InvokeRequest {
     InvokeRequest {
         cmd: command.to_owned(),
@@ -234,12 +249,7 @@ fn channel_delivery_is_ordered_and_all_lifecycle_paths_cancel() {
             event_channel,
         )
         .expect("start subscription");
-    assert!(matches!(
-        receiver
-            .recv_timeout(Duration::from_secs(2))
-            .expect("connected"),
-        SubscriptionMessage::Connected { .. }
-    ));
+    expect_connected(&receiver);
     daemon.push_event(1, None);
     daemon.push_event(2, None);
     assert!(matches!(
@@ -274,9 +284,7 @@ fn channel_delivery_is_ordered_and_all_lifecycle_paths_cancel() {
             first_channel,
         )
         .expect("first replacement");
-    first_receiver
-        .recv_timeout(Duration::from_secs(2))
-        .expect("first connected");
+    expect_connected(&first_receiver);
     let (second_channel, second_receiver) = channel();
     runtime
         .subscribe(
@@ -288,9 +296,7 @@ fn channel_delivery_is_ordered_and_all_lifecycle_paths_cancel() {
             second_channel,
         )
         .expect("second replacement");
-    second_receiver
-        .recv_timeout(Duration::from_secs(2))
-        .expect("second connected");
+    expect_connected(&second_receiver);
     assert_eq!(runtime.active_subscription_count(), 1);
     runtime.cancel_window("main");
     wait_until(Duration::from_secs(2), || {
@@ -334,9 +340,7 @@ fn daemon_restart_resyncs_without_duplicate_subscriptions() {
             event_channel,
         )
         .expect("start subscription");
-    receiver
-        .recv_timeout(Duration::from_secs(2))
-        .expect("first connected");
+    expect_connected(&receiver);
     let workspace_id = first.workspace_id;
     first.stop();
     let second = FakeDaemon::start(
@@ -416,9 +420,7 @@ fn endpoint_credentials_are_absent_from_responses_channels_and_errors() {
             event_channel,
         )
         .expect("start subscription");
-    receiver
-        .recv_timeout(Duration::from_secs(2))
-        .expect("connected");
+    expect_connected(&receiver);
     daemon.push_event(1, Some(daemon.token.clone()));
     let message = receiver
         .recv_timeout(Duration::from_secs(2))

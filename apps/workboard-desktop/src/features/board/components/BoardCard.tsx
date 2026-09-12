@@ -50,8 +50,11 @@ export const BoardCard = memo(function BoardCard({ card, workspaceId, evidenceLi
           {card.attentionReasons.length > 0 && <span className="mt-2 block text-xs font-semibold text-warning">{card.attentionReasons.map((reason) => reason.message).join(" · ")}</span>}
         </button>
       </Card>
-      {evidenceLinks && (card.checkoutIds.length > 0 || card.sessionIds.length > 0) && (
-        <nav aria-label={`Evidence for ${card.workItem.key}`} className="mt-1 flex flex-wrap gap-2 px-1">
+      <nav aria-label={`Actions and evidence for ${card.workItem.key}`} className="mt-1 flex flex-wrap gap-2 px-1">
+        <Badge size="tag" asChild>
+          <Link to="/workspaces/$workspaceId/work-items/$workItemId" params={{ workspaceId, workItemId: card.workItem.id }} hash="state-editor">Update state</Link>
+        </Badge>
+        {evidenceLinks && <>
           {card.checkoutIds.map((checkoutId) => (
             <Badge key={checkoutId} size="tag" asChild>
               <Link to="/workspaces/$workspaceId/checkouts/$checkoutId" params={{ workspaceId, checkoutId }}>Checkout {checkoutId.slice(0, 8)}</Link>
@@ -62,8 +65,8 @@ export const BoardCard = memo(function BoardCard({ card, workspaceId, evidenceLi
               <Link to="/workspaces/$workspaceId/sessions/$sessionId" params={{ workspaceId, sessionId }}>Session {sessionId.slice(0, 8)}</Link>
             </Badge>
           ))}
-        </nav>
-      )}
+        </>}
+      </nav>
     </article>
   );
 });

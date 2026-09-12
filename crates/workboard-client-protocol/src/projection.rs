@@ -379,10 +379,143 @@ pub struct WorkItemDetailProjection {
     pub revision: u64,
     pub content_revision: u64,
     pub content_hash: String,
+    pub structured_state: WorkItemStateViewProjection,
     pub checkpoint_history: Vec<WorkItemCheckpointProjection>,
     pub sessions: Vec<SessionObservabilityProjection>,
     pub diagnostics: Vec<Diagnostic>,
     pub available_actions: Vec<AvailableAction>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkItemStateViewProjection {
+    pub state: Option<WorkItemStateProjection>,
+    pub document_revision: u64,
+    pub reconciliation: Option<WorkItemStateReconciliationProjection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkItemStateProjection {
+    pub schema_version: u32,
+    pub revision: u64,
+    pub document_revision: u64,
+    pub current_state: String,
+    pub next_action: WorkItemNextActionInput,
+    pub blockers: Vec<WorkItemStateBlocker>,
+    pub decisions: Vec<WorkItemStateDecision>,
+    pub verification: Vec<WorkItemStateVerification>,
+    pub review: WorkItemReviewState,
+    pub delivery: WorkItemDeliveryState,
+    pub status: WorkItemStatus,
+    pub terminal_intent: Option<WorkItemTerminalIntent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkItemStateInput {
+    pub schema_version: u32,
+    pub expected_state_revision: u64,
+    pub expected_document_revision: u64,
+    pub current_state: String,
+    pub next_action: WorkItemNextActionInput,
+    pub blockers: Vec<WorkItemStateBlocker>,
+    pub decisions: Vec<WorkItemStateDecision>,
+    pub verification: Vec<WorkItemStateVerification>,
+    pub review: WorkItemReviewState,
+    pub delivery: WorkItemDeliveryState,
+    pub status: WorkItemStatus,
+    pub terminal_intent: Option<WorkItemTerminalIntent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkItemNextActionInput {
+    pub kind: WorkItemNextActionKind,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkItemStateBlocker {
+    pub description: String,
+    pub owner: String,
+    pub unblock_action: String,
+    pub resume_when: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkItemStateDecision {
+    pub decision: String,
+    pub rationale: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkItemStateVerification {
+    pub check: String,
+    pub result: WorkItemVerificationResult,
+    pub evidence: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkItemVerificationResult {
+    Passed,
+    Failed,
+    NotRun,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkItemReviewState {
+    pub status: WorkItemReviewStatus,
+    pub evidence: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkItemReviewStatus {
+    NotStarted,
+    InProgress,
+    ChangesRequested,
+    Ready,
+    Accepted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkItemDeliveryState {
+    pub status: WorkItemDeliveryStatus,
+    pub evidence: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkItemDeliveryStatus {
+    NotStarted,
+    InProgress,
+    Blocked,
+    Ready,
+    Delivered,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkItemTerminalIntent {
+    Complete,
+    Cancel,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkItemStateReconciliationProjection {
+    pub checkpoint_id: crate::WorkItemCheckpointId,
+    pub idempotency_key: String,
+    pub expected_document_hash: String,
+    pub candidate_document_hash: String,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

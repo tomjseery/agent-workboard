@@ -54,7 +54,7 @@ impl WorkboardApplication {
         repositories.sort_by(|left, right| left.slug.cmp(&right.slug));
 
         let prerequisites = self.work_item_prerequisites(workspace_id, work_item_id)?;
-        let blockers = prerequisites
+        let mut blockers = prerequisites
             .iter()
             .filter(|dependency| !is_complete(dependency.status))
             .map(|dependency| protocol::WorkItemBlockerProjection {
@@ -97,11 +97,68 @@ impl WorkboardApplication {
             .map(|id| self.client_session_observability(workspace_id, id))
             .collect::<Result<Vec<_>, _>>()?;
         let session_actions = session_action_inputs(&sessions);
-
+        let structured_state =
+            crate::work_item_state::read_projection_view(&self.store, work_item_id)?;
+        let current_state = structured_state
+            .state
+            .as_ref()
+            .map(|state| vec![state.current_state.clone()])
+            .unwrap_or_default();
+        let decisions = structured_state
+            .state
+            .as_ref()
+            .map(|state| {
+                state
+                    .decisions
+                    .iter()
+                    .map(|decision| format!("{} — {}", decision.decision, decision.rationale))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let verification = structured_state
+            .state
+            .as_ref()
+            .map(|state| {
+                state
+                    .verification
+                    .iter()
+                    .map(|verification| {
+                        let result = verification_result_label(verification.result);
+                        verification.evidence.as_ref().map_or_else(
+                            || format!("{} — {result}", verification.check),
+                            |evidence| format!("{} — {result}: {evidence}", verification.check),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        if let Some(state) = &structured_state.state {
+            blockers.extend(state.blockers.iter().map(|blocker| {
+                protocol::WorkItemBlockerProjection {
+                    code: "recorded_blocker".to_owned(),
+                    message: blocker.description.clone(),
+                    prerequisite: None,
+                }
+            }));
+        }
         let structured_evidence = protocol::ClassifiedEvidence {
-            state: protocol::EvidenceState::NotLoaded,
-            code: "structured_checkpoint_unavailable".to_owned(),
-            message: "Structured checkpoint evidence is unavailable while the accepted checkpoint contract remains opaque.".to_owned(),
+            state: if structured_state.state.is_some() {
+                protocol::EvidenceState::Current
+            } else {
+                protocol::EvidenceState::NotLoaded
+            },
+            code: if structured_state.state.is_some() {
+                "structured_state_loaded"
+            } else {
+                "structured_state_not_recorded"
+            }
+            .to_owned(),
+            message: if structured_state.state.is_some() {
+                "This section is backed by authoritative structured Work-item state."
+            } else {
+                "No structured Work-item state has been recorded yet."
+            }
+            .to_owned(),
             observed_at: None,
         };
         let mut diagnostics = Vec::new();
@@ -133,17 +190,17 @@ impl WorkboardApplication {
             },
             outcome_design_summary: row.outcome_design_summary,
             current_state: protocol::DurableWorkItemSection {
-                entries: Vec::new(),
+                entries: current_state,
                 evidence: structured_evidence.clone(),
             },
             dependency_readiness,
             blockers,
             decisions: protocol::DurableWorkItemSection {
-                entries: Vec::new(),
+                entries: decisions,
                 evidence: structured_evidence.clone(),
             },
             verification: protocol::DurableWorkItemSection {
-                entries: Vec::new(),
+                entries: verification,
                 evidence: structured_evidence,
             },
             next_action,
@@ -155,6 +212,7 @@ impl WorkboardApplication {
             revision,
             content_revision: row.content_revision,
             content_hash: row.content_hash,
+            structured_state: work_item_state_view(structured_state),
             checkpoint_history,
             sessions,
             diagnostics,
@@ -330,6 +388,14 @@ impl WorkboardApplication {
     }
 }
 
+fn verification_result_label(result: core::WorkItemVerificationResult) -> &'static str {
+    match result {
+        core::WorkItemVerificationResult::Passed => "passed",
+        core::WorkItemVerificationResult::Failed => "failed",
+        core::WorkItemVerificationResult::NotRun => "not run",
+    }
+}
+
 fn parse_id<T>(value: &str) -> Result<T, AppError>
 where
     T: std::str::FromStr,
@@ -381,6 +447,16 @@ fn dependency_readiness(
 
 fn work_item_status(status: core::WorkItemStatus) -> protocol::WorkItemStatus {
     parse_shared(status)
+}
+
+fn next_action_kind(kind: core::NextActionKind) -> protocol::WorkItemNextActionKind {
+    match kind {
+        core::NextActionKind::Actionable => protocol::WorkItemNextActionKind::Actionable,
+        core::NextActionKind::Blocked => protocol::WorkItemNextActionKind::Blocked,
+        core::NextActionKind::Paused => protocol::WorkItemNextActionKind::Paused,
+        core::NextActionKind::Review => protocol::WorkItemNextActionKind::Review,
+        core::NextActionKind::Delivery => protocol::WorkItemNextActionKind::Delivery,
+    }
 }
 
 fn workflow_state(state: core::WorkflowState) -> protocol::WorkflowState {
@@ -451,10 +527,7 @@ fn work_item_actions(
     .into_iter()
     .map(|code| {
         let unavailable_reason = match code {
-            protocol::CommandCode::CheckpointWorkItem => unavailable(
-                "structured_checkpoint_unavailable",
-                "Structured checkpoint editing is unavailable because the daemon has not accepted a revision-checked atomic structured checkpoint operation.",
-            ),
+            protocol::CommandCode::CheckpointWorkItem => None,
             protocol::CommandCode::StartSession if sessions.has_live => unavailable(
                 "writer_session_active",
                 "A session is already writing in this Work item's checkout. Resume it, or close it before starting another.",
@@ -501,27 +574,170 @@ fn work_item_actions(
     .collect()
 }
 
+fn work_item_state_view(value: core::WorkItemStateView) -> protocol::WorkItemStateViewProjection {
+    protocol::WorkItemStateViewProjection {
+        state: value.state.map(work_item_state),
+        document_revision: value.document_revision,
+        reconciliation: value.reconciliation.map(|reconciliation| {
+            protocol::WorkItemStateReconciliationProjection {
+                checkpoint_id: protocol::WorkItemCheckpointId::from_uuid(
+                    *reconciliation.checkpoint_id.as_uuid(),
+                ),
+                idempotency_key: reconciliation.idempotency_key,
+                expected_document_hash: reconciliation.expected_document_hash,
+                candidate_document_hash: reconciliation.candidate_document_hash,
+                reason: reconciliation.reason,
+            }
+        }),
+    }
+}
+
+fn work_item_state(value: core::WorkItemState) -> protocol::WorkItemStateProjection {
+    protocol::WorkItemStateProjection {
+        schema_version: value.schema_version,
+        revision: value.revision,
+        document_revision: value.document_revision,
+        current_state: value.current_state,
+        next_action: protocol::WorkItemNextActionInput {
+            kind: next_action_kind(value.next_action.kind),
+            description: value.next_action.description,
+        },
+        blockers: value
+            .blockers
+            .into_iter()
+            .map(|blocker| protocol::WorkItemStateBlocker {
+                description: blocker.description,
+                owner: blocker.owner,
+                unblock_action: blocker.unblock_action,
+                resume_when: blocker.resume_when,
+            })
+            .collect(),
+        decisions: value
+            .decisions
+            .into_iter()
+            .map(|decision| protocol::WorkItemStateDecision {
+                decision: decision.decision,
+                rationale: decision.rationale,
+            })
+            .collect(),
+        verification: value
+            .verification
+            .into_iter()
+            .map(|verification| protocol::WorkItemStateVerification {
+                check: verification.check,
+                result: match verification.result {
+                    core::WorkItemVerificationResult::Passed => {
+                        protocol::WorkItemVerificationResult::Passed
+                    }
+                    core::WorkItemVerificationResult::Failed => {
+                        protocol::WorkItemVerificationResult::Failed
+                    }
+                    core::WorkItemVerificationResult::NotRun => {
+                        protocol::WorkItemVerificationResult::NotRun
+                    }
+                },
+                evidence: verification.evidence,
+            })
+            .collect(),
+        review: protocol::WorkItemReviewState {
+            status: match value.review.status {
+                core::WorkItemReviewStatus::NotStarted => {
+                    protocol::WorkItemReviewStatus::NotStarted
+                }
+                core::WorkItemReviewStatus::InProgress => {
+                    protocol::WorkItemReviewStatus::InProgress
+                }
+                core::WorkItemReviewStatus::ChangesRequested => {
+                    protocol::WorkItemReviewStatus::ChangesRequested
+                }
+                core::WorkItemReviewStatus::Ready => protocol::WorkItemReviewStatus::Ready,
+                core::WorkItemReviewStatus::Accepted => protocol::WorkItemReviewStatus::Accepted,
+            },
+            evidence: value.review.evidence,
+        },
+        delivery: protocol::WorkItemDeliveryState {
+            status: match value.delivery.status {
+                core::WorkItemDeliveryStatus::NotStarted => {
+                    protocol::WorkItemDeliveryStatus::NotStarted
+                }
+                core::WorkItemDeliveryStatus::InProgress => {
+                    protocol::WorkItemDeliveryStatus::InProgress
+                }
+                core::WorkItemDeliveryStatus::Blocked => protocol::WorkItemDeliveryStatus::Blocked,
+                core::WorkItemDeliveryStatus::Ready => protocol::WorkItemDeliveryStatus::Ready,
+                core::WorkItemDeliveryStatus::Delivered => {
+                    protocol::WorkItemDeliveryStatus::Delivered
+                }
+            },
+            evidence: value.delivery.evidence,
+        },
+        status: work_item_status(value.status),
+        terminal_intent: value.terminal_intent.map(|intent| match intent {
+            core::WorkItemTerminalIntent::Complete => protocol::WorkItemTerminalIntent::Complete,
+            core::WorkItemTerminalIntent::Cancel => protocol::WorkItemTerminalIntent::Cancel,
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+    use std::process::Command;
+
     use rusqlite::params;
     use tempfile::TempDir;
     use workboard_client_protocol as protocol;
-    use workboard_core::{DocumentId, EpicId, FeatureId, RepositoryId, WorkItemId, WorkspaceId};
+    use workboard_core::{
+        DocumentId, DocumentKind, EpicId, FeatureId, RepositoryId, RepositoryPathId, Slug,
+        WorkItemId, WorkspaceId,
+    };
 
+    use crate::planning_store::{DocumentFrontMatter, PlanningStore};
     use crate::workspace::WorkboardApplication;
 
     #[test]
-    fn detail_is_revisioned_and_read_only_when_only_the_opaque_checkpoint_contract_exists() {
+    fn detail_exposes_structured_state_and_accepted_checkpoint_action() {
         let directory = TempDir::new().expect("temporary directory");
+        let planning_path = directory.path().join("planning");
+        let planning_store = PlanningStore::create_or_link(&planning_path).expect("planning store");
+        for arguments in [
+            ["config", "user.name", "Workboard Test"],
+            ["config", "user.email", "workboard@example.invalid"],
+        ] {
+            assert!(
+                Command::new("git")
+                    .arg("-C")
+                    .arg(&planning_path)
+                    .args(arguments)
+                    .status()
+                    .expect("configure Git")
+                    .success()
+            );
+        }
         let mut application = WorkboardApplication::open(directory.path().join("workboard.sqlite"))
             .expect("open application");
         let workspace_id = WorkspaceId::generate();
         let repository_id = RepositoryId::generate();
+        let repository_path_id = RepositoryPathId::generate();
         let epic_id = EpicId::generate();
         let feature_id = FeatureId::generate();
         let work_item_id = WorkItemId::generate();
         let epic_document_id = DocumentId::generate();
         let work_item_document_id = DocumentId::generate();
+        let stored = planning_store
+            .publish_new(
+                Path::new("item.md"),
+                &DocumentFrontMatter {
+                    id: work_item_document_id,
+                    kind: DocumentKind::WorkItem,
+                    key: "epic/feature/item".to_owned(),
+                    status: Some(workboard_core::WorkItemStatus::InProgress),
+                    repositories: vec![Slug::new("planning").expect("repository slug")],
+                },
+                "# Work item\n\nImplement it.\n",
+                "Add Work item",
+            )
+            .expect("publish Work item");
         application
             .store
             .write(|transaction| {
@@ -532,6 +748,10 @@ mod tests {
                 transaction.execute(
                     "INSERT INTO repositories (id, workspace_id, slug, title, git_common_directory, default_branch, is_planning_store, created_at) VALUES (?1, ?2, 'planning', 'Planning', 'fixture-common-directory', 'main', 1, '2026-08-31T12:00:00Z')",
                     params![repository_id.to_string(), workspace_id.to_string()],
+                )?;
+                transaction.execute(
+                    "INSERT INTO repository_paths (id, repository_id, path, observed_from) VALUES (?1, ?2, ?3, '2026-08-31T12:00:00Z')",
+                    params![repository_path_id.to_string(), repository_id.to_string(), planning_path.to_string_lossy()],
                 )?;
                 transaction.execute(
                     "INSERT INTO epics (id, workspace_id, slug, title, created_at) VALUES (?1, ?2, 'epic', 'Epic', '2026-08-31T12:00:00Z')",
@@ -555,7 +775,7 @@ mod tests {
                 )?;
                 transaction.execute(
                     "INSERT INTO documents (id, repository_id, work_item_id, kind, relative_path, content_hash, observed_at) VALUES (?1, ?2, ?3, 'work_item', 'item.md', ?4, '2026-08-31T12:00:00Z')",
-                    params![work_item_document_id.to_string(), repository_id.to_string(), work_item_id.to_string(), "b".repeat(64)],
+                    params![work_item_document_id.to_string(), repository_id.to_string(), work_item_id.to_string(), stored.content_hash],
                 )?;
                 transaction.execute(
                     "UPDATE workspace_projection_revisions SET revision = 9 WHERE workspace_id = ?1",
@@ -570,10 +790,12 @@ mod tests {
             .expect("project Work-item detail");
         assert_eq!(detail.revision, 9);
         assert_eq!(detail.content_revision, 1);
-        assert_eq!(detail.content_hash, "b".repeat(64));
+        assert_eq!(detail.content_hash, stored.content_hash);
         assert!(detail.checkpoint_history.is_empty());
         assert!(detail.sessions.is_empty());
         assert!(detail.checkouts.is_empty());
+        assert!(detail.structured_state.state.is_none());
+        assert_eq!(detail.structured_state.document_revision, 1);
         let reason = |code: protocol::CommandCode| {
             detail
                 .available_actions
@@ -597,17 +819,17 @@ mod tests {
                 .filter(|action| action.available)
                 .map(|action| action.code)
                 .collect::<Vec<_>>(),
-            vec![protocol::CommandCode::StartSession],
-            "a Work item with no bound session offers Start and nothing else"
+            vec![
+                protocol::CommandCode::CheckpointWorkItem,
+                protocol::CommandCode::StartSession,
+            ],
+            "a Work item with no state or session offers checkpoint and Start"
         );
         assert_eq!(
             reason(protocol::CommandCode::ResumeSession),
             Some("no_resumable_session")
         );
-        assert_eq!(
-            reason(protocol::CommandCode::CheckpointWorkItem),
-            Some("structured_checkpoint_unavailable")
-        );
+        assert_eq!(reason(protocol::CommandCode::CheckpointWorkItem), None);
         assert_eq!(
             reason(protocol::CommandCode::FocusSession),
             Some("session_focus_unavailable")
@@ -620,5 +842,113 @@ mod tests {
             reason(protocol::CommandCode::RecoverSession),
             Some("no_recoverable_session")
         );
+
+        let updated = application
+            .checkpoint_client_work_item(
+                workspace_id,
+                9,
+                "desktop-checkpoint",
+                protocol::RequestId::generate(),
+                work_item_id,
+                protocol::WorkItemStateInput {
+                    schema_version: 1,
+                    expected_state_revision: 0,
+                    expected_document_revision: 1,
+                    current_state: "Implementation is complete.".to_owned(),
+                    next_action: protocol::WorkItemNextActionInput {
+                        kind: protocol::WorkItemNextActionKind::Review,
+                        description: "Review the candidate.".to_owned(),
+                    },
+                    blockers: Vec::new(),
+                    decisions: Vec::new(),
+                    verification: Vec::new(),
+                    review: protocol::WorkItemReviewState {
+                        status: protocol::WorkItemReviewStatus::Ready,
+                        evidence: vec!["candidate abc123".to_owned()],
+                    },
+                    delivery: protocol::WorkItemDeliveryState {
+                        status: protocol::WorkItemDeliveryStatus::NotStarted,
+                        evidence: Vec::new(),
+                    },
+                    status: protocol::WorkItemStatus::Review,
+                    terminal_intent: None,
+                },
+            )
+            .expect("checkpoint Work-item");
+        assert_eq!(updated.revision, 10);
+        assert_eq!(
+            updated
+                .structured_state
+                .state
+                .as_ref()
+                .map(|state| state.current_state.as_str()),
+            Some("Implementation is complete.")
+        );
+        let replay = application
+            .checkpoint_client_work_item(
+                workspace_id,
+                9,
+                "desktop-checkpoint",
+                protocol::RequestId::generate(),
+                work_item_id,
+                protocol::WorkItemStateInput {
+                    schema_version: 1,
+                    expected_state_revision: 0,
+                    expected_document_revision: 1,
+                    current_state: "Implementation is complete.".to_owned(),
+                    next_action: protocol::WorkItemNextActionInput {
+                        kind: protocol::WorkItemNextActionKind::Review,
+                        description: "Review the candidate.".to_owned(),
+                    },
+                    blockers: Vec::new(),
+                    decisions: Vec::new(),
+                    verification: Vec::new(),
+                    review: protocol::WorkItemReviewState {
+                        status: protocol::WorkItemReviewStatus::Ready,
+                        evidence: vec!["candidate abc123".to_owned()],
+                    },
+                    delivery: protocol::WorkItemDeliveryState {
+                        status: protocol::WorkItemDeliveryStatus::NotStarted,
+                        evidence: Vec::new(),
+                    },
+                    status: protocol::WorkItemStatus::Review,
+                    terminal_intent: None,
+                },
+            )
+            .expect("replay Work-item checkpoint");
+        assert_eq!(replay.revision, 10);
+        let conflict = application
+            .checkpoint_client_work_item(
+                workspace_id,
+                9,
+                "desktop-checkpoint",
+                protocol::RequestId::generate(),
+                work_item_id,
+                protocol::WorkItemStateInput {
+                    schema_version: 1,
+                    expected_state_revision: 0,
+                    expected_document_revision: 1,
+                    current_state: "A different update.".to_owned(),
+                    next_action: protocol::WorkItemNextActionInput {
+                        kind: protocol::WorkItemNextActionKind::Review,
+                        description: "Review the candidate.".to_owned(),
+                    },
+                    blockers: Vec::new(),
+                    decisions: Vec::new(),
+                    verification: Vec::new(),
+                    review: protocol::WorkItemReviewState {
+                        status: protocol::WorkItemReviewStatus::Ready,
+                        evidence: vec!["candidate abc123".to_owned()],
+                    },
+                    delivery: protocol::WorkItemDeliveryState {
+                        status: protocol::WorkItemDeliveryStatus::NotStarted,
+                        evidence: Vec::new(),
+                    },
+                    status: protocol::WorkItemStatus::Review,
+                    terminal_intent: None,
+                },
+            )
+            .expect_err("changed checkpoint replay");
+        assert!(matches!(conflict, crate::AppError::IdempotencyConflict));
     }
 }

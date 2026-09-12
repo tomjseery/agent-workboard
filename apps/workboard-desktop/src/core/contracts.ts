@@ -8,4 +8,5 @@ export type {
   RecoveryDispositionProjection as RecoveryDisposition,
   ResponseEnvelope as DaemonResponse,
   SessionObservabilityProjection as Session,
+  WorkItemDetailProjection as WorkItemDetail,
 } from "./generated";

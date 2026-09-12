@@ -629,13 +629,10 @@
           "detail": {
             "availableActions": [
               {
-                "available": false,
+                "available": true,
                 "code": "checkpoint_work_item",
                 "expectedRevision": 41,
-                "unavailableReason": {
-                  "code": "structured_checkpoint_unavailable",
-                  "message": "Structured checkpoint editing is unavailable."
-                }
+                "unavailableReason": null
               }
             ],
             "blockers": [
@@ -811,6 +808,46 @@
               }
             ],
             "status": "review",
+            "structuredState": {
+              "documentRevision": 3,
+              "reconciliation": null,
+              "state": {
+                "blockers": [],
+                "currentState": "Implementation is ready for review.",
+                "decisions": [
+                  {
+                    "decision": "Keep authority in Workboard.",
+                    "rationale": "Every client sees one result."
+                  }
+                ],
+                "delivery": {
+                  "evidence": [],
+                  "status": "not_started"
+                },
+                "documentRevision": 3,
+                "nextAction": {
+                  "description": "Review the current candidate.",
+                  "kind": "review"
+                },
+                "review": {
+                  "evidence": [
+                    "candidate abc123"
+                  ],
+                  "status": "ready"
+                },
+                "revision": 2,
+                "schemaVersion": 1,
+                "status": "review",
+                "terminalIntent": null,
+                "verification": [
+                  {
+                    "check": "Full gate",
+                    "evidence": "scripts/Test.ps1",
+                    "result": "passed"
+                  }
+                ]
+              }
+            },
             "verification": {
               "entries": [],
               "evidence": {
@@ -1255,7 +1292,7 @@
           }
         }
       },
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1271,7 +1308,7 @@
           }
         }
       },
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1288,7 +1325,7 @@
           }
         }
       },
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1304,7 +1341,7 @@
           }
         }
       },
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1316,11 +1353,47 @@
         "value": {
           "type": "checkpoint_work_item",
           "value": {
+            "state": {
+              "blockers": [],
+              "currentState": "Implementation is ready for review.",
+              "decisions": [
+                {
+                  "decision": "Keep authority in Workboard.",
+                  "rationale": "Every client sees one result."
+                }
+              ],
+              "delivery": {
+                "evidence": [],
+                "status": "not_started"
+              },
+              "expectedDocumentRevision": 3,
+              "expectedStateRevision": 2,
+              "nextAction": {
+                "description": "Review the current candidate.",
+                "kind": "review"
+              },
+              "review": {
+                "evidence": [
+                  "candidate abc123"
+                ],
+                "status": "ready"
+              },
+              "schemaVersion": 1,
+              "status": "review",
+              "terminalIntent": null,
+              "verification": [
+                {
+                  "check": "Full gate",
+                  "evidence": "scripts/Test.ps1",
+                  "result": "passed"
+                }
+              ]
+            },
             "workItemId": "60000000-0000-0000-0000-000000000001"
           }
         }
       },
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1338,7 +1411,7 @@
           }
         }
       },
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1354,7 +1427,7 @@
           }
         }
       },
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1370,7 +1443,7 @@
           }
         }
       },
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1386,7 +1459,7 @@
           }
         }
       },
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1402,7 +1475,7 @@
           }
         }
       },
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     }
@@ -1428,7 +1501,7 @@
     "reconciliationRequired": true,
     "succeeded": false
   },
-  "protocolVersion": 7,
+  "protocolVersion": 8,
   "readRequests": [
     {
       "expectedRevision": null,
@@ -1437,15 +1510,15 @@
         "type": "handshake",
         "value": {
           "supportedCommandVersions": [
-            8
+            9
           ],
           "supportedReadVersions": [
-            8,
-            7
+            9,
+            8
           ]
         }
       },
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": null
     },
@@ -1458,7 +1531,7 @@
           "type": "workspace_summary"
         }
       },
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1477,7 +1550,7 @@
           }
         }
       },
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1490,7 +1563,7 @@
           "type": "workspace_hierarchy"
         }
       },
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1503,7 +1576,7 @@
           "type": "board_views"
         }
       },
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1519,7 +1592,7 @@
           }
         }
       },
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1532,7 +1605,7 @@
           "type": "board_snapshot"
         }
       },
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     },
@@ -1548,7 +1621,7 @@
           }
         }
       },
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "workspaceId": "20000000-0000-0000-0000-000000000001"
     }
@@ -1572,7 +1645,7 @@
       "error": null,
       "futureOptionalReadField": "ignored",
       "partialOutcomes": [],
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "handshake",
@@ -1582,7 +1655,7 @@
               "available": false,
               "code": "save_board_view",
               "compatibleVersions": [
-                8
+                9
               ],
               "unavailableReason": {
                 "code": "not_accepted",
@@ -1591,14 +1664,14 @@
             }
           ],
           "compatibleCommandVersions": [
-            8
+            9
           ],
           "daemonInstanceId": "80000000-0000-0000-0000-000000000001",
           "eventVersion": 1,
           "futureOptionalProjectionField": true,
           "heartbeatIntervalMs": 1000,
           "maxFrameBytes": 8388608,
-          "negotiatedReadVersion": 7,
+          "negotiatedReadVersion": 8,
           "workspaces": [
             {
               "id": "20000000-0000-0000-0000-000000000001",
@@ -1629,7 +1702,7 @@
       "error": null,
       "futureOptionalReadField": "ignored",
       "partialOutcomes": [],
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "workspace_summary",
@@ -1668,7 +1741,7 @@
       "error": null,
       "futureOptionalReadField": "ignored",
       "partialOutcomes": [],
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "hierarchy_children",
@@ -1712,7 +1785,7 @@
       "error": null,
       "futureOptionalReadField": "ignored",
       "partialOutcomes": [],
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "workspace_hierarchy",
@@ -1805,7 +1878,7 @@
       "error": null,
       "futureOptionalReadField": "ignored",
       "partialOutcomes": [],
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "board_views",
@@ -1863,7 +1936,7 @@
       "error": null,
       "futureOptionalReadField": "ignored",
       "partialOutcomes": [],
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "board_view",
@@ -1920,7 +1993,7 @@
       "error": null,
       "futureOptionalReadField": "ignored",
       "partialOutcomes": [],
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "board_snapshot",
@@ -1964,7 +2037,7 @@
       "error": null,
       "futureOptionalReadField": "ignored",
       "partialOutcomes": [],
-      "protocolVersion": 7,
+      "protocolVersion": 8,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "subscription_accepted",
@@ -1997,7 +2070,7 @@
       "error": null,
       "futureOptionalReadField": "ignored",
       "partialOutcomes": [],
-      "protocolVersion": 8,
+      "protocolVersion": 9,
       "requestId": "10000000-0000-0000-0000-000000000001",
       "result": {
         "type": "command_accepted",
@@ -2030,7 +2103,7 @@
         "diagnostics": [],
         "error": null,
         "partialOutcomes": [],
-        "protocolVersion": 7,
+        "protocolVersion": 8,
         "requestId": "10000000-0000-0000-0000-000000000001",
         "result": {
           "type": "workspace_summary",
@@ -2126,7 +2199,7 @@
             }
           }
         },
-        "protocolVersion": 7,
+        "protocolVersion": 8,
         "sequence": 42,
         "workspaceId": "20000000-0000-0000-0000-000000000001"
       }

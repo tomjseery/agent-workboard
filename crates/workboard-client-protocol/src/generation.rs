@@ -26,9 +26,13 @@ use crate::{
     SessionLivenessProjection, SessionObservabilityProjection, SessionRestoreState,
     SessionResumability, SessionSummary, SubscriptionRequest, UnavailableReason, ValidationField,
     WorkItemBlockerProjection, WorkItemCheckpointId, WorkItemCheckpointProjection,
-    WorkItemDetailProjection, WorkItemId, WorkItemNextActionKind, WorkItemNextActionProjection,
-    WorkItemReference, WorkItemStatus, WorkflowState, WorkspaceHierarchy, WorkspaceId,
-    WorkspaceReference, WorkspaceSummary,
+    WorkItemDeliveryState, WorkItemDeliveryStatus, WorkItemDetailProjection, WorkItemId,
+    WorkItemNextActionInput, WorkItemNextActionKind, WorkItemNextActionProjection,
+    WorkItemReference, WorkItemReviewState, WorkItemReviewStatus, WorkItemStateBlocker,
+    WorkItemStateDecision, WorkItemStateInput, WorkItemStateProjection,
+    WorkItemStateReconciliationProjection, WorkItemStateVerification, WorkItemStateViewProjection,
+    WorkItemStatus, WorkItemTerminalIntent, WorkItemVerificationResult, WorkflowState,
+    WorkspaceHierarchy, WorkspaceId, WorkspaceReference, WorkspaceSummary,
 };
 
 const REQUEST_ID: &str = "10000000-0000-0000-0000-000000000001";
@@ -229,10 +233,28 @@ fn work_item_detail() -> Value {
         "revision": 41,
         "contentRevision": 3,
         "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "structuredState": {
+            "state": {
+                "schemaVersion": 1,
+                "revision": 2,
+                "documentRevision": 3,
+                "currentState": "Implementation is ready for review.",
+                "nextAction": { "kind": "review", "description": "Review the current candidate." },
+                "blockers": [],
+                "decisions": [{ "decision": "Keep authority in Workboard.", "rationale": "Every client sees one result." }],
+                "verification": [{ "check": "Full gate", "result": "passed", "evidence": "scripts/Test.ps1" }],
+                "review": { "status": "ready", "evidence": ["candidate abc123"] },
+                "delivery": { "status": "not_started", "evidence": [] },
+                "status": "review",
+                "terminalIntent": null
+            },
+            "documentRevision": 3,
+            "reconciliation": null
+        },
         "checkpointHistory": [{ "id": CHECKPOINT_ID, "sessionId": SESSION_ID, "nextAction": "review", "summary": "Opaque checkpoint summary <img src=x onerror=alert(1)>", "recordedAt": "2026-08-30T12:00:00Z" }],
         "sessions": [session_observability()],
         "diagnostics": [{ "code": "work_item_reconciliation_required", "severity": "error", "message": "This Work item requires authoritative reconciliation outside Desktop.", "owner": { "kind": "work_item", "id": WORK_ITEM_ID } }],
-        "availableActions": [{ "code": "checkpoint_work_item", "available": false, "unavailableReason": { "code": "structured_checkpoint_unavailable", "message": "Structured checkpoint editing is unavailable." }, "expectedRevision": 41 }]
+        "availableActions": [{ "code": "checkpoint_work_item", "available": true, "unavailableReason": null, "expectedRevision": 41 }]
     })
 }
 
@@ -284,6 +306,20 @@ pub fn typescript_declarations() -> String {
     declaration!(ApprovalQueueItemProjection);
     declaration!(FeatureProposalProjection);
     declaration!(WorkItemDetailProjection);
+    declaration!(WorkItemStateViewProjection);
+    declaration!(WorkItemStateProjection);
+    declaration!(WorkItemStateInput);
+    declaration!(WorkItemNextActionInput);
+    declaration!(WorkItemStateBlocker);
+    declaration!(WorkItemStateDecision);
+    declaration!(WorkItemStateVerification);
+    declaration!(WorkItemVerificationResult);
+    declaration!(WorkItemReviewState);
+    declaration!(WorkItemReviewStatus);
+    declaration!(WorkItemDeliveryState);
+    declaration!(WorkItemDeliveryStatus);
+    declaration!(WorkItemTerminalIntent);
+    declaration!(WorkItemStateReconciliationProjection);
     declaration!(DurableWorkItemSection);
     declaration!(WorkItemBlockerProjection);
     declaration!(WorkItemNextActionKind);
@@ -535,6 +571,23 @@ fn query_request(query: Value) -> Value {
     json!({ "workspaceId": WORKSPACE_ID, "query": query })
 }
 
+fn work_item_state_input() -> Value {
+    json!({
+        "schemaVersion": 1,
+        "expectedStateRevision": 2,
+        "expectedDocumentRevision": 3,
+        "currentState": "Implementation is ready for review.",
+        "nextAction": { "kind": "review", "description": "Review the current candidate." },
+        "blockers": [],
+        "decisions": [{ "decision": "Keep authority in Workboard.", "rationale": "Every client sees one result." }],
+        "verification": [{ "check": "Full gate", "result": "passed", "evidence": "scripts/Test.ps1" }],
+        "review": { "status": "ready", "evidence": ["candidate abc123"] },
+        "delivery": { "status": "not_started", "evidence": [] },
+        "status": "review",
+        "terminalIntent": null
+    })
+}
+
 fn execute_request() -> Value {
     json!({
         "workspaceId": WORKSPACE_ID,
@@ -556,7 +609,7 @@ fn incompatible_commands() -> Vec<Value> {
             "value": { "featureId": FEATURE_ID, "feedback": "Split the migration item." }
         }),
         json!({ "type": "reject_feature", "value": { "featureId": FEATURE_ID } }),
-        json!({ "type": "checkpoint_work_item", "value": { "workItemId": WORK_ITEM_ID } }),
+        json!({ "type": "checkpoint_work_item", "value": { "workItemId": WORK_ITEM_ID, "state": work_item_state_input() } }),
         json!({
             "type": "start_session",
             "value": {
@@ -1106,8 +1159,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn work_item_fixture_covers_durable_read_sections_and_keeps_opaque_checkpoint_mutation_closed()
-    {
+    fn work_item_fixture_covers_structured_state_and_checkpoint_mutation() {
         let detail = serde_json::from_value::<WorkItemDetailProjection>(work_item_detail())
             .expect("Work-item detail projection");
         assert_eq!(detail.dependency_readiness, DependencyReadiness::Waiting);
@@ -1121,18 +1173,21 @@ mod tests {
             detail.available_actions[0].code,
             CommandCode::CheckpointWorkItem
         );
-        assert!(!detail.available_actions[0].available);
+        assert!(detail.available_actions[0].available);
         assert_eq!(
-            detail.available_actions[0]
-                .unavailable_reason
+            detail
+                .structured_state
+                .state
                 .as_ref()
-                .map(|reason| reason.code.as_str()),
-            Some("structured_checkpoint_unavailable")
+                .map(|state| state.revision),
+            Some(2)
         );
         assert!(matches!(
-            CommandOperation::CheckpointWorkItem {
-                work_item_id: WORK_ITEM_ID.parse().expect("Work-item ID")
-            },
+            serde_json::from_value::<CommandOperation>(json!({
+                "type": "checkpoint_work_item",
+                "value": { "workItemId": WORK_ITEM_ID, "state": work_item_state_input() }
+            }))
+            .expect("checkpoint command"),
             CommandOperation::CheckpointWorkItem { .. }
         ));
     }

@@ -66,7 +66,7 @@ export type CommandCapability = { code: CommandCode, available: boolean, compati
 
 export type CommandCode = "save_board_view" | "approve_feature" | "request_feature_revision" | "reject_feature" | "checkpoint_work_item" | "start_session" | "resume_session" | "focus_session" | "follow_up_session" | "recover_session";
 
-export type CommandOperation = { "type": "save_board_view", "value": { definition: BoardViewDefinition, } } | { "type": "approve_feature", "value": { featureId: FeatureId, } } | { "type": "request_feature_revision", "value": { featureId: FeatureId, feedback: string, } } | { "type": "reject_feature", "value": { featureId: FeatureId, } } | { "type": "checkpoint_work_item", "value": { workItemId: WorkItemId, } } | { "type": "start_session", "value": { workItemId: WorkItemId, repositoryId: RepositoryId | null, provider: Provider, } } | { "type": "resume_session", "value": { sessionId: SessionId, } } | { "type": "focus_session", "value": { sessionId: SessionId, } } | { "type": "follow_up_session", "value": { sessionId: SessionId, } } | { "type": "recover_session", "value": { sessionId: SessionId, } };
+export type CommandOperation = { "type": "save_board_view", "value": { definition: BoardViewDefinition, } } | { "type": "approve_feature", "value": { featureId: FeatureId, } } | { "type": "request_feature_revision", "value": { featureId: FeatureId, feedback: string, } } | { "type": "reject_feature", "value": { featureId: FeatureId, } } | { "type": "checkpoint_work_item", "value": { workItemId: WorkItemId, state: WorkItemStateInput, } } | { "type": "start_session", "value": { workItemId: WorkItemId, repositoryId: RepositoryId | null, provider: Provider, } } | { "type": "resume_session", "value": { sessionId: SessionId, } } | { "type": "focus_session", "value": { sessionId: SessionId, } } | { "type": "follow_up_session", "value": { sessionId: SessionId, } } | { "type": "recover_session", "value": { sessionId: SessionId, } };
 
 export type DaemonInstanceId = string;
 
@@ -210,9 +210,15 @@ export type WorkItemCheckpointId = string;
 
 export type WorkItemCheckpointProjection = { id: WorkItemCheckpointId, sessionId: SessionId, nextAction: WorkItemNextActionKind, summary: string, recordedAt: string, };
 
-export type WorkItemDetailProjection = { workItem: WorkItemReference, feature: FeatureReference, outcomeDesignSummary: string, currentState: DurableWorkItemSection, dependencyReadiness: DependencyReadiness, blockers: Array<WorkItemBlockerProjection>, decisions: DurableWorkItemSection, verification: DurableWorkItemSection, nextAction: WorkItemNextActionProjection | null, reviewDeliveryState: ReviewDeliveryState, workflowState: WorkflowState, status: WorkItemStatus, repositories: Array<RepositoryReference>, checkouts: Array<CheckoutObservabilityProjection>, revision: number, contentRevision: number, contentHash: string, checkpointHistory: Array<WorkItemCheckpointProjection>, sessions: Array<SessionObservabilityProjection>, diagnostics: Array<Diagnostic>, availableActions: Array<AvailableAction>, };
+export type WorkItemDeliveryState = { status: WorkItemDeliveryStatus, evidence: Array<string>, };
+
+export type WorkItemDeliveryStatus = "not_started" | "in_progress" | "blocked" | "ready" | "delivered";
+
+export type WorkItemDetailProjection = { workItem: WorkItemReference, feature: FeatureReference, outcomeDesignSummary: string, currentState: DurableWorkItemSection, dependencyReadiness: DependencyReadiness, blockers: Array<WorkItemBlockerProjection>, decisions: DurableWorkItemSection, verification: DurableWorkItemSection, nextAction: WorkItemNextActionProjection | null, reviewDeliveryState: ReviewDeliveryState, workflowState: WorkflowState, status: WorkItemStatus, repositories: Array<RepositoryReference>, checkouts: Array<CheckoutObservabilityProjection>, revision: number, contentRevision: number, contentHash: string, structuredState: WorkItemStateViewProjection, checkpointHistory: Array<WorkItemCheckpointProjection>, sessions: Array<SessionObservabilityProjection>, diagnostics: Array<Diagnostic>, availableActions: Array<AvailableAction>, };
 
 export type WorkItemId = string;
+
+export type WorkItemNextActionInput = { kind: WorkItemNextActionKind, description: string, };
 
 export type WorkItemNextActionKind = "actionable" | "blocked" | "paused" | "review" | "delivery";
 
@@ -220,7 +226,29 @@ export type WorkItemNextActionProjection = { kind: WorkItemNextActionKind, recor
 
 export type WorkItemReference = { id: WorkItemId, featureId: FeatureId, key: string, slug: string, title: string, };
 
+export type WorkItemReviewState = { status: WorkItemReviewStatus, evidence: Array<string>, };
+
+export type WorkItemReviewStatus = "not_started" | "in_progress" | "changes_requested" | "ready" | "accepted";
+
+export type WorkItemStateBlocker = { description: string, owner: string, unblockAction: string, resumeWhen: string, };
+
+export type WorkItemStateDecision = { decision: string, rationale: string, };
+
+export type WorkItemStateInput = { schemaVersion: number, expectedStateRevision: number, expectedDocumentRevision: number, currentState: string, nextAction: WorkItemNextActionInput, blockers: Array<WorkItemStateBlocker>, decisions: Array<WorkItemStateDecision>, verification: Array<WorkItemStateVerification>, review: WorkItemReviewState, delivery: WorkItemDeliveryState, status: WorkItemStatus, terminalIntent: WorkItemTerminalIntent | null, };
+
+export type WorkItemStateProjection = { schemaVersion: number, revision: number, documentRevision: number, currentState: string, nextAction: WorkItemNextActionInput, blockers: Array<WorkItemStateBlocker>, decisions: Array<WorkItemStateDecision>, verification: Array<WorkItemStateVerification>, review: WorkItemReviewState, delivery: WorkItemDeliveryState, status: WorkItemStatus, terminalIntent: WorkItemTerminalIntent | null, };
+
+export type WorkItemStateReconciliationProjection = { checkpointId: WorkItemCheckpointId, idempotencyKey: string, expectedDocumentHash: string, candidateDocumentHash: string, reason: string, };
+
+export type WorkItemStateVerification = { check: string, result: WorkItemVerificationResult, evidence: string | null, };
+
+export type WorkItemStateViewProjection = { state: WorkItemStateProjection | null, documentRevision: number, reconciliation: WorkItemStateReconciliationProjection | null, };
+
 export type WorkItemStatus = "backlog" | "ready" | "in_progress" | "blocked" | "review" | "done" | "cancelled";
+
+export type WorkItemTerminalIntent = "complete" | "cancel";
+
+export type WorkItemVerificationResult = "passed" | "failed" | "not_run";
 
 export type WorkflowState = "draft" | "worktree_pending" | "planning_launch_pending" | "planning_active" | "proposal_ready" | "awaiting_approval" | "publishing" | "planned" | "work_item_launch_pending" | "work_item_active" | "reconciliation_required" | "blocked" | "paused" | "completed" | "cancelled";
 
