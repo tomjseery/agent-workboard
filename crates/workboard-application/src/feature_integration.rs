@@ -955,6 +955,16 @@ mod tests {
                     ],
                 )?;
                 transaction.execute(
+                    "INSERT INTO repository_paths (id, repository_id, path, observed_from)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![
+                        workboard_core::RepositoryPathId::generate().to_string(),
+                        planning_repository_id.to_string(),
+                        directory.path().to_string_lossy(),
+                        now,
+                    ],
+                )?;
+                transaction.execute(
                     "INSERT INTO epics (id, workspace_id, slug, title, created_at)
                      VALUES (?1, ?2, 'integration', 'Integration', ?3)",
                     params![epic_id.to_string(), workspace_id.to_string(), now],

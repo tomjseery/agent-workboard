@@ -37,6 +37,7 @@ CREATE TABLE work_item_state_updates (
     work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE RESTRICT,
     actor_kind TEXT NOT NULL CHECK (actor_kind IN ('managed_session', 'local_human')),
     session_id TEXT REFERENCES native_sessions(id) ON DELETE RESTRICT,
+    checkout_id TEXT REFERENCES checkouts(id) ON DELETE RESTRICT,
     idempotency_key TEXT NOT NULL UNIQUE CHECK (idempotency_key <> ''),
     request_hash TEXT NOT NULL CHECK (length(request_hash) = 64),
     expected_revision INTEGER NOT NULL CHECK (expected_revision >= 0),
@@ -50,7 +51,11 @@ CREATE TABLE work_item_state_updates (
     published_commit TEXT,
     failure TEXT,
     recorded_at TEXT NOT NULL,
-    completed_at TEXT
+    completed_at TEXT,
+    CHECK (
+        (actor_kind = 'managed_session' AND session_id IS NOT NULL AND checkout_id IS NOT NULL)
+        OR (actor_kind = 'local_human' AND session_id IS NULL AND checkout_id IS NULL)
+    )
 );
 CREATE INDEX work_item_state_updates_item
     ON work_item_state_updates (work_item_id, recorded_at, id);

@@ -420,25 +420,7 @@ impl WorkboardApplication {
             .collect::<Result<Vec<_>, AppError>>()?;
         let work_item_state = work_item
             .as_ref()
-            .map(|item| {
-                self.work_item_states().read(item.id).or_else(|error| {
-                    if matches!(error, AppError::WorkItemNotFound) {
-                        let document_revision = documents
-                            .iter()
-                            .find(|document| {
-                                document.document.owner == HierarchyOwner::WorkItem(item.id)
-                            })
-                            .map_or(1, |document| document.revision);
-                        Ok(workboard_core::WorkItemStateView {
-                            state: None,
-                            document_revision,
-                            reconciliation: None,
-                        })
-                    } else {
-                        Err(error)
-                    }
-                })
-            })
+            .map(|item| self.work_item_states().read(item.id))
             .transpose()?;
         Ok(AssignedContext {
             schema_version: 3,

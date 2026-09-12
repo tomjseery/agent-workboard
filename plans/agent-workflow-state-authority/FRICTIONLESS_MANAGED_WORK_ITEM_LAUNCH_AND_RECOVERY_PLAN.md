@@ -292,8 +292,10 @@ restart and `work reconcile` resumes the same staged idempotent operation.
 human and stable JSON access without a managed credential. Assigned-context schema 3 and Work-item projection schema
 2 expose the same current state to managed agents, CLI, TUI, daemon, and Desktop consumers. MCP and request-file
 `work_checkpoint` now require the complete schema-v1 update and no longer expose the opaque summary contract. The
-next action is an independent review of the committed backend candidate; after any findings are resolved and the
-full gate remains green, resume the installed Claude/Codex acceptance journey.
+The independent review found and resolved two authority gaps: managed review updates now durably retain the exact
+authenticated checkout through reconciliation and integration, and state reads fail closed when the canonical
+Work-item document or current planning-store path is missing. The full gate is green after both fixes. The next
+action is a clean incremental review of the fixing commit, followed by the installed Claude/Codex acceptance journey.
 
 ## Verification and acceptance
 
@@ -309,10 +311,11 @@ full gate remains green, resume the installed Claude/Codex acceptance journey.
 - `cargo fmt --all -- --check` passed on 2026-08-31.
 - `cargo clippy --workspace --all-targets -- -D warnings` passed on 2026-08-31.
 - `cargo test --workspace` passed on 2026-08-31.
-- On 2026-09-12, structured-state tests passed for human and managed updates, strict authorization, exact Markdown
+- On 2026-09-12, structured-state tests passed for human and managed updates, strict authorization, exact managed
+  checkout integration, missing-authority rejection, exact Markdown
   and SQLite parity, immutable history, idempotency conflicts, stale revisions, invalid transitions, external edits,
   Git publication interruption, database finalization interruption, restart, and reconciliation. The complete
-  application suite passed 135 tests; CLI passed 31 tests with the two real-provider smokes still intentionally
+  application suite passed 136 tests; CLI passed 31 tests with the two real-provider smokes still intentionally
   ignored; core passed 30 tests; daemon passed four tests; adapter/native and doc tests passed.
 - `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, and
   `cargo test --workspace` passed on 2026-09-12.
