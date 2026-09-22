@@ -1,3 +1,4 @@
+use std::fs;
 use std::ops::Range;
 use std::path::PathBuf;
 
@@ -129,6 +130,12 @@ impl<'a> WorkItemStateService<'a> {
         run_id: &str,
         recorded_at: OffsetDateTime,
     ) -> Result<(), AppError> {
+        let ready = self
+            .store
+            .read(|connection| integration_ready(connection, work_item_id))?;
+        if !ready {
+            return Ok(());
+        }
         let has_structured_state = self.store.read(|connection| {
             connection
                 .query_row(
@@ -139,16 +146,11 @@ impl<'a> WorkItemStateService<'a> {
                 .map_err(Into::into)
         })?;
         if !has_structured_state {
-            self.store.write(|transaction| {
-                if integration_ready(transaction, work_item_id)? {
-                    transaction.execute(
-                        "UPDATE work_items SET status='done' WHERE id=?1 AND status='review'",
-                        [work_item_id.to_string()],
-                    )?;
-                }
-                Ok(())
-            })?;
-            return Ok(());
+            return Err(AppError::External {
+                code: "work_item_structured_state_required".to_owned(),
+                message: "integration requires an authoritative structured Work-item checkpoint"
+                    .to_owned(),
+            });
         }
         let view = read_view(self.store, work_item_id)?;
         let state = view.state.ok_or(AppError::WorkItemNotFound)?;
@@ -478,24 +480,43 @@ fn read_view(store: &SqliteStore, work_item_id: WorkItemId) -> Result<WorkItemSt
             .transpose()?;
         Ok((state, reconciliation))
     })?;
-    if state.is_some() && !context.store_path.is_dir() {
+    if !context.store_path.is_dir() {
         return Err(AppError::PlanningStoreInvalid(context.store_path));
     }
-    if state.is_some() && reconciliation.is_none() {
-        let planning_store = PlanningStore::create_or_link(&context.store_path)?;
-        if planning_store.document_content_hash(&context.relative_path)? != context.content_hash {
-            return Err(AppError::PlanningDocumentConcurrentEdit(
-                context.store_path.join(&context.relative_path),
-            ));
+    if reconciliation.is_none() {
+        let document_path = context.store_path.join(&context.relative_path);
+        let bytes = fs::read(&document_path).map_err(|source| AppError::PlanningStoreIo {
+            operation: "reading the canonical Work-item document",
+            path: document_path.clone(),
+            source,
+        })?;
+        if format!("{:x}", Sha256::digest(&bytes)) != context.content_hash {
+            return Err(AppError::PlanningDocumentConcurrentEdit(document_path));
         }
+        if state.is_none() {
+            return Ok(WorkItemStateView {
+                state,
+                document_revision: context.document_revision,
+                reconciliation,
+            });
+        }
+        let planning_store = PlanningStore::create_or_link(&context.store_path)?;
         let document = planning_store.read_document(&context.relative_path)?;
-        let document_state = managed_state_section(&document.body)?.map(|section| section.state);
-        if document_state != state
-            || document_state
-                .as_ref()
-                .is_some_and(|value| document.front_matter.status != Some(value.status))
-        {
-            return invalid("canonical Work-item document and structured state projection diverge");
+        if document.front_matter.status != Some(context.status) {
+            return invalid("canonical Work-item document and status projection diverge");
+        }
+        if state.is_some() {
+            let document_state =
+                managed_state_section(&document.body)?.map(|section| section.state);
+            if document_state != state
+                || document_state
+                    .as_ref()
+                    .is_some_and(|value| document.front_matter.status != Some(value.status))
+            {
+                return invalid(
+                    "canonical Work-item document and structured state projection diverge",
+                );
+            }
         }
     }
     Ok(WorkItemStateView {
@@ -752,6 +773,12 @@ fn validate_transition(
     to: WorkItemStatus,
     terminal: Option<WorkItemTerminalIntent>,
 ) -> Result<(), AppError> {
+    if matches!(from, WorkItemStatus::Done | WorkItemStatus::Cancelled) {
+        return Err(AppError::WorkItemStatusTransitionInvalid {
+            from: wire_name(from)?,
+            to: wire_name(to)?,
+        });
+    }
     let valid = from == to
         || match from {
             WorkItemStatus::Backlog => matches!(
@@ -859,30 +886,37 @@ fn managed_state_section(body: &str) -> Result<Option<ManagedStateSection>, AppE
         return Ok(None);
     };
     let after_heading = start + STATE_HEADING.len();
-    let remainder = &body[after_heading..];
-    let fence = remainder
-        .find("```json\n")
-        .filter(|position| remainder[..*position].trim().is_empty())
-        .ok_or_else(|| {
-            AppError::PlanningDocumentInvalid(
-                "Workboard state section has no JSON fence".to_owned(),
-            )
-        })?;
-    let json_start = after_heading + fence + "```json\n".len();
-    let closing = body[json_start..].find("\n```").ok_or_else(|| {
+    let mut cursor = after_heading;
+    let mut json_start = None;
+    for segment in body[after_heading..].split_inclusive('\n') {
+        let line = segment.trim_end_matches(['\r', '\n']);
+        if line.is_empty() {
+            cursor += segment.len();
+            continue;
+        }
+        if line == "```json" {
+            json_start = Some(cursor + segment.len());
+        }
+        break;
+    }
+    let json_start = json_start.ok_or_else(|| {
+        AppError::PlanningDocumentInvalid("Workboard state section has no JSON fence".to_owned())
+    })?;
+    cursor = json_start;
+    let mut closing = None;
+    for segment in body[json_start..].split_inclusive('\n') {
+        if segment.trim_end_matches(['\r', '\n']) == "```" {
+            closing = Some((cursor, cursor + segment.len()));
+            break;
+        }
+        cursor += segment.len();
+    }
+    let (json_end, end) = closing.ok_or_else(|| {
         AppError::PlanningDocumentInvalid("Workboard state section has no closing fence".to_owned())
     })?;
-    let json_end = json_start + closing;
-    let mut end = json_end + "\n```".len();
-    if body.as_bytes().get(end) == Some(&b'\r') {
-        end += 1;
-    }
-    if body.as_bytes().get(end) == Some(&b'\n') {
-        end += 1;
-    }
     Ok(Some(ManagedStateSection {
         range: start..end,
-        state: serde_json::from_str(&body[json_start..json_end]).map_err(|_| {
+        state: serde_json::from_str(body[json_start..json_end].trim_end()).map_err(|_| {
             AppError::PlanningDocumentInvalid(
                 "Workboard state section contains invalid state JSON".to_owned(),
             )
@@ -1164,7 +1198,7 @@ mod tests {
                     "INSERT INTO work_item_integrations (
                          work_item_id, repository_id, source_checkout_id, source_head,
                          status, updated_at
-                     ) SELECT ?1, repository_id, id, head, 'integrated', ?3
+                     ) SELECT ?1, repository_id, id, head, 'pending', ?3
                        FROM checkouts WHERE id=?2",
                     params![
                         fixture.work_item_id.to_string(),
@@ -1175,6 +1209,30 @@ mod tests {
                 Ok(())
             })
             .expect("record integration");
+
+        WorkItemStateService::new(&mut fixture.store)
+            .complete_integration(fixture.work_item_id, "run-1", fixture.at)
+            .expect("keep partially integrated state in review");
+        assert_eq!(
+            WorkItemStateService::new(&mut fixture.store)
+                .read(fixture.work_item_id)
+                .expect("read review state")
+                .state
+                .expect("structured state")
+                .status,
+            WorkItemStatus::Review
+        );
+        fixture
+            .store
+            .write(|transaction| {
+                transaction.execute(
+                    "UPDATE work_item_integrations SET status='integrated'
+                     WHERE work_item_id=?1",
+                    [fixture.work_item_id.to_string()],
+                )?;
+                Ok(())
+            })
+            .expect("finish integration");
 
         WorkItemStateService::new(&mut fixture.store)
             .complete_integration(fixture.work_item_id, "run-1", fixture.at)
@@ -1224,6 +1282,7 @@ mod tests {
 
         assert!(render_state_body("## Workboard state\n\nnot JSON\n", &changed).is_err());
         assert!(render_state_body(&format!("{rendered}\n{rendered}"), &changed).is_err());
+        assert!(render_state_body(&rendered.replace("\n```\n", "\n````\n"), &changed).is_err());
     }
 
     #[test]
@@ -1433,6 +1492,35 @@ mod tests {
 
     #[test]
     fn authoritative_read_rejects_changed_and_missing_canonical_documents() {
+        let zero_state_changed = Fixture::new();
+        fs::write(
+            zero_state_changed
+                .planning_path
+                .join(&zero_state_changed.relative_path),
+            "external edit",
+        )
+        .expect("change canonical document without state");
+        assert_eq!(
+            read_projection_view(&zero_state_changed.store, zero_state_changed.work_item_id,)
+                .expect_err("changed zero-state canonical document")
+                .code(),
+            "planning_document_concurrent_edit"
+        );
+
+        let zero_state_missing = Fixture::new();
+        fs::remove_file(
+            zero_state_missing
+                .planning_path
+                .join(&zero_state_missing.relative_path),
+        )
+        .expect("remove canonical document without state");
+        assert_eq!(
+            read_projection_view(&zero_state_missing.store, zero_state_missing.work_item_id,)
+                .expect_err("missing zero-state canonical document")
+                .code(),
+            "planning_store_io"
+        );
+
         let mut changed = Fixture::new();
         let request = changed.request("changed-read");
         WorkItemStateService::new(&mut changed.store)

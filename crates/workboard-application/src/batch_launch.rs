@@ -717,6 +717,7 @@ where
 #[cfg(test)]
 mod tests {
     use rusqlite::params;
+    use sha2::{Digest, Sha256};
     use tempfile::TempDir;
     use time::OffsetDateTime;
     use workboard_core::{
@@ -739,6 +740,14 @@ mod tests {
 
     fn fixture() -> Fixture {
         let directory = TempDir::new().expect("temporary directory");
+        std::fs::create_dir(directory.path().join("work-items")).expect("document directory");
+        for slug in ["root", "parallel", "blocked"] {
+            std::fs::write(
+                directory.path().join(format!("work-items/{slug}.md")),
+                format!("# {slug}\n"),
+            )
+            .expect("Work-item document");
+        }
         let mut store =
             SqliteStore::open(directory.path().join("workboard.sqlite")).expect("open store");
         let workspace_id = WorkspaceId::generate();
@@ -834,7 +843,7 @@ mod tests {
                             planning_repository_id.to_string(),
                             work_item_id.to_string(),
                             format!("work-items/{slug}.md"),
-                            "0".repeat(64),
+                            format!("{:x}", Sha256::digest(format!("# {slug}\n").as_bytes())),
                             now,
                         ],
                     )?;
