@@ -1,12 +1,12 @@
 [workspace]
 members = [
-    "crates/workboard-core",
-    "crates/workboard-native",
-    "crates/workboard-adapter-claude",
-    "crates/workboard-adapter-codex",
-    "crates/workboard-application",
-    "crates/workboard-daemon",
-    "crates/workboard-cli",
+    "crates/core",
+    "crates/native",
+    "crates/adapter-claude",
+    "crates/adapter-codex",
+    "crates/application",
+    "crates/daemon",
+    "crates/cli",
 ]
 resolver = "3"
 

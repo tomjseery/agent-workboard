@@ -1,7 +1,7 @@
 # Agent Workboard v0 progress
 
-- Plan: `plans/agent-workboard/AGENT_WORKBOARD_V0_PLAN.md`
-- Roadmap: `plans/agent-workboard/AGENT_WORKBOARD_ROADMAP.md`
+- Plan: `plans/V0_PLAN.md`
+- Roadmap: `plans/ROADMAP.md`
 - Roadmap item: `agent-workboard/v0`
 - Worktree: `C:\Users\TommySeery\source\repos\agent-workboard.worktrees\Feature-Phase7-Migration-Completion`
 - Branch: `Feature/Phase7-Migration-Completion`

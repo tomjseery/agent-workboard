@@ -120,5 +120,5 @@ hashes under `docs/provenance`.
 
 ## Roadmap
 
-The [product roadmap](plans/agent-workboard/AGENT_WORKBOARD_ROADMAP.md) and
-[v0 implementation plan](plans/agent-workboard/AGENT_WORKBOARD_V0_PLAN.md) are owned by this repository.
+The [product roadmap](plans/ROADMAP.md) and
+[v0 implementation plan](plans/V0_PLAN.md) are owned by this repository.

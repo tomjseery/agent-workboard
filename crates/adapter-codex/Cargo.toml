@@ -1,5 +1,5 @@
 [package]
-name = "workboard-native"
+name = "workboard-adapter-codex"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,9 +8,9 @@ license.workspace = true
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
-thiserror.workspace = true
 time.workspace = true
-workboard-core = { path = "../workboard-core" }
+workboard-core = { path = "../core" }
+workboard-native = { path = "../native" }
 
 [dev-dependencies]
 tempfile.workspace = true
