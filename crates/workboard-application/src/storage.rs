@@ -12,7 +12,7 @@ use workboard_core::{ConversationId, LaunchLeaseId};
 
 use crate::AppError;
 
-const CURRENT_SCHEMA_VERSION: i64 = 42;
+const CURRENT_SCHEMA_VERSION: i64 = 43;
 const FOUNDATION_SCHEMA_CHECKSUM: &str = "agent-workboard-foundation-v1";
 const WORKSPACE_PLANNING_SCHEMA_CHECKSUM: &str = "agent-workboard-workspace-planning-v1";
 const WORK_ITEM_DEPENDENCY_SCHEMA_CHECKSUM: &str = "agent-workboard-work-item-dependency-v1";
@@ -30,6 +30,8 @@ const FEATURE_BRANCH_INTEGRATION_SCHEMA_CHECKSUM: &str =
 const FEATURE_WORK_ITEM_PROPOSAL_SCHEMA_CHECKSUM: &str =
     "agent-workboard-feature-work-item-proposal-v1";
 const WORK_ITEM_STATE_SCHEMA_CHECKSUM: &str = "agent-workboard-work-item-state-v1";
+const WORK_ITEM_INTEGRATION_ACTOR_SCHEMA_CHECKSUM: &str =
+    "agent-workboard-work-item-integration-actor-v1";
 const WORK_ITEM_STATE_SQL: &str = r#"
 CREATE TABLE work_item_state_updates (
     id TEXT PRIMARY KEY,
@@ -2885,6 +2887,62 @@ fn migrate(connection: &Connection) -> Result<(), AppError> {
         WORK_ITEM_STATE_SCHEMA_CHECKSUM,
         WORK_ITEM_STATE_SQL,
     )?;
+    apply_migration(
+        connection,
+        43,
+        WORK_ITEM_INTEGRATION_ACTOR_SCHEMA_CHECKSUM,
+        r#"
+        DROP TRIGGER work_item_state_updates_completed_immutable;
+        DROP TRIGGER work_item_state_updates_no_delete;
+        CREATE TABLE work_item_state_updates_v2 (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE RESTRICT,
+            work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE RESTRICT,
+            actor_kind TEXT NOT NULL CHECK (actor_kind IN ('managed_session', 'local_human', 'integration')),
+            session_id TEXT REFERENCES native_sessions(id) ON DELETE RESTRICT,
+            checkout_id TEXT REFERENCES checkouts(id) ON DELETE RESTRICT,
+            idempotency_key TEXT NOT NULL UNIQUE CHECK (idempotency_key <> ''),
+            request_hash TEXT NOT NULL CHECK (length(request_hash) = 64),
+            expected_revision INTEGER NOT NULL CHECK (expected_revision >= 0),
+            expected_document_revision INTEGER NOT NULL CHECK (expected_document_revision > 0),
+            expected_document_hash TEXT NOT NULL CHECK (length(expected_document_hash) = 64),
+            candidate_document_hash TEXT NOT NULL CHECK (length(candidate_document_hash) = 64),
+            state_json TEXT NOT NULL CHECK (state_json <> ''),
+            publication_status TEXT NOT NULL CHECK (publication_status IN ('pending', 'reconciliation_required', 'completed')),
+            published_commit TEXT,
+            failure TEXT,
+            recorded_at TEXT NOT NULL,
+            completed_at TEXT,
+            CHECK (
+                (actor_kind = 'managed_session' AND session_id IS NOT NULL AND checkout_id IS NOT NULL)
+                OR (actor_kind IN ('local_human', 'integration') AND session_id IS NULL AND checkout_id IS NULL)
+            )
+        );
+        INSERT INTO work_item_state_updates_v2 SELECT * FROM work_item_state_updates;
+        CREATE TABLE work_item_states_v2 (
+            work_item_id TEXT PRIMARY KEY REFERENCES work_items(id) ON DELETE RESTRICT,
+            schema_version INTEGER NOT NULL CHECK (schema_version > 0),
+            revision INTEGER NOT NULL CHECK (revision > 0),
+            document_revision INTEGER NOT NULL CHECK (document_revision > 0),
+            state_json TEXT NOT NULL CHECK (state_json <> ''),
+            checkpoint_id TEXT NOT NULL UNIQUE REFERENCES work_item_state_updates_v2(id) ON DELETE RESTRICT,
+            updated_at TEXT NOT NULL
+        );
+        INSERT INTO work_item_states_v2 SELECT * FROM work_item_states;
+        DROP TABLE work_item_states;
+        DROP TABLE work_item_state_updates;
+        ALTER TABLE work_item_state_updates_v2 RENAME TO work_item_state_updates;
+        ALTER TABLE work_item_states_v2 RENAME TO work_item_states;
+        CREATE INDEX work_item_state_updates_item ON work_item_state_updates (work_item_id, recorded_at, id);
+        CREATE INDEX work_item_state_updates_reconciliation ON work_item_state_updates (publication_status, recorded_at);
+        CREATE TRIGGER work_item_state_updates_completed_immutable
+        BEFORE UPDATE ON work_item_state_updates WHEN OLD.publication_status = 'completed'
+        BEGIN SELECT RAISE(ABORT, 'completed Work-item state history is immutable'); END;
+        CREATE TRIGGER work_item_state_updates_no_delete
+        BEFORE DELETE ON work_item_state_updates
+        BEGIN SELECT RAISE(ABORT, 'Work-item state history cannot be deleted'); END;
+        "#,
+    )?;
     Ok(())
 }
 
@@ -3813,7 +3871,9 @@ fn health(connection: &Connection) -> Result<StorageHealth, AppError> {
 pub(crate) fn drop_workspace_planning_schema(connection: &Connection) {
     connection
         .execute_batch(
-            r#"DROP TABLE work_item_states;
+            r#"DELETE FROM schema_migrations WHERE version = 45;
+
+            DROP TABLE work_item_states;
             DROP TABLE work_item_state_updates;
             DELETE FROM schema_migrations WHERE version = 42;
 
@@ -4145,6 +4205,39 @@ mod tests {
                 .expect("health")
                 .is_healthy()
         );
+    }
+
+    #[test]
+    fn integration_actor_schema_upgrade_preserves_foreign_key_integrity() {
+        let directory = TempDir::new().expect("temporary directory");
+        let path = directory.path().join("workboard.sqlite");
+        drop(SqliteStore::open(&path).expect("open current store"));
+        let connection = Connection::open(&path).expect("open schema 44 store");
+        connection
+            .execute_batch(
+                "DELETE FROM schema_migrations WHERE version=45;
+                 PRAGMA user_version=44;",
+            )
+            .expect("restore schema 44 marker");
+        drop(connection);
+
+        let store = SqliteStore::open(&path).expect("upgrade integration actor schema");
+        let health = store.health().expect("storage health");
+        assert!(health.is_healthy());
+        assert_eq!(health.schema_version, super::CURRENT_SCHEMA_VERSION);
+        let table_sql = store
+            .read(|connection| {
+                connection
+                    .query_row(
+                        "SELECT sql FROM sqlite_master
+                         WHERE type='table' AND name='work_item_state_updates'",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .map_err(Into::into)
+            })
+            .expect("state update schema");
+        assert!(table_sql.contains("'integration'"));
     }
 
     #[test]
