@@ -322,6 +322,11 @@ current status, next action, and every associated Claude or Codex session. The p
 session**, **Start new session**, **Open document**, **Open worktree**, **Recover checkout**, and **Close Work
 item**.
 
+The board reads status; it never moves a Work item. Restatusing a card is out of v0 scope: status lives in
+Work-item front matter under Git and no status-write operation exists, so a move means a new committed
+document write plus reprojection, not a keybinding. If it lands later, prefer `,`/`.` accepted
+shift-agnostically with `<`/`>` over `Ctrl`+arrow, which terminal and pane bindings intercept.
+
 Selectors follow one consistent rule: when a command omits an identifier, Workboard opens a clean scoped
 fuzzy picker rather than failing or requiring the user to copy a UUID. Exact IDs, stable keys, or unambiguous
 search text remain available for scripts.
