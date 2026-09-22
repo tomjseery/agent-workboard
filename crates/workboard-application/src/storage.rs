@@ -3871,7 +3871,7 @@ fn health(connection: &Connection) -> Result<StorageHealth, AppError> {
 pub(crate) fn drop_workspace_planning_schema(connection: &Connection) {
     connection
         .execute_batch(
-            r#"DELETE FROM schema_migrations WHERE version = 45;
+            r#"DELETE FROM schema_migrations WHERE version = 43;
 
             DROP TABLE work_item_states;
             DROP TABLE work_item_state_updates;
@@ -4212,13 +4212,13 @@ mod tests {
         let directory = TempDir::new().expect("temporary directory");
         let path = directory.path().join("workboard.sqlite");
         drop(SqliteStore::open(&path).expect("open current store"));
-        let connection = Connection::open(&path).expect("open schema 44 store");
+        let connection = Connection::open(&path).expect("open schema 42 store");
         connection
             .execute_batch(
-                "DELETE FROM schema_migrations WHERE version=45;
-                 PRAGMA user_version=44;",
+                "DELETE FROM schema_migrations WHERE version=43;
+                 PRAGMA user_version=42;",
             )
-            .expect("restore schema 44 marker");
+            .expect("restore schema 42 marker");
         drop(connection);
 
         let store = SqliteStore::open(&path).expect("upgrade integration actor schema");
@@ -4354,7 +4354,7 @@ mod tests {
                 "launch-intent".to_owned()
             )
         );
-        assert_eq!(store.health().expect("storage health").schema_version, 42);
+        assert_eq!(store.health().expect("storage health").schema_version, 43);
         assert!(store.health().expect("storage health").is_healthy());
     }
 
@@ -5078,7 +5078,7 @@ mod tests {
         assert_eq!(preserved_attestation, valid_attestation);
         assert_eq!(legacy_authority, "immutable_evidence");
         let health = store.health().expect("storage health");
-        assert_eq!(health.schema_version, 42);
+        assert_eq!(health.schema_version, 43);
         assert!(health.is_healthy());
         let audited_attestations: Vec<(String, String, String, String)> = store
             .read(|connection| {
@@ -5123,7 +5123,7 @@ mod tests {
             .expect("read upgraded schema 20 attestations");
         assert_eq!(upgraded_attestations, audited_attestations);
         let health = store.health().expect("upgraded storage health");
-        assert_eq!(health.schema_version, 42);
+        assert_eq!(health.schema_version, 43);
         assert!(health.is_healthy());
         drop(store);
 

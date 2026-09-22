@@ -778,10 +778,14 @@ fn integration_ready(connection: &Connection, work_item_id: WorkItemId) -> Resul
     connection
         .query_row(
             "SELECT EXISTS (
-                 SELECT 1 FROM work_item_integrations WHERE work_item_id=?1
+                 SELECT 1 FROM work_item_repositories WHERE work_item_id=?1
              ) AND NOT EXISTS (
-                 SELECT 1 FROM work_item_integrations
-                 WHERE work_item_id=?1 AND status <> 'integrated'
+                 SELECT 1 FROM work_item_repositories expected
+                 LEFT JOIN work_item_integrations integration
+                   ON integration.work_item_id = expected.work_item_id
+                  AND integration.repository_id = expected.repository_id
+                 WHERE expected.work_item_id = ?1
+                   AND (integration.status IS NULL OR integration.status <> 'integrated')
              )",
             [work_item_id.to_string()],
             |row| row.get::<_, bool>(0),
