@@ -9,8 +9,8 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-workboard-application = { path = "../crates/workboard-application" }
-workboard-core = { path = "../crates/workboard-core" }
+workboard-application = { path = "../crates/application" }
+workboard-core = { path = "../crates/core" }
 
 [[bin]]
 name = "hook_input"

@@ -1,26 +1,28 @@
 [package]
-name = "workboard-cli"
-default-run = "workboard"
+name = "workboard-daemon"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
-[[bin]]
-name = "workboard"
-path = "src/main.rs"
+[lib]
+name = "workboard_daemon"
 
 [dependencies]
 clap.workspace = true
-crossterm.workspace = true
 directories.workspace = true
-ratatui.workspace = true
+notify.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
 time.workspace = true
-workboard-application = { path = "../workboard-application" }
-workboard-core = { path = "../workboard-core" }
-workboard-daemon = { path = "../workboard-daemon" }
+uuid.workspace = true
+workboard-application = { path = "../application" }
+workboard-core = { path = "../core" }
+
+[[bin]]
+name = "workboard-daemon"
+path = "src/main.rs"
 
 [dev-dependencies]
 tempfile.workspace = true

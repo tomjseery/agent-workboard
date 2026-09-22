@@ -2,7 +2,7 @@
 
 ## Planning identity
 
-- Roadmap: `plans/agent-workflow-state-authority/AGENT_WORKFLOW_STATE_AUTHORITY_ROADMAP.md`
+- Roadmap: `plans/agent-workflow-state-authority/ROADMAP.md`
 - Roadmap item: `agent-workflow-state-authority/agent-standards-migration-compatibility-cutover`
 - Workboard Feature: `9d30120b-bd63-428f-8e74-5fbb08115d50`
 - Delivery repositories: `agent-standards`, `concertable`, and an isolated `vel` acceptance checkout

@@ -2,7 +2,7 @@
 
 ## Planning identity
 
-- Roadmap: `plans/agent-workflow-state-authority/AGENT_WORKFLOW_STATE_AUTHORITY_ROADMAP.md`
+- Roadmap: `plans/agent-workflow-state-authority/ROADMAP.md`
 - Roadmap item: `agent-workflow-state-authority/agent-standards-workboard-first-dual-provider-cutover-recovery`
 - Workboard Feature: `ab593e4c-b12f-4e73-be03-4708992cadbd`
 - Delivery repository: `agent-standards`

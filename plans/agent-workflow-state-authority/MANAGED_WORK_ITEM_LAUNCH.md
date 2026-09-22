@@ -2,7 +2,7 @@
 
 ## Planning identity
 
-- Roadmap: `plans/agent-workflow-state-authority/AGENT_WORKFLOW_STATE_AUTHORITY_ROADMAP.md`
+- Roadmap: `plans/agent-workflow-state-authority/ROADMAP.md`
 - Roadmap item: `agent-workflow-state-authority/frictionless-managed-work-item-launch-and-recovery`
 - Workboard Feature: `8c3d49f6-00da-4a4f-8470-88065964db72`
 - Delivery repositories: `agent-workboard`, with final dogfood against `agent-standards`

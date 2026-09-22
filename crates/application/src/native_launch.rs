@@ -577,8 +577,8 @@ mod tests {
 
     #[test]
     fn prepares_a_shell_free_resume_from_a_verified_native_source() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../workboard-adapter-codex/tests/fixtures/sessions");
+        let root =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../adapter-codex/tests/fixtures/sessions");
         let scan = CodexAdapterV1::default()
             .scan(&root, &HashMap::new())
             .expect("scan native fixtures");

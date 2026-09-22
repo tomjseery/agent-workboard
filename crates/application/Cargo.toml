@@ -17,10 +17,10 @@ thiserror.workspace = true
 time.workspace = true
 toml.workspace = true
 uuid.workspace = true
-workboard-adapter-claude = { path = "../workboard-adapter-claude" }
-workboard-adapter-codex = { path = "../workboard-adapter-codex" }
-workboard-core = { path = "../workboard-core" }
-workboard-native = { path = "../workboard-native" }
+workboard-adapter-claude = { path = "../adapter-claude" }
+workboard-adapter-codex = { path = "../adapter-codex" }
+workboard-core = { path = "../core" }
+workboard-native = { path = "../native" }
 
 [lints]
 workspace = true
