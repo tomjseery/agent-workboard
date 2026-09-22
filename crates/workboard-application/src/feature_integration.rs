@@ -306,14 +306,24 @@ impl<'a> FeatureIntegrationService<'a> {
         let target = self.target(outcome.feature_id, outcome.repository_id)?;
         let resolved_target = git.resolve(&target.path)?;
         if resolved_target.head_oid != target.head {
+            let integrated_head = outcome
+                .steps
+                .iter()
+                .filter(|step| step.status == "integrated")
+                .filter_map(|step| step.result_head.as_deref())
+                .next_back();
             let pending_source = outcome
                 .steps
                 .iter()
                 .find(|step| step.status == "pending")
                 .map(|step| step.source_head.as_str());
-            if pending_source.is_none()
-                || !git.contains(&target.path, pending_source.expect("pending source"))?
-            {
+            let at_recorded_integration =
+                integrated_head == Some(resolved_target.head_oid.as_str());
+            let at_unrecorded_merge = match pending_source {
+                Some(source) => git.contains(&target.path, source)?,
+                None => false,
+            };
+            if !at_recorded_integration && !at_unrecorded_merge {
                 return self.fail_run(
                     &run_id,
                     "feature integration checkout head drifted outside the recorded run",
@@ -321,8 +331,22 @@ impl<'a> FeatureIntegrationService<'a> {
                 );
             }
         }
+        let mut completed_work_items = HashSet::new();
+        for step in outcome
+            .steps
+            .iter()
+            .filter(|step| step.status == "integrated")
+        {
+            if completed_work_items.insert(step.work_item_id) {
+                WorkItemStateService::new(self.store).complete_integration(
+                    step.work_item_id,
+                    &run_id,
+                    observed_at,
+                )?;
+            }
+        }
         let mut preflighted_work_items = HashSet::new();
-        for step in &outcome.steps {
+        for step in outcome.steps.iter().filter(|step| step.status == "pending") {
             if preflighted_work_items.insert(step.work_item_id) {
                 WorkItemStateService::new(self.store).preflight_integration(step.work_item_id)?;
             }
@@ -1261,10 +1285,11 @@ mod tests {
                 observed_at: fixture.observed_at,
             })
             .expect("preview accepted branches");
+        let run_id = preview.run.run_id.clone();
         let outcome = FeatureIntegrationService::new(&mut fixture.store)
             .confirm_with(
                 ConfirmFeatureIntegration {
-                    run_id: preview.run.run_id,
+                    run_id: run_id.clone(),
                     confirmation_token: preview.confirmation_token,
                     confirmed_at: fixture.observed_at,
                 },
@@ -1301,6 +1326,22 @@ mod tests {
             .project(fixture.leaf_id)
             .expect("leaf projection");
         assert!(leaf.readiness.ready);
+
+        fixture
+            .store
+            .write(|transaction| {
+                transaction.execute(
+                    "UPDATE feature_integration_runs
+                     SET status='running', result_head=NULL, completed_at=NULL WHERE id=?1",
+                    [&run_id],
+                )?;
+                Ok(())
+            })
+            .expect("restore post-integration crash boundary");
+        let resumed = FeatureIntegrationService::new(&mut fixture.store)
+            .execute_run(run_id, fixture.observed_at, &git)
+            .expect("resume fully integrated run");
+        assert_eq!(resumed.status, "completed");
     }
 
     #[test]
@@ -1422,6 +1463,78 @@ mod tests {
         assert_eq!(integrated_steps, 0);
         assert_eq!(integrated_items, 0);
         assert_eq!(feature_head, "base");
+    }
+
+    #[test]
+    fn unresolved_state_publication_fails_before_merge() {
+        let mut fixture = fixture();
+        fixture
+            .store
+            .write(|transaction| {
+                transaction.execute(
+                    "INSERT INTO work_item_state_updates (
+                         id, workspace_id, work_item_id, actor_kind, idempotency_key,
+                         request_hash, expected_revision, expected_document_revision,
+                         expected_document_hash, candidate_document_hash, state_json,
+                         publication_status, failure, recorded_at
+                     )
+                     SELECT ?1, workspace.id, item.id, 'local_human', 'unresolved-state',
+                            ?2, state.revision, state.document_revision,
+                            document.content_hash, document.content_hash, state.state_json,
+                            'reconciliation_required', 'publication interrupted', ?4
+                     FROM work_items item
+                     JOIN features feature ON feature.id=item.feature_id
+                     JOIN epics epic ON epic.id=feature.epic_id
+                     JOIN workspaces workspace ON workspace.id=epic.workspace_id
+                     JOIN documents document ON document.work_item_id=item.id
+                     JOIN work_item_states state ON state.work_item_id=item.id
+                     WHERE item.id=?3",
+                    params![
+                        workboard_core::WorkItemCheckpointId::generate().to_string(),
+                        "a".repeat(64),
+                        fixture.root_id.to_string(),
+                        fixture.observed_at.unix_timestamp_nanos().to_string(),
+                    ],
+                )?;
+                Ok(())
+            })
+            .expect("stage unresolved state publication");
+        let git = fake_git(&fixture, None);
+        let preview = FeatureIntegrationService::new(&mut fixture.store)
+            .preview(IntegrateFeatureBranches {
+                feature_id: fixture.feature_id,
+                repository_id: fixture.repository_id,
+                idempotency_key: "integrate-unresolved-state".to_owned(),
+                observed_at: fixture.observed_at,
+            })
+            .expect("preview unresolved branch");
+
+        let error = FeatureIntegrationService::new(&mut fixture.store)
+            .confirm_with(
+                ConfirmFeatureIntegration {
+                    run_id: preview.run.run_id,
+                    confirmation_token: preview.confirmation_token,
+                    confirmed_at: fixture.observed_at,
+                },
+                &git,
+            )
+            .expect_err("unresolved state must fail before merge");
+
+        assert_eq!(error.code(), "work_item_state_reconciliation_required");
+        assert!(git.merged.borrow().is_empty());
+        let integrated_steps = fixture
+            .store
+            .read(|connection| {
+                connection
+                    .query_row(
+                        "SELECT COUNT(*) FROM feature_integration_steps WHERE status='integrated'",
+                        [],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .map_err(Into::into)
+            })
+            .expect("unchanged steps");
+        assert_eq!(integrated_steps, 0);
     }
 
     #[test]
