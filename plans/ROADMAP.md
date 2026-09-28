@@ -12,9 +12,9 @@ repository is `agent-workboard`; the installed command is `workboard`.
   recovery, and Concertable migration without `_PROGRESS.md` ledgers.
 - [ ] `agent-workboard/portable-release` — qualify Windows packaging and installation first, then restore the
   existing Linux technical-preview boundary and make an explicit macOS delivery decision.
-- [ ] `agent-workboard/graphical-client` — reuse the stable application operations in an optional graphical
-  client only after the terminal product is accepted; never replace native Claude or Codex terminals with an
-  embedded chat harness.
+- [ ] `agent-workboard/graphical-client` — parked; the Tauri/React client is preserved at tag
+  `archive/desktop-2026-09`. Revisit only after the terminal product is accepted; never replace native Claude or
+  Codex terminals with an embedded chat harness.
 
 ## Dependency order
 
