@@ -290,7 +290,7 @@ restart and `work reconcile` resumes the same staged idempotent operation.
 
 `work state`, `work update --request`, `work reconcile`, and the structured payload returned by `work open` provide
 human and stable JSON access without a managed credential. Assigned-context schema 3 and Work-item projection schema
-2 expose the same current state to managed agents, CLI, TUI, daemon, and Desktop consumers. MCP and request-file
+2 expose the same current state to managed agents, CLI, TUI, and daemon consumers. MCP and request-file
 `work_checkpoint` now require the complete schema-v1 update and no longer expose the opaque summary contract. The
 The independent review found and resolved two authority gaps: managed review updates now durably retain the exact
 authenticated checkout through reconciliation and integration, and state reads fail closed when the canonical
