@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "backend": "github",
+  "repository": "tomjseery/agent-workboard",
+  "issue_types": {
+    "feature": "Feature",
+    "task": "Task",
+    "bug": "Bug",
+    "mistake": "Task",
+    "debt": "Task"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "marketplaces": {
+    "work-items-agents": {
+      "repository": "tj-agents/work-items"
+    }
+  },
+  "plugins": [
+    "work-items@work-items-agents"
+  ]
+}
