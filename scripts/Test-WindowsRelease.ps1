@@ -51,7 +51,7 @@ try {
         throw 'The installed CLI or daemon is missing.'
     }
 
-    $git = Get-Command git -CommandType Application -ErrorAction Stop
+    $git = @(Get-Command git -CommandType Application -ErrorAction Stop)[0]
     $systemPath = [Environment]::GetFolderPath('System')
     $originalPath = $env:PATH
     $env:PATH = "$installRoot;$($git.Source | Split-Path -Parent);$systemPath"
