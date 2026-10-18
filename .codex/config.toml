@@ -1,0 +1,9 @@
+# BEGIN repo-declared agent capabilities
+[marketplaces.work-items-agents]
+source_type = "git"
+source = "https://github.com/tj-agents/work-items.git"
+
+[plugins."work-items@work-items-agents"]
+enabled = true
+
+# END repo-declared agent capabilities
