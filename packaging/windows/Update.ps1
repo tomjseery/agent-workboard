@@ -49,7 +49,7 @@ function Get-OwnedManifest([string]$Root) {
         throw 'The update archive is not an Agent Workboard Windows release.'
     }
     foreach ($file in $manifest.files) {
-        $path = [System.IO.Path]::GetFullPath((Join-Path $Root $file.path))
+        $path = [System.IO.Path]::GetFullPath((Join-Path $Root $file.path.Replace('/', '\')))
         if (-not $path.StartsWith($Root.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) {
             throw "Release manifest path escapes the archive: $($file.path)"
         }
