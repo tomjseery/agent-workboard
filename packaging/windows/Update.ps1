@@ -13,6 +13,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+Import-Module Microsoft.PowerShell.Utility
 $target = 'x86_64-pc-windows-msvc'
 $InstallRoot = [System.IO.Path]::GetFullPath($InstallRoot)
 
