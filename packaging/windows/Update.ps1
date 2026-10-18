@@ -40,7 +40,8 @@ function Get-Sha256([string]$Path) {
 }
 
 function Get-OwnedManifest([string]$Root) {
-    $manifestPath = Join-Path $Root 'release-manifest.json'
+    $rootPath = [System.IO.Path]::GetFullPath($Root).Replace('/', '\').TrimEnd('\')
+    $manifestPath = Join-Path $rootPath 'release-manifest.json'
     if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
         throw 'The update archive has no release manifest.'
     }
@@ -49,8 +50,8 @@ function Get-OwnedManifest([string]$Root) {
         throw 'The update archive is not an Agent Workboard Windows release.'
     }
     foreach ($file in $manifest.files) {
-        $path = [System.IO.Path]::GetFullPath((Join-Path $Root $file.path.Replace('/', '\')))
-        if (-not $path.StartsWith($Root.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) {
+        $path = [System.IO.Path]::GetFullPath((Join-Path $rootPath $file.path.Replace('/', '\'))).Replace('/', '\')
+        if (-not $path.StartsWith($rootPath + '\', [StringComparison]::OrdinalIgnoreCase)) {
             throw "Release manifest path escapes the archive: $($file.path)"
         }
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {

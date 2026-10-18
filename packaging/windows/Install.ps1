@@ -6,6 +6,18 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+function Get-Sha256([string]$Path) {
+    $stream = [System.IO.File]::OpenRead($Path)
+    $algorithm = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        ([BitConverter]::ToString($algorithm.ComputeHash($stream))).Replace('-', '').ToLowerInvariant()
+    }
+    finally {
+        $algorithm.Dispose()
+        $stream.Dispose()
+    }
+}
+
 if (-not [System.IO.Path]::IsPathRooted($InstallRoot)) {
     throw 'InstallRoot must be an absolute path.'
 }
@@ -19,7 +31,7 @@ foreach ($file in $releaseManifest.files) {
     if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
         throw "Release file is missing: $($file.path)"
     }
-    $actual = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash.ToLowerInvariant()
+    $actual = Get-Sha256 $source
     if ($actual -ne $file.sha256) {
         throw "Release file failed SHA-256 verification: $($file.path)"
     }
