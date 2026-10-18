@@ -54,7 +54,11 @@ try {
     $git = @(Get-Command git -CommandType Application -ErrorAction Stop)[0]
     $systemPath = [Environment]::GetFolderPath('System')
     $originalPath = $env:PATH
-    $env:PATH = "$installRoot;$($git.Source | Split-Path -Parent);$systemPath"
+    $originalGitConfigGlobal = $env:GIT_CONFIG_GLOBAL
+    $env:GIT_CONFIG_GLOBAL = Join-Path $testRoot 'gitconfig'
+    & $git.Source config --global user.name 'Agent Workboard Test'
+    & $git.Source config --global user.email 'workboard@example.invalid'
+    $env:PATH = "$installRoot;$($git.Source | Split-Path -Parent);$systemPath;$originalPath"
     Push-Location $runtimeRoot
     try {
         & $workboard --version | Out-Null
@@ -125,6 +129,7 @@ try {
     finally {
         Pop-Location
         $env:PATH = $originalPath
+        $env:GIT_CONFIG_GLOBAL = $originalGitConfigGlobal
     }
 
     & (Join-Path $installRoot 'Uninstall.ps1') -InstallRoot $installRoot
