@@ -13,7 +13,6 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-Import-Module Microsoft.PowerShell.Utility
 $target = 'x86_64-pc-windows-msvc'
 $InstallRoot = [System.IO.Path]::GetFullPath($InstallRoot)
 
@@ -25,6 +24,18 @@ function Convert-ReleaseVersion([string]$Value) {
     }
     catch {
         throw "Release version is invalid: $Value"
+    }
+}
+
+function Get-Sha256([string]$Path) {
+    $stream = [System.IO.File]::OpenRead($Path)
+    $algorithm = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        ([BitConverter]::ToString($algorithm.ComputeHash($stream))).Replace('-', '').ToLowerInvariant()
+    }
+    finally {
+        $algorithm.Dispose()
+        $stream.Dispose()
     }
 }
 
@@ -45,7 +56,7 @@ function Get-OwnedManifest([string]$Root) {
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
             throw "Release file is missing: $($file.path)"
         }
-        $actual = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+        $actual = Get-Sha256 $path
         if ($actual -ne $file.sha256) {
             throw "Release file failed SHA-256 verification: $($file.path)"
         }
@@ -115,7 +126,7 @@ try {
         throw 'The release checksum file is invalid.'
     }
     $expectedHash = $checksumMatch.Groups[1].Value.ToLowerInvariant()
-    $actualHash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $actualHash = Get-Sha256 $archivePath
     if ($actualHash -ne $expectedHash) {
         throw 'The update archive failed published SHA-256 verification.'
     }
