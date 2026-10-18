@@ -2251,7 +2251,7 @@ fn paths_equal(left: &Path, right: &Path) -> bool {
 fn path_is_within(path: &Path, root: &Path) -> bool {
     let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-    path.starts_with(root) && path != root
+    path.starts_with(&root) && path != root
 }
 
 fn count_first_present(
