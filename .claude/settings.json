@@ -1,5 +1,12 @@
 {
   "extraKnownMarketplaces": {
+    "tj-agents": {
+      "source": {
+        "source": "github",
+        "repo": "tj-agents/marketplace"
+      },
+      "autoUpdate": true
+    },
     "work-items-agents": {
       "source": {
         "source": "github",
@@ -9,6 +16,9 @@
     }
   },
   "enabledPlugins": {
+    "base@tj-agents": true,
+    "machine@tj-agents": true,
+    "personal@tj-agents": true,
     "work-items@work-items-agents": true
   },
   "permissions": {
